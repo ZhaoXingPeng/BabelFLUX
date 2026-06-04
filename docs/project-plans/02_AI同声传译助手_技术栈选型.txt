@@ -1,0 +1,136 @@
+================================================================
+选题二 · AI 同声传译助手 —— 技术栈选型（已确认）
+================================================================
+日期：2026-06-05   作者：Claude   版本：v1（已与用户确认，作为开发基准）
+关联：《选题2_AI同声传译助手_基础方案.txt》《00_总览_技术选型与公共架构.txt》
+
+================================================================
+一、本轮已确认的四项决策
+================================================================
+1) 前端框架：Vue 3 + Pinia；后端语言：Python (FastAPI)（均按团队熟悉度确认）
+2) 平台重心：Web 优先；桌面端（Tauri）轻投入，作为 P2 加分项
+3) 可用 AI Key：OpenAI 体系 / 国外专业流式 ASR(Azure·Deepgram) / 国内厂商
+                (火山豆包·讯飞) / Claude·DeepSeek —— 四类齐全，可按能力择优
+4) 仓库形态：单题单仓（frontend/ + backend/ + 可选 desktop/）
+
+影响：
+· Web 优先 → 演示主走"网页抓音频"，不必为 macOS 系统音频纠结，风险下降；
+· Key 齐全 → 可定"主链路 + 备选"，并真实演示多供应商热切换（创新点 5）。
+
+================================================================
+二、最终技术栈总表
+================================================================
+【前端】
+  语言/框架      TypeScript + Vue 3（Composition API）+ Vite
+  样式           Tailwind CSS
+  状态管理       Pinia（Vue 官方；细粒度响应式天然适合字幕高频原地更新、三态切换不卡顿）
+  音频采集       Web Audio API + AudioWorklet（取 PCM，48k→16k 重采样）
+                 来源：① 内置播放器(MediaElementSource) ② getDisplayMedia(标签页音频)
+  目标浏览器     Chrome（标签页/系统音频共享支持最好）
+
+【后端】
+  语言/框架      Python 3.11 + FastAPI
+  ASGI 服务      uvicorn[standard]
+  实时通道       WebSocket（音频上行二进制 16k PCM 帧；事件下行 JSON）
+  数据校验       Pydantic v2
+  统一 AI 接入层 自研 Provider Gateway（能力接口 + 适配器 + 路由/降级）
+  端点检测(VAD)  Silero VAD（本地、低延迟，用于语义分块）
+  存储           SQLite + SQLModel（会话/字幕/术语表，零运维）
+  HTTP 客户端    httpx（异步调用各云端供应商）
+
+【桌面端 · P2 加分项（后置）】
+  外壳           Tauri 2（Rust，复用同一前端）
+  系统音频       Rust cpal（loopback）—— 视演示需要再做，不阻塞主线
+
+【工程质量】
+  包管理         pnpm（前端）/ uv（Python，快）
+  Lint·格式      ESLint + Prettier（TS）/ ruff + black（Python）
+  测试           vitest（前端）/ pytest + pytest-asyncio（后端）
+  CI             GitHub Actions（lint + test + build，保证主分支可运行）
+  配置           .env（密钥，不入库）+ providers.yaml（路由/降级策略）
+
+================================================================
+三、AI 能力：主链路与备选（Key 齐全，可按能力择优）
+================================================================
+能力            主链路（推荐）         备选/可切换             离线兜底
+流式 ASR(英)    Deepgram(低延迟·词级    Azure 语音 / OpenAI    faster-whisper
+                时间戳，利于分块)        转写 / 火山豆包         (本地, CTranslate2)
+翻译(抢跑/临时) 快模型：GPT-4o-mini     DeepSeek / 火山        —
+                或 Claude Haiku(低延迟)
+翻译+回溯修正   强模型：Claude Sonnet   GPT-4o                 —
+(稳定/已修正)    (上下文推理+一致性强)
+中文配音 TTS    Edge-TTS(免费,可选)     Azure TTS / 火山 TTS   —
+(P2,弱优先)
+
+★ 两层翻译设计（贴合"延迟 vs 准确"主题，强烈建议）
+  - 临时态译文：用"快而便宜"的模型抢跑（高频、低延迟）；
+  - 稳定/已修正态：用"强模型"做带上下文的回溯修正与术语一致性（低频、高质量）。
+  这样既保证实时性，又让"修正"确有质量提升，与三态字幕天然契合。
+
+★ P0 先接哪条（减少决策成本）
+  最快出第一条通路：用 OpenAI 一家把"流式转写 + 翻译"跑通（单 SDK、单 Key）；
+  随后接入 Deepgram(ASR) 与 Claude(翻译/修正) 作为备选，既提质量又演示热切换。
+
+================================================================
+四、音频采集方案（Web 优先，按"演示稳定性"排序）
+================================================================
+方案 A（最稳，演示首选）：内置播放器 + MediaElementSource
+  应用内放一段视频/音频，用 Web Audio 的 MediaElementSource 直接取音频，
+  无需 getDisplayMedia 授权弹窗，demo 最可控、最不易翻车。
+方案 B（真实场景）：getDisplayMedia({audio:true}) 抓"标签页/窗口"音频
+  共享某个标签页并勾选"共享音频"，适配看任意网页视频/在线会议。
+方案 C（兜底）：麦克风/外放采集（质量差，仅作 fallback）
+方案 D（P2，桌面端）：Tauri + 系统 loopback，抓"系统正在播放的任意声音"
+统一处理：任一来源 → AudioWorklet 取 Float32 → 降采样 16k 单声道 →
+          Int16 PCM 二进制帧经 WebSocket 上行。
+
+================================================================
+五、关键选型理由（备答辩/README）
+================================================================
+· Python 后端：本地 faster-whisper / Silero VAD 兜底最顺，asyncio 流式成熟，
+  各家供应商 SDK 最全；契合"多家可切换 + 现场不翻车"。
+· WebSocket 而非 WebRTC：本场景是"单向捕获→服务端"，WebSocket 足够且更简单；
+  WebRTC 留作未来超低延迟优化。
+· Vue 3 + Pinia：字幕是大量小片段的高频增量更新，Vue 细粒度响应式直接追踪依赖、
+  原地更新对应片段，免去 React 里手动 memo 防重渲染的样板，三态切换更顺手。
+· Silero VAD（本地）：端点检测放本地，零网络延迟，是"语义分块/延迟预算"的基础。
+· 两层翻译 + 三态字幕：把"延迟 vs 准确"的取舍落到工程上，是创新点的落地形态。
+· 单题单仓：只做本题，结构最简、PR 最聚焦，利于"持续小步提交 + 主分支可运行"。
+
+================================================================
+六、依赖清单雏形（满足 README"列明依赖"要求，开发时再固定版本）
+================================================================
+前端：vue, typescript, vite, @vitejs/plugin-vue,
+      tailwindcss, postcss, autoprefixer, pinia；
+      dev: eslint, prettier, vitest, @vue/test-utils
+后端：fastapi, uvicorn[standard], pydantic, sqlmodel, httpx, pyyaml,
+      python-dotenv；
+      AI: openai, anthropic, deepgram-sdk, azure-cognitiveservices-speech(按需),
+          faster-whisper, ctranslate2, silero-vad(onnx 或 torch)；
+      dev: ruff, black, pytest, pytest-asyncio
+桌面(P2)：tauri, rust toolchain, cpal
+工具：pnpm, uv, git, GitHub Actions
+（第三方依赖均会在 README 列明；原创部分=统一接入层/分块/回溯修正/三态字幕/术语回填。）
+
+================================================================
+七、建议仓库结构（单题单仓）
+================================================================
+repo/
+├─ frontend/        Vue3+Vite+TS（字幕UI、音频采集、控制台）
+├─ backend/         FastAPI（WebSocket 网关 + 管线编排）
+│  ├─ gateway/      统一 AI 接入层（能力接口 + 适配器 + 路由/降级）
+│  ├─ pipeline/     语义分块 / 增量翻译+回溯修正 / 术语一致性 / 字幕状态机
+│  └─ store/        SQLite 模型与读写
+├─ desktop/         (P2) Tauri 外壳
+├─ docs/            方案文档、Schema、评测说明
+├─ .github/workflows/  CI
+├─ providers.yaml   供应商路由/降级配置
+└─ README.md
+
+================================================================
+八、待定/后续（不阻塞主线）
+================================================================
+· 桌面端系统音频（P2）：演示需要再做；先用方案 A/B 保证 Web demo。
+· 中文配音 TTS（P2）：默认关；先把字幕做扎实。
+· 具体模型版本与各家参数：开发时按延迟/成本实测后在 providers.yaml 固定。
+================================================================
