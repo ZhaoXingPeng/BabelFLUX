@@ -15,17 +15,25 @@
 
 三、提交信息建议
 1. feat: 新增某功能
+示例：feat: 新增音频会话入口
+
 2. fix: 修复某问题
+示例：fix: 修复字幕状态更新问题
+
 3. docs: 补充某文档
+示例：docs: 补充 PR 提交与合并流程
+
 4. chore: 完成某工程任务
+示例：chore: 初始化项目配置
 
 四、PR 标题建议
 格式：类型: 一句话说明新增或修改内容
 
 示例：
-1. feat: 新增场景选择入口
-2. docs: 补充小说转剧本 YAML Schema
+1. feat: 新增音频会话入口
+2. feat: 新增实时字幕展示
 3. fix: 修复实时字幕修正状态更新
+4. docs: 补充 PR 提交与合并流程
 
 五、PR 描述必须包含
 1. 功能描述：说明该功能的作用与使用方式。
@@ -37,3 +45,70 @@
 2. 第三方库或框架需要在 README 中列明。
 3. 如果复用过去的代码片段，需要在 PR 描述中注明来源。
 4. 提交时间应保持在项目有效开发周期内。
+
+七、标准 PR 工作流
+1. 同步主分支
+cd /hy-tmp/ai-product-lab
+git checkout main
+git pull --ff-only origin main
+
+2. 新建子分支
+git checkout -b feat/audio-session
+
+也可以按任务类型创建：
+git checkout -b feat/live-subtitle-display
+git checkout -b feat/subtitle-revision
+git checkout -b feat/glossary-management
+git checkout -b docs/update-pr-workflow
+
+3. 在子分支上开发
+确认当前不是 main：
+git status --short --branch
+
+4. 提交修改
+git add .
+git commit -m "feat: 新增音频会话入口"
+
+5. 推送子分支
+git push -u origin feat/audio-session
+
+6. 在 Gitee 创建 PR
+source branch 选择当前子分支。
+target branch 选择 main。
+
+7. 填写 PR 描述
+必须包含功能描述、实现思路、测试方式。
+
+8. 在 Gitee 页面合并 PR
+推荐通过 Gitee 页面完成合并，这样可以留下 PR 记录，便于评审查看持续迭代过程。
+
+9. 合并后同步本地 main
+git checkout main
+git pull --ff-only origin main
+
+10. 删除已合并分支
+git branch -d feat/audio-session
+git push origin --delete feat/audio-session
+
+八、合并方式建议
+1. 普通合并
+保留子分支 commit 记录，适合展示持续开发过程。
+
+2. Squash 合并
+将多个 commit 压成一个，历史更简洁，但 commit 分布会减少。
+
+3. Rebase 合并
+历史线性更强，但操作复杂，新手不优先使用。
+
+本项目建议：
+优先使用 Gitee PR 合并；重要功能保留普通合并；不要直接在 main 上开发大功能。
+
+九、命令行直接合并
+仅在明确需要时使用：
+git checkout main
+git pull --ff-only origin main
+git merge --no-ff 分支名 -m "类型: 合并某功能"
+git push origin main
+
+注意：
+直接合并不会形成 Gitee PR 记录，不利于 PR 数量与质量评审。默认优先使用 Gitee PR。
