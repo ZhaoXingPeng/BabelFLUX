@@ -24,6 +24,11 @@ button {
   min-height: 38px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
@@ -107,6 +112,63 @@ select:focus-visible {
   padding: 5px 8px;
   color: #4a5a50;
   font-size: 12px;
+}
+
+.flow-step {
+  min-height: 34px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #f7f9f7;
+  padding: 7px 8px;
+  color: #607064;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.flow-step.active {
+  border-color: #1c7c54;
+  background: #e7f4ec;
+  color: #12462f;
+}
+
+.source-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+  min-height: 54px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #4a5a50;
+  text-align: left;
+}
+
+.source-card span:nth-child(2) {
+  color: #69776e;
+  font-size: 12px;
+}
+
+.source-card strong {
+  grid-row: span 2;
+  border-radius: 8px;
+  background: #eef1ee;
+  padding: 4px 7px;
+  color: #526057;
+  font-size: 12px;
+}
+
+.source-card.selected {
+  border-color: #1c7c54;
+  background: #e7f4ec;
+  color: #12462f;
+}
+
+.source-card.disabled {
+  border-style: dashed;
+  background: #f7f7f7;
 }
 
 .media-stage {

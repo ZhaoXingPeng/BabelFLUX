@@ -12,6 +12,12 @@ import type {
 
 let socket: WebSocket | null = null;
 
+const defaultSourceSyncState: SourceSyncState = {
+  status: "listening",
+  lagMs: 0,
+  message: "等待开始会话"
+};
+
 interface SessionState {
   sessionId: string | null;
   status: SessionStatus;
@@ -34,11 +40,7 @@ export const useSessionStore = defineStore("session", {
     sessionId: null,
     status: "idle",
     wsConnected: false,
-    sourceSyncState: {
-      status: "listening",
-      lagMs: 0,
-      message: "等待开始会话"
-    },
+    sourceSyncState: { ...defaultSourceSyncState },
     sourceSegments: [],
     translationSegments: [],
     revisions: [],
@@ -53,7 +55,9 @@ export const useSessionStore = defineStore("session", {
   },
 
   actions: {
-    async startDemoSession() {
+    async startDemoSession(): Promise<boolean> {
+      this.stopSession("idle");
+      this.resetSessionData();
       this.status = "connecting";
       this.errorMessage = null;
 
@@ -66,21 +70,40 @@ export const useSessionStore = defineStore("session", {
 
         this.sessionId = session.sessionId;
         this.connectSocket(session.sessionId);
+        return true;
       } catch (error) {
         this.status = "error";
         this.errorMessage =
           error instanceof Error ? error.message : "创建会话失败，请确认后端已启动";
+        return false;
       }
     },
 
-    stopSession() {
+    stopSession(nextStatus: SessionStatus = "stopped") {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop_session" }));
       }
       socket?.close();
       socket = null;
       this.wsConnected = false;
-      this.status = "stopped";
+      this.status = nextStatus;
+    },
+
+    pauseSession() {
+      if (this.status === "running") this.status = "paused";
+    },
+
+    resumeSession() {
+      if (this.status === "paused") this.status = "running";
+    },
+
+    resetSessionData() {
+      this.sessionId = null;
+      this.sourceSyncState = { ...defaultSourceSyncState };
+      this.sourceSegments = [];
+      this.translationSegments = [];
+      this.revisions = [];
+      this.errorMessage = null;
     },
 
     connectSocket(sessionId: string) {

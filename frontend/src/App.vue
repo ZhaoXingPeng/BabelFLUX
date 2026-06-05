@@ -1,41 +1,52 @@
 <script setup lang="ts">
 import { storeToRefs } from "pinia";
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useSessionStore } from "./stores/session";
 
 type ProductMode = "quick" | "floating";
-type RuntimeState = "setup" | "running" | "paused" | "report";
-type EndTarget = ProductMode | null;
+type RuntimeState = "setup" | "connecting" | "running" | "paused" | "report" | "error";
+
+interface SourceOption {
+  key: string;
+  label: string;
+  channel: string;
+  availability: "web" | "desktop";
+  disabled?: boolean;
+}
 
 const sessionStore = useSessionStore();
 const { errorMessage, revisions, sourceSegments, sourceSyncState, status, translationSegments, wsConnected } =
   storeToRefs(sessionStore);
 
 const productMode = ref<ProductMode>("quick");
-const quickState = ref<RuntimeState>("setup");
-const floatingState = ref<RuntimeState>("setup");
+const activeMode = ref<ProductMode | null>(null);
+const endingMode = ref<ProductMode | null>(null);
 const showEndDialog = ref(false);
-const endTarget = ref<EndTarget>(null);
+const selectedDisplayMode = ref("逐句对照");
+const modeStates = reactive<Record<ProductMode, RuntimeState>>({
+  quick: "setup",
+  floating: "setup"
+});
 
-const quickForm = ref({
+const quickForm = reactive({
   name: "国际技术分享同传",
   domain: "技术",
   sourceLanguage: "英语",
   targetLanguage: "中文",
   modelProfile: "智能默认",
-  source: "视频文件"
+  source: "video-file"
 });
 
-const floatingForm = ref({
+const floatingForm = reactive({
   domain: "通用",
   sourceLanguage: "自动检测",
   targetLanguage: "中文",
   modelProfile: "快速低延迟",
-  source: "浏览器标签页音频",
-  style: "双语字幕"
+  source: "browser-tab",
+  style: "双语字幕",
+  size: "标准",
+  opacity: "90%"
 });
-
-const selectedDisplayMode = ref("逐句对照");
 
 const productModes = [
   { key: "quick" as ProductMode, label: "快速同传", description: "完整工作台" },
@@ -46,9 +57,44 @@ const modelProfiles = ["智能默认", "快速低延迟", "高准确", "成本�
 const domains = ["通用", "技术", "商务", "教育", "医疗", "法律", "自定义术语表"];
 const languages = ["自动检测", "英语", "中文", "日语", "韩语", "法语", "德语"];
 const targetLanguages = ["中文", "英语", "日语", "韩语"];
-const quickSources = ["视频文件", "音频文件", "URL", "麦克风", "浏览器标签页音频", "屏幕或窗口", "系统音频"];
-const floatingSources = ["麦克风", "浏览器标签页音频", "屏幕或窗口音频", "系统音频"];
 const displayModes = ["分区对照", "转写翻译", "分区显示", "逐句对照", "按句分段", "语意清晰"];
+const displayModeCopy: Record<string, string> = {
+  分区对照: "原文和译文分栏审阅",
+  转写翻译: "按时间流展示处理过程",
+  分区显示: "媒体、转写、翻译和修正分屏",
+  逐句对照: "一句原文对应一句译文",
+  按句分段: "严格句级段落，适合字幕导出",
+  语意清晰: "按语义块聚合，译文更自然"
+};
+
+const quickSources: SourceOption[] = [
+  { key: "video-file", label: "视频文件", channel: "mp4 / mov / webm", availability: "web" },
+  { key: "audio-file", label: "音频文件", channel: "mp3 / wav / m4a", availability: "web" },
+  { key: "url", label: "URL", channel: "网页视频或直播链接", availability: "web" },
+  { key: "microphone", label: "麦克风", channel: "外放或线下讲座兜底", availability: "web" },
+  { key: "browser-tab", label: "浏览器标签页音频", channel: "网课、网页视频", availability: "web" },
+  { key: "screen-window", label: "屏幕或窗口", channel: "浏览器权限能力", availability: "web" },
+  {
+    key: "system-audio",
+    label: "系统音频",
+    channel: "桌面端能力",
+    availability: "desktop",
+    disabled: true
+  }
+];
+
+const floatingSources: SourceOption[] = [
+  { key: "microphone", label: "麦克风", channel: "外放或会议室", availability: "web" },
+  { key: "browser-tab", label: "浏览器标签页音频", channel: "网页视频和网课", availability: "web" },
+  { key: "screen-window", label: "屏幕或窗口音频", channel: "浏览器权限能力", availability: "web" },
+  {
+    key: "system-audio",
+    label: "系统音频",
+    channel: "桌面端能力",
+    availability: "desktop",
+    disabled: true
+  }
+];
 
 const samplePairs = [
   {
@@ -89,66 +135,124 @@ const transcriptPairs = computed(() => {
 
 const currentPair = computed(() => transcriptPairs.value[transcriptPairs.value.length - 1] ?? samplePairs[0]);
 
-const quickStatusLabel = computed(() => {
-  if (quickState.value === "running") return "同传运行中";
-  if (quickState.value === "paused") return "已暂停";
-  if (quickState.value === "report") return "已生成报告";
-  return "待开始";
-});
+const quickSource = computed(() => quickSources.find((source) => source.key === quickForm.source) ?? quickSources[0]);
+const floatingSource = computed(
+  () => floatingSources.find((source) => source.key === floatingForm.source) ?? floatingSources[0]
+);
 
-const floatingStatusLabel = computed(() => {
-  if (floatingState.value === "running") return "字幕运行中";
-  if (floatingState.value === "paused") return "字幕已暂停";
-  if (floatingState.value === "report") return "记录已生成";
-  return "待开始";
-});
+const quickStatusLabel = computed(() => formatRuntimeState(modeStates.quick));
+const floatingStatusLabel = computed(() => formatRuntimeState(modeStates.floating));
+const selectedDisplayDescription = computed(() => displayModeCopy[selectedDisplayMode.value]);
+const quickCanStart = computed(() => modeStates.quick !== "connecting" && !quickSource.value.disabled);
+const floatingCanStart = computed(() => modeStates.floating !== "connecting" && !floatingSource.value.disabled);
+
+const workspaceTiles = computed(() => [
+  { label: "源文实时转写", value: currentPair.value.source },
+  { label: "译文实时输出", value: currentPair.value.translation },
+  {
+    label: "修正记录",
+    value: revisions.value[0]
+      ? `${revisions.value[0].beforeText} -> ${revisions.value[0].afterText}`
+      : "等待修正事件"
+  },
+  { label: "术语与摘要", value: "AI translation · 实时 AI 翻译 · 术语命中" }
+]);
+
+const reportMetrics = computed(() => [
+  { label: "时长", value: "18:24" },
+  { label: "语言", value: `${quickForm.sourceLanguage} -> ${quickForm.targetLanguage}` },
+  { label: "修正", value: `${revisions.value.length || 1} 条` },
+  { label: "导出", value: "TXT / SRT / MD" }
+]);
+
+function formatRuntimeState(state: RuntimeState): string {
+  const labels: Record<RuntimeState, string> = {
+    setup: "待开始",
+    connecting: "连接中",
+    running: "运行中",
+    paused: "已暂停",
+    report: "已生成报告",
+    error: "启动失败"
+  };
+  return labels[state];
+}
 
 function selectMode(mode: ProductMode) {
   productMode.value = mode;
 }
 
-function startQuick() {
-  quickState.value = "running";
-  void sessionStore.startDemoSession();
+function selectQuickSource(source: SourceOption) {
+  if (!source.disabled) quickForm.source = source.key;
 }
 
-function startFloating() {
-  floatingState.value = "running";
-  void sessionStore.startDemoSession();
+function selectFloatingSource(source: SourceOption) {
+  if (!source.disabled) floatingForm.source = source.key;
 }
 
-function pauseQuick() {
-  quickState.value = "paused";
+async function startMode(mode: ProductMode) {
+  const blockedSource = mode === "quick" ? quickSource.value.disabled : floatingSource.value.disabled;
+  if (blockedSource || modeStates[mode] === "connecting") return;
+
+  const previousMode = activeMode.value;
+  if (previousMode && previousMode !== mode) {
+    modeStates[previousMode] = "setup";
+    sessionStore.stopSession("idle");
+  }
+
+  activeMode.value = mode;
+  productMode.value = mode;
+  modeStates.quick = mode === "quick" ? "connecting" : "setup";
+  modeStates.floating = mode === "floating" ? "connecting" : "setup";
+
+  const started = await sessionStore.startDemoSession();
+  if (activeMode.value !== mode) return;
+
+  if (started) {
+    modeStates[mode] = "running";
+  } else {
+    modeStates[mode] = "error";
+    activeMode.value = null;
+  }
 }
 
-function pauseFloating() {
-  floatingState.value = "paused";
+function pauseMode(mode: ProductMode) {
+  if (activeMode.value !== mode || modeStates[mode] !== "running") return;
+  modeStates[mode] = "paused";
+  sessionStore.pauseSession();
 }
 
-function resumeQuick() {
-  quickState.value = "running";
+function resumeMode(mode: ProductMode) {
+  if (activeMode.value !== mode || modeStates[mode] !== "paused") return;
+  modeStates[mode] = "running";
+  sessionStore.resumeSession();
 }
 
-function resumeFloating() {
-  floatingState.value = "running";
-}
-
-function askEnd(target: ProductMode) {
-  endTarget.value = target;
+function askEnd(mode: ProductMode) {
+  endingMode.value = mode;
   showEndDialog.value = true;
 }
 
 function cancelEnd() {
   showEndDialog.value = false;
-  endTarget.value = null;
+  endingMode.value = null;
 }
 
 function confirmEnd() {
-  if (endTarget.value === "quick") quickState.value = "report";
-  if (endTarget.value === "floating") floatingState.value = "report";
+  if (!endingMode.value) return;
+  modeStates[endingMode.value] = "report";
+  if (activeMode.value === endingMode.value) activeMode.value = null;
   showEndDialog.value = false;
-  endTarget.value = null;
-  sessionStore.stopSession();
+  endingMode.value = null;
+  sessionStore.stopSession("stopped");
+}
+
+function resetMode(mode: ProductMode) {
+  if (activeMode.value === mode) {
+    activeMode.value = null;
+    sessionStore.stopSession("idle");
+    sessionStore.resetSessionData();
+  }
+  modeStates[mode] = "setup";
 }
 </script>
 
@@ -158,7 +262,7 @@ function confirmEnd() {
       <div class="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p class="text-xs font-semibold text-[#607064]">AI 同声传译助手</p>
-          <h1 class="mt-1 text-2xl font-bold text-[#17212b]">实时同传工作台草稿</h1>
+          <h1 class="mt-1 text-2xl font-bold text-[#17212b]">实时同传工作台</h1>
         </div>
 
         <div class="grid gap-2 sm:grid-cols-2">
@@ -181,11 +285,25 @@ function confirmEnd() {
       </div>
     </header>
 
-    <section v-if="productMode === 'quick'" class="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+    <section
+      v-if="productMode === 'quick'"
+      class="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[348px_minmax(0,1fr)]"
+    >
       <aside class="rounded-lg border border-[#d7ddd8] bg-white p-4">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-bold">快速同传设置</h2>
           <span class="rounded-md bg-[#eef1ee] px-2 py-1 text-xs text-[#526057]">{{ quickStatusLabel }}</span>
+        </div>
+
+        <div class="mt-4 grid grid-cols-3 gap-2">
+          <div class="flow-step" :class="{ active: modeStates.quick === 'setup' }">配置</div>
+          <div
+            class="flow-step"
+            :class="{ active: modeStates.quick === 'connecting' || modeStates.quick === 'running' || modeStates.quick === 'paused' }"
+          >
+            同传
+          </div>
+          <div class="flow-step" :class="{ active: modeStates.quick === 'report' }">复盘</div>
         </div>
 
         <div class="mt-4 space-y-4">
@@ -225,30 +343,29 @@ function confirmEnd() {
 
           <div>
             <span class="form-label">输入声源</span>
-            <div class="mt-2 grid grid-cols-2 gap-2">
+            <div class="mt-2 grid gap-2">
               <button
                 v-for="source in quickSources"
-                :key="source"
-                class="rounded-md border px-3 py-2 text-left text-sm"
-                :class="
-                  quickForm.source === source
-                    ? 'border-[#1c7c54] bg-[#e7f4ec] text-[#12462f]'
-                    : 'border-[#d7ddd8] bg-white text-[#4a5a50]'
-                "
+                :key="source.key"
+                class="source-card"
+                :class="{ selected: quickForm.source === source.key, disabled: source.disabled }"
+                :disabled="source.disabled"
                 type="button"
-                @click="quickForm.source = source"
+                @click="selectQuickSource(source)"
               >
-                {{ source }}
+                <span class="font-bold">{{ source.label }}</span>
+                <span>{{ source.channel }}</span>
+                <strong>{{ source.availability === "web" ? "Web" : "桌面端" }}</strong>
               </button>
             </div>
           </div>
         </div>
 
         <div class="mt-5 grid gap-2">
-          <button class="primary-button" type="button" @click="startQuick">
-            开始同传
+          <button class="primary-button" type="button" :disabled="!quickCanStart" @click="startMode('quick')">
+            {{ modeStates.quick === "connecting" ? "连接中" : "开始同传" }}
           </button>
-          <button class="secondary-button" type="button" @click="productMode = 'floating'">
+          <button class="secondary-button" type="button" @click="selectMode('floating')">
             切到悬浮字幕
           </button>
         </div>
@@ -258,7 +375,9 @@ function confirmEnd() {
         <div class="rounded-lg border border-[#d7ddd8] bg-white p-4">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p class="text-xs text-[#607064]">{{ quickForm.name }} · {{ quickForm.sourceLanguage }} -> {{ quickForm.targetLanguage }}</p>
+              <p class="text-xs text-[#607064]">
+                {{ quickForm.name }} · {{ quickForm.sourceLanguage }} -> {{ quickForm.targetLanguage }}
+              </p>
               <h2 class="mt-1 text-xl font-bold">快速同传工作台</h2>
             </div>
             <div class="flex flex-wrap gap-2">
@@ -273,14 +392,32 @@ function confirmEnd() {
           </p>
 
           <div class="mt-4 flex flex-wrap gap-2">
-            <button v-if="quickState === 'running'" class="secondary-button compact-button" type="button" @click="pauseQuick">
+            <button
+              v-if="modeStates.quick === 'running'"
+              class="secondary-button compact-button"
+              type="button"
+              @click="pauseMode('quick')"
+            >
               暂停
             </button>
-            <button v-if="quickState === 'paused'" class="primary-button compact-button" type="button" @click="resumeQuick">
+            <button
+              v-if="modeStates.quick === 'paused'"
+              class="primary-button compact-button"
+              type="button"
+              @click="resumeMode('quick')"
+            >
               继续
             </button>
-            <button class="danger-button compact-button" type="button" @click="askEnd('quick')">
+            <button
+              v-if="modeStates.quick !== 'setup' && modeStates.quick !== 'report'"
+              class="danger-button compact-button"
+              type="button"
+              @click="askEnd('quick')"
+            >
               结束
+            </button>
+            <button v-if="modeStates.quick === 'report'" class="secondary-button compact-button" type="button" @click="resetMode('quick')">
+              新建同传
             </button>
           </div>
         </div>
@@ -289,7 +426,7 @@ function confirmEnd() {
           <section class="rounded-lg border border-[#d7ddd8] bg-white p-4">
             <div class="media-stage">
               <div>
-                <p class="text-sm text-[#d8e0da]">{{ quickForm.source }}</p>
+                <p class="text-sm text-[#d8e0da]">{{ quickSource.label }} · {{ quickForm.modelProfile }}</p>
                 <p class="mt-2 text-2xl font-bold text-white">视频 / 音频展示区</p>
                 <p class="mt-3 max-w-xl text-sm leading-6 text-[#bec9c2]">
                   {{ currentPair.source }}
@@ -301,30 +438,19 @@ function confirmEnd() {
             </div>
 
             <div class="mt-4 grid gap-3 md:grid-cols-2">
-              <div class="workspace-tile">
-                <p class="tile-label">源文实时转写</p>
-                <p class="tile-text">{{ currentPair.source }}</p>
-              </div>
-              <div class="workspace-tile">
-                <p class="tile-label">译文实时输出</p>
-                <p class="tile-text">{{ currentPair.translation }}</p>
-              </div>
-              <div class="workspace-tile">
-                <p class="tile-label">修正记录</p>
-                <p class="tile-text">
-                  {{ revisions[0] ? `${revisions[0].beforeText} -> ${revisions[0].afterText}` : "等待修正事件" }}
-                </p>
-              </div>
-              <div class="workspace-tile">
-                <p class="tile-label">术语与摘要</p>
-                <p class="tile-text">AI translation · 实时 AI 翻译 · 术语命中</p>
+              <div v-for="tile in workspaceTiles" :key="tile.label" class="workspace-tile">
+                <p class="tile-label">{{ tile.label }}</p>
+                <p class="tile-text">{{ tile.value }}</p>
               </div>
             </div>
           </section>
 
           <section class="rounded-lg border border-[#d7ddd8] bg-white p-4">
-            <div class="flex items-center justify-between gap-3">
-              <h3 class="font-bold">同传显示</h3>
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="font-bold">同传显示</h3>
+                <p class="mt-1 text-xs text-[#607064]">{{ selectedDisplayDescription }}</p>
+              </div>
               <span class="rounded-md bg-[#fff4df] px-2 py-1 text-xs text-[#7a4c00]">{{ selectedDisplayMode }}</span>
             </div>
 
@@ -358,24 +484,19 @@ function confirmEnd() {
           </section>
         </div>
 
-        <section v-if="quickState === 'report'" class="rounded-lg border border-[#d7ddd8] bg-white p-4">
-          <h3 class="font-bold">会议报告</h3>
+        <section v-if="modeStates.quick === 'report'" class="rounded-lg border border-[#d7ddd8] bg-white p-4">
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="font-bold">会议报告</h3>
+            <div class="flex gap-2">
+              <button class="secondary-button compact-button" type="button">TXT</button>
+              <button class="secondary-button compact-button" type="button">SRT</button>
+              <button class="secondary-button compact-button" type="button">MD</button>
+            </div>
+          </div>
           <div class="mt-3 grid gap-3 md:grid-cols-4">
-            <div class="report-metric">
-              <span>时长</span>
-              <strong>18:24</strong>
-            </div>
-            <div class="report-metric">
-              <span>语言</span>
-              <strong>{{ quickForm.sourceLanguage }} -> {{ quickForm.targetLanguage }}</strong>
-            </div>
-            <div class="report-metric">
-              <span>修正</span>
-              <strong>{{ revisions.length || 1 }} 条</strong>
-            </div>
-            <div class="report-metric">
-              <span>导出</span>
-              <strong>TXT / SRT / MD</strong>
+            <div v-for="metric in reportMetrics" :key="metric.label" class="report-metric">
+              <span>{{ metric.label }}</span>
+              <strong>{{ metric.value }}</strong>
             </div>
           </div>
         </section>
@@ -384,9 +505,20 @@ function confirmEnd() {
 
     <section v-else class="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <aside class="rounded-lg border border-[#d7ddd8] bg-white p-4">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-bold">悬浮字幕设置</h2>
           <span class="rounded-md bg-[#eef1ee] px-2 py-1 text-xs text-[#526057]">{{ floatingStatusLabel }}</span>
+        </div>
+
+        <div class="mt-4 grid grid-cols-3 gap-2">
+          <div class="flow-step" :class="{ active: modeStates.floating === 'setup' }">配置</div>
+          <div
+            class="flow-step"
+            :class="{ active: modeStates.floating === 'connecting' || modeStates.floating === 'running' || modeStates.floating === 'paused' }"
+          >
+            字幕
+          </div>
+          <div class="flow-step" :class="{ active: modeStates.floating === 'report' }">记录</div>
         </div>
 
         <div class="mt-4 space-y-4">
@@ -424,36 +556,55 @@ function confirmEnd() {
             <div class="mt-2 grid gap-2">
               <button
                 v-for="source in floatingSources"
-                :key="source"
-                class="rounded-md border px-3 py-2 text-left text-sm"
-                :class="
-                  floatingForm.source === source
-                    ? 'border-[#1c7c54] bg-[#e7f4ec] text-[#12462f]'
-                    : 'border-[#d7ddd8] bg-white text-[#4a5a50]'
-                "
+                :key="source.key"
+                class="source-card"
+                :class="{ selected: floatingForm.source === source.key, disabled: source.disabled }"
+                :disabled="source.disabled"
                 type="button"
-                @click="floatingForm.source = source"
+                @click="selectFloatingSource(source)"
               >
-                {{ source }}
+                <span class="font-bold">{{ source.label }}</span>
+                <span>{{ source.channel }}</span>
+                <strong>{{ source.availability === "web" ? "Web" : "桌面端" }}</strong>
               </button>
             </div>
           </div>
 
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block">
+              <span class="form-label">字幕样式</span>
+              <select v-model="floatingForm.style" class="form-control">
+                <option>双语字幕</option>
+                <option>仅译文</option>
+                <option>原文优先</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="form-label">字号</span>
+              <select v-model="floatingForm.size" class="form-control">
+                <option>紧凑</option>
+                <option>标准</option>
+                <option>大号</option>
+              </select>
+            </label>
+          </div>
+
           <label class="block">
-            <span class="form-label">字幕样式</span>
-            <select v-model="floatingForm.style" class="form-control">
-              <option>双语字幕</option>
-              <option>仅译文</option>
-              <option>原文优先</option>
+            <span class="form-label">透明度</span>
+            <select v-model="floatingForm.opacity" class="form-control">
+              <option>70%</option>
+              <option>80%</option>
+              <option>90%</option>
+              <option>100%</option>
             </select>
           </label>
         </div>
 
         <div class="mt-5 grid gap-2">
-          <button class="primary-button" type="button" @click="startFloating">
-            开始使用
+          <button class="primary-button" type="button" :disabled="!floatingCanStart" @click="startMode('floating')">
+            {{ modeStates.floating === "connecting" ? "连接中" : "开始使用" }}
           </button>
-          <button class="secondary-button" type="button" @click="productMode = 'quick'">
+          <button class="secondary-button" type="button" @click="selectMode('quick')">
             返回快速同传
           </button>
         </div>
@@ -464,15 +615,22 @@ function confirmEnd() {
           <div class="rounded-lg border border-[#c9d1cb] bg-white p-4">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <p class="text-xs text-[#607064]">{{ floatingForm.source }} · {{ floatingForm.modelProfile }}</p>
-                <h2 class="mt-1 text-xl font-bold">悬浮字幕运行草稿</h2>
+                <p class="text-xs text-[#607064]">{{ floatingSource.label }} · {{ floatingForm.modelProfile }}</p>
+                <h2 class="mt-1 text-xl font-bold">悬浮字幕运行窗</h2>
               </div>
               <div class="flex flex-wrap gap-2">
                 <button class="secondary-button compact-button" type="button">锁定</button>
                 <button class="secondary-button compact-button" type="button">A-</button>
                 <button class="secondary-button compact-button" type="button">A+</button>
                 <button class="secondary-button compact-button" type="button">设置</button>
-                <button class="danger-button compact-button" type="button" @click="askEnd('floating')">关闭</button>
+                <button
+                  v-if="modeStates.floating !== 'setup' && modeStates.floating !== 'report'"
+                  class="danger-button compact-button"
+                  type="button"
+                  @click="askEnd('floating')"
+                >
+                  关闭
+                </button>
               </div>
             </div>
           </div>
@@ -480,8 +638,8 @@ function confirmEnd() {
           <div class="relative rounded-lg border border-[#c9d1cb] bg-[#f8faf8] p-4">
             <div class="grid h-full place-items-center rounded-lg border border-dashed border-[#b7c1ba] bg-white">
               <div class="text-center">
-                <p class="text-sm text-[#607064]">浏览器内悬浮字幕预览</p>
-                <p class="mt-2 text-lg font-semibold text-[#17212b]">后续桌面端承接系统级置顶与系统音频</p>
+                <p class="text-sm font-semibold text-[#607064]">浏览器字幕层</p>
+                <p class="mt-2 text-lg font-bold text-[#17212b]">{{ floatingForm.style }} · {{ floatingForm.size }}</p>
               </div>
             </div>
 
@@ -493,24 +651,52 @@ function confirmEnd() {
               <p class="mt-4 text-sm leading-6 text-white/72">{{ currentPair.source }}</p>
               <p class="mt-2 text-xl font-bold leading-8 text-white">{{ currentPair.translation }}</p>
               <div class="mt-4 flex justify-center gap-2">
-                <button v-if="floatingState === 'running'" class="floating-button" type="button" @click="pauseFloating">暂停</button>
-                <button v-if="floatingState === 'paused'" class="floating-button" type="button" @click="resumeFloating">继续</button>
-                <button class="floating-button danger" type="button" @click="askEnd('floating')">结束</button>
+                <button
+                  v-if="modeStates.floating === 'running'"
+                  class="floating-button"
+                  type="button"
+                  @click="pauseMode('floating')"
+                >
+                  暂停
+                </button>
+                <button
+                  v-if="modeStates.floating === 'paused'"
+                  class="floating-button"
+                  type="button"
+                  @click="resumeMode('floating')"
+                >
+                  继续
+                </button>
+                <button
+                  v-if="modeStates.floating !== 'setup' && modeStates.floating !== 'report'"
+                  class="floating-button danger"
+                  type="button"
+                  @click="askEnd('floating')"
+                >
+                  结束
+                </button>
               </div>
             </div>
           </div>
         </div>
 
-        <section v-if="floatingState === 'report'" class="absolute inset-x-4 bottom-4 rounded-lg border border-[#d7ddd8] bg-white p-4">
-          <h3 class="font-bold">字幕记录</h3>
-          <p class="mt-2 text-sm text-[#4a5a50]">已生成转写、译文、修正记录和导出入口。</p>
+        <section v-if="modeStates.floating === 'report'" class="absolute inset-x-4 bottom-4 rounded-lg border border-[#d7ddd8] bg-white p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h3 class="font-bold">字幕记录</h3>
+              <p class="mt-2 text-sm text-[#4a5a50]">已生成转写、译文、修正记录和导出入口。</p>
+            </div>
+            <button class="secondary-button compact-button" type="button" @click="resetMode('floating')">
+              新建字幕
+            </button>
+          </div>
         </section>
       </section>
     </section>
 
     <div v-if="showEndDialog" class="fixed inset-0 z-50 grid place-items-center bg-black/40 px-4">
       <section class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-        <h2 class="text-lg font-bold">结束本次{{ endTarget === "floating" ? "字幕" : "同传" }}？</h2>
+        <h2 class="text-lg font-bold">结束本次{{ endingMode === "floating" ? "字幕" : "同传" }}？</h2>
         <p class="mt-3 text-sm leading-6 text-[#4a5a50]">
           结束后将停止识别和翻译，并生成本次转写、翻译和修正记录。
         </p>
