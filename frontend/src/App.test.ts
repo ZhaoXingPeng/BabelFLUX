@@ -2,7 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
-import App from "./App.vue";
+import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
 import type { ServerEvent } from "./types/events";
 
@@ -35,10 +35,14 @@ vi.mock("./api/ws", () => ({
   createSessionSocket: mockRuntime.createSessionSocket
 }));
 
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() })
+}));
+
 function mountApp(): VueWrapper {
   const pinia = createPinia();
   setActivePinia(pinia);
-  return mount(App, {
+  return mount(WorkbenchView, {
     global: {
       plugins: [pinia]
     }
@@ -120,7 +124,7 @@ const revisionEvent: ServerEvent = {
   }
 };
 
-describe("App 同传 mock 流程", () => {
+describe("同传工作台 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
     Object.defineProperty(navigator, "mediaDevices", {
@@ -219,9 +223,9 @@ describe("App 同传 mock 流程", () => {
     await nextTick();
 
     expect(wrapper.text()).toContain("已连接");
-    expect(wrapper.text()).not.toContain("快速同传设置");
+    expect(wrapper.text()).not.toContain("同声传译设置");
     expect(wrapper.text()).toContain("请审阅季度发布计划。");
-    expect(wrapper.text()).toContain("revised");
+    expect(wrapper.text()).toContain("已修正");
 
     await findButton(wrapper, "暂停").trigger("click");
     expect(store.status).toBe("paused");
