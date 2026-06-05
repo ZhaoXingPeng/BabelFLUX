@@ -1,0 +1,27 @@
+html,
+body,
+#app {
+  min-height: 100vh;
+  background: transparent;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  min-width: 420px;
+  overflow: hidden;
+}
+
+.desktop-overlay-shell {
+  width: min(100vw - 20px, 860px);
+  padding: 10px;
+}
+
+.desktop-overlay-error {
+  border: 1px solid rgba(226, 118, 112, 0.35);
+  border-radius: 8px;
+  background: rgba(20, 22, 26, 0.94);
+  padding: 14px;
+  color: #f0aaa6;
+  font-size: 13px;
+}

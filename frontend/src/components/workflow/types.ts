@@ -1,4 +1,5 @@
 export type {
+  DesktopLaunchState,
   FloatingFormState,
   ProductMode,
   ProductModeOption,

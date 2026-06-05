@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import type { SourceSyncState } from "../../types/events";
-import type { FloatingFormState, QuickFormState, RuntimeState, SourceOption, TranscriptPair } from "../workflow/types";
+import type {
+  DesktopLaunchState,
+  FloatingFormState,
+  QuickFormState,
+  RuntimeState,
+  SourceOption,
+  TranscriptPair
+} from "../workflow/types";
 import FloatingCaption from "./FloatingCaption.vue";
 
 defineProps<{
@@ -15,6 +22,8 @@ defineProps<{
   audioUrl: string | null;
   mediaKind: "video" | "audio";
   currentPair: TranscriptPair;
+  desktopLaunchState: DesktopLaunchState;
+  desktopLaunchMessage: string;
   selectedDisplayMode: string;
 }>();
 
@@ -96,10 +105,13 @@ function emitPlaybackTime(event: Event) {
         <span>{{ runtimeStatus }}</span>
         <span>{{ source.channel }}</span>
         <span>{{ sourceSyncState.message }}</span>
+        <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
         <button class="stage-button" type="button" @click="emit('openSettings')">设置</button>
-        <button class="stage-button" type="button" @click="emit('openDesktop')">悬浮</button>
+        <button class="stage-button" type="button" :disabled="desktopLaunchState === 'launching'" @click="emit('openDesktop')">
+          {{ desktopLaunchState === "launching" ? "唤起中" : "投送桌面" }}
+        </button>
         <button v-if="selectedDisplayMode === '悬浮字幕'" class="stage-button" type="button" @click="emit('expandSubtitles')">
           展开字幕栏
         </button>

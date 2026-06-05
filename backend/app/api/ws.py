@@ -4,6 +4,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.providers.mock import build_mock_events
+from app.services.handoff import handoff_tokens
 
 router = APIRouter(tags=["websocket"])
 
@@ -11,6 +12,12 @@ router = APIRouter(tags=["websocket"])
 @router.websocket("/ws/sessions/{session_id}")
 async def session_socket(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
+    ws_token = websocket.query_params.get("token")
+    if ws_token and not handoff_tokens.validate_ws_token(session_id, ws_token):
+        await websocket.send_json({"type": "error", "message": "Invalid handoff WebSocket token"})
+        await websocket.close(code=4401)
+        return
+
     await websocket.send_json({"type": "session_started", "sessionId": session_id})
 
     try:

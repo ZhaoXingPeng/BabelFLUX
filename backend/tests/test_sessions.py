@@ -1,8 +1,15 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
+from app.services.handoff import handoff_tokens
 from app.services.providers.mock import build_mock_events
+
+
+@pytest.fixture(autouse=True)
+def reset_handoff_tokens() -> None:
+    handoff_tokens.reset()
 
 
 def test_create_session() -> None:
@@ -75,6 +82,57 @@ def test_mock_websocket_pause_and_resume() -> None:
         resume_event = websocket.receive_json()
         assert resume_event["type"] == "source_sync_state"
         assert resume_event["state"]["status"] == "syncing"
+
+
+def test_issue_and_claim_session_handoff_token_once() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/sessions/desktop-session/handoff",
+        json={
+            "source": "system-audio",
+            "sourceLanguage": "auto",
+            "targetLanguage": "zh",
+            "displayMode": "bilingual",
+        },
+    )
+
+    assert response.status_code == 200
+    issued = response.json()
+    assert issued["handoffToken"].startswith("h_")
+    assert issued["deepLinkUrl"].startswith("lingosync://floating/start?")
+    assert "token=h_" in issued["deepLinkUrl"]
+
+    claim_response = client.post("/api/sessions/handoff/claim", json={"token": issued["handoffToken"]})
+    assert claim_response.status_code == 200
+    claim = claim_response.json()
+    assert claim["sessionId"] == "desktop-session"
+    assert claim["source"] == "system-audio"
+    assert claim["sourceLanguage"] == "auto"
+    assert claim["targetLanguage"] == "zh"
+    assert claim["displayMode"] == "bilingual"
+    assert claim["wsToken"].startswith("w_")
+    assert claim["wsUrl"].endswith(f"token={claim['wsToken']}")
+
+    reused = client.post("/api/sessions/handoff/claim", json={"token": issued["handoffToken"]})
+    assert reused.status_code == 409
+
+
+def test_handoff_websocket_token_is_validated_when_present() -> None:
+    client = TestClient(app)
+    issued = client.post("/api/sessions/ws-session/handoff", json={}).json()
+    claim = client.post("/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}).json()
+
+    with client.websocket_connect(claim["wsUrl"]) as websocket:
+        assert websocket.receive_json() == {
+            "type": "session_started",
+            "sessionId": "ws-session",
+        }
+
+    with client.websocket_connect("/api/ws/sessions/ws-session?token=bad-token") as websocket:
+        assert websocket.receive_json() == {
+            "type": "error",
+            "message": "Invalid handoff WebSocket token",
+        }
 
 
 def test_mock_events_conform_to_event_models() -> None:
