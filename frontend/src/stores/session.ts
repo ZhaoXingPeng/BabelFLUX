@@ -35,7 +35,7 @@ export const useSessionStore = defineStore("session", {
     status: "idle",
     wsConnected: false,
     sourceSyncState: {
-      status: "idle",
+      status: "listening",
       lagMs: 0,
       message: "等待开始会话"
     },

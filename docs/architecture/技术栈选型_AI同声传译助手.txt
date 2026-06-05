@@ -199,7 +199,7 @@ SenseVoice 和 sherpa-onnx 作为多语种和本地化扩展。
 
 2. 翻译模型
 实时翻译：
-使用低延迟 LLM 或翻译 API，输出 temporary translation。
+使用低延迟 LLM 或翻译 API，输出 partial translation。
 
 稳定翻译：
 使用更强模型结合上下文、术语表和历史片段输出 final translation。
@@ -523,7 +523,7 @@ RevisionEvent 建议字段：
 9. display_policy
 
 实时纠偏范围：
-只修最近 3 到 5 条字幕，或最近 10 到 20 秒窗口。更早内容不在实时主链路中频繁改写，避免用户阅读体验抖动。
+只修最近 3 到 5 条字幕，或最近 20 到 40 秒窗口。更早内容不在实时主链路中频繁改写，避免用户阅读体验抖动。
 
 4. 最终纠偏
 最终纠偏由会话结束后的大模型批处理完成。

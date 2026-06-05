@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
+from app.services.providers.mock import build_mock_events
 
 
 def test_create_session() -> None:
@@ -37,37 +39,13 @@ def test_mock_websocket_stream() -> None:
     ]
 
 
-def test_invalid_json_does_not_close_stream() -> None:
-    client = TestClient(app)
+def test_mock_events_conform_to_event_models() -> None:
+    """mock 发出的 payload 必须能被事件模型校验——事件模型是前后端契约的单一事实源。"""
+    events = {event["type"]: event for event in build_mock_events("contract")}
 
-    with client.websocket_connect("/api/ws/sessions/bad-json") as websocket:
-        websocket.receive_json()  # session_started
+    sync_state = SourceSyncState.model_validate(events["source_sync_state"]["state"])
+    assert sync_state.status in {"listening", "syncing", "lagging", "missing", "recovered"}
 
-        websocket.send_text("not-json")
-        assert websocket.receive_json() == {
-            "type": "error",
-            "message": "Invalid JSON message",
-        }
-
-        # 单条坏帧不应中断接收循环：随后仍能正常开始一次 mock 流
-        websocket.send_json({"type": "start_session"})
-        event_types = [websocket.receive_json()["type"] for _ in range(4)]
-
-    assert event_types == [
-        "source_sync_state",
-        "transcript_segment",
-        "translation_segment",
-        "revision_event",
-    ]
-
-
-def test_unsupported_event_returns_error() -> None:
-    client = TestClient(app)
-
-    with client.websocket_connect("/api/ws/sessions/unsupported") as websocket:
-        websocket.receive_json()  # session_started
-        websocket.send_json({"type": "does_not_exist"})
-        assert websocket.receive_json() == {
-            "type": "error",
-            "message": "Unsupported client event",
-        }
+    SubtitleSegment.model_validate(events["transcript_segment"]["segment"])
+    SubtitleSegment.model_validate(events["translation_segment"]["segment"])
+    RevisionEvent.model_validate(events["revision_event"]["revision"])

@@ -3,7 +3,7 @@ export type SessionStatus = "idle" | "connecting" | "running" | "stopped" | "err
 export type SegmentStatus = "partial" | "final" | "revised";
 
 export interface SourceSyncState {
-  status: "synced" | "lagging" | "missing" | "idle";
+  status: "listening" | "syncing" | "lagging" | "missing" | "recovered";
   lagMs: number;
   message: string;
 }
