@@ -221,6 +221,14 @@ select:focus-visible {
   line-height: 1.55;
 }
 
+.media-caption.floating {
+  justify-self: center;
+  width: min(100%, 760px);
+  background: rgba(17, 24, 39, 0.78);
+  box-shadow: 0 18px 45px rgba(17, 24, 39, 0.25);
+  text-align: center;
+}
+
 .workspace-tile,
 .transcript-row,
 .report-metric {
@@ -228,6 +236,10 @@ select:focus-visible {
   border-radius: 8px;
   background: #ffffff;
   padding: 12px;
+}
+
+.transcript-row.compact {
+  padding: 10px;
 }
 
 .tile-label,

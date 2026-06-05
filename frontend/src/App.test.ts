@@ -183,9 +183,10 @@ describe("App 同传 mock 流程", () => {
     mockRuntime.handlersBySession.get("ui-session-1")?.onEvent(revisionEvent);
     await nextTick();
 
-    expect(wrapper.text()).toContain("WebSocket 已连接");
+    expect(wrapper.text()).toContain("已连接");
+    expect(wrapper.text()).not.toContain("快速同传设置");
     expect(wrapper.text()).toContain("请审阅季度发布计划。");
-    expect(wrapper.text()).toContain("季度发布计划 -> 季度发布方案");
+    expect(wrapper.text()).toContain("revised");
 
     await findButton(wrapper, "暂停").trigger("click");
     expect(store.status).toBe("paused");
@@ -205,31 +206,24 @@ describe("App 同传 mock 流程", () => {
     expect(wrapper.text()).toContain("1 条");
   });
 
-  it("快速切换模式时旧的创建请求不会连接旧 WebSocket", async () => {
+  it("启动中重置时旧的创建请求不会连接旧 WebSocket", async () => {
     const quickRequest = deferred<{ sessionId: string; status: string }>();
-    const floatingRequest = deferred<{ sessionId: string; status: string }>();
-    mockRuntime.createSession
-      .mockReturnValueOnce(quickRequest.promise)
-      .mockReturnValueOnce(floatingRequest.promise);
+    mockRuntime.createSession.mockReturnValueOnce(quickRequest.promise);
     mountApp();
     const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
 
     const quickStart = store.startMode("quick");
-    const floatingStart = store.startMode("floating");
+    store.resetMode("quick");
 
     quickRequest.resolve({ sessionId: "stale-quick", status: "created" });
     await quickStart;
+
     expect(mockRuntime.handlersBySession.has("stale-quick")).toBe(false);
-    expect(store.activeMode).toBe("floating");
+    expect(store.activeMode).toBe(null);
     expect(store.modeStates.quick).toBe("setup");
-
-    floatingRequest.resolve({ sessionId: "current-floating", status: "created" });
-    await floatingStart;
-
-    expect(mockRuntime.handlersBySession.has("current-floating")).toBe(true);
-    expect(store.sessionId).toBe("current-floating");
-    expect(store.modeStates.floating).toBe("running");
-    expect(mockRuntime.createSessionSocket).toHaveBeenCalledTimes(1);
+    expect(mockRuntime.createSessionSocket).not.toHaveBeenCalled();
   });
 
   it("切换权限类声源会重置已有授权状态", async () => {

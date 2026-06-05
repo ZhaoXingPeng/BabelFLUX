@@ -31,22 +31,19 @@ const defaultSourceSyncState: SourceSyncState = {
 };
 
 const productModeOptions: ProductModeOption[] = [
-  { key: "quick", label: "快速同传", description: "完整工作台" },
-  { key: "floating", label: "悬浮字幕", description: "轻量字幕层" }
+  { key: "quick", label: "快速同传", description: "Web 工作台" },
+  { key: "floating", label: "客户端悬浮", description: "桌面端全局能力" }
 ];
 
 const modelProfileOptions = ["智能默认", "快速低延迟", "高准确", "成本优先", "指定供应商"];
 const domainOptions = ["通用", "技术", "商务", "教育", "医疗", "法律", "自定义术语表"];
 const languageOptions = ["自动检测", "英语", "中文", "日语", "韩语", "法语", "德语"];
 const targetLanguageOptions = ["中文", "英语", "日语", "韩语"];
-const displayModeOptions = ["分区对照", "转写翻译", "分区显示", "逐句对照", "按句分段", "语意清晰"];
+const displayModeOptions = ["分区对照", "逐句对照", "悬浮字幕"];
 const displayModeCopy: Record<string, string> = {
   分区对照: "原文和译文分栏审阅",
-  转写翻译: "按时间流展示处理过程",
-  分区显示: "媒体、转写、翻译和修正分屏",
   逐句对照: "一句原文对应一句译文",
-  按句分段: "严格句级段落，适合字幕导出",
-  语意清晰: "按语义块聚合，译文更自然"
+  悬浮字幕: "Web 内嵌字幕层，桌面端可全局悬浮"
 };
 
 const quickSourceOptions: SourceOption[] = [
@@ -183,6 +180,10 @@ function isSourceInputReady(sourceKey: string, input: SourceInputState): boolean
   return true;
 }
 
+function canStartMode(source: SourceOption, sourceKey: string, input: SourceInputState, state: RuntimeState): boolean {
+  return ["setup", "report", "error"].includes(state) && !source.disabled && isSourceInputReady(sourceKey, input);
+}
+
 function stopMediaStream(stream: MediaStream) {
   stream.getTracks().forEach((track) => track.stop());
 }
@@ -305,17 +306,14 @@ export const useSessionStore = defineStore("session", {
       return getUrlError(state.floatingForm.source, state.floatingInput.url);
     },
     quickCanStart(): boolean {
-      return (
-        ["setup", "report", "error"].includes(this.modeStates.quick) &&
-        !this.quickSource.disabled &&
-        isSourceInputReady(this.quickForm.source, this.quickInput)
-      );
+      return canStartMode(this.quickSource, this.quickForm.source, this.quickInput, this.modeStates.quick);
     },
     floatingCanStart(): boolean {
-      return (
-        ["setup", "report", "error"].includes(this.modeStates.floating) &&
-        !this.floatingSource.disabled &&
-        isSourceInputReady(this.floatingForm.source, this.floatingInput)
+      return canStartMode(
+        this.floatingSource,
+        this.floatingForm.source,
+        this.floatingInput,
+        this.modeStates.floating
       );
     },
     workspaceTiles(): WorkspaceTile[] {
@@ -398,9 +396,17 @@ export const useSessionStore = defineStore("session", {
       }
     },
 
+    openDesktopFloating() {
+      window.location.href = "lingosync://floating/start";
+    },
+
     async startMode(mode: ProductMode) {
       const blockedSource = mode === "quick" ? this.quickSource.disabled : this.floatingSource.disabled;
-      if (blockedSource || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
+      const inputReady =
+        mode === "quick"
+          ? isSourceInputReady(this.quickForm.source, this.quickInput)
+          : isSourceInputReady(this.floatingForm.source, this.floatingInput);
+      if (blockedSource || !inputReady || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
 
       const requestId = this.startRequestId + 1;
       this.startRequestId = requestId;

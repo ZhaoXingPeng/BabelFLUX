@@ -21,7 +21,6 @@ defineProps<{
 
 const emit = defineEmits<{
   start: [];
-  switchFloating: [];
   selectSource: [source: SourceOption];
   selectFile: [file: File | null];
   updateUrl: [url: string];
@@ -91,9 +90,6 @@ const emit = defineEmits<{
     <div class="mt-5 grid gap-2">
       <button class="primary-button" type="button" :disabled="!canStart" @click="emit('start')">
         {{ state === "connecting" ? "连接中" : "开始同传" }}
-      </button>
-      <button class="secondary-button" type="button" @click="emit('switchFloating')">
-        切到悬浮字幕
       </button>
     </div>
   </aside>
