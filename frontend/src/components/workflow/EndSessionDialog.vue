@@ -20,7 +20,7 @@ const emit = defineEmits<{
       </p>
       <div class="mt-5 grid grid-cols-2 gap-3">
         <button class="secondary-button" type="button" @click="emit('cancel')">暂不结束</button>
-        <button class="danger-button" type="button" @click="emit('confirm')">结束会议</button>
+        <button class="danger-button" type="button" @click="emit('confirm')">结束同传</button>
       </div>
     </section>
   </div>

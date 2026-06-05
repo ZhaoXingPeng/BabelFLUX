@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
+import Icon from "../components/icons/Icon.vue";
 import EndSessionDialog from "../components/workflow/EndSessionDialog.vue";
 import SettingsDialog from "../components/settings/SettingsDialog.vue";
 import DesktopLaunchPrompt from "../components/workbench/DesktopLaunchPrompt.vue";
@@ -67,11 +68,15 @@ async function setDisplayMode(mode: string) {
     selectedDisplayMode.value = mode;
   });
 }
+
+function toggleFloatingCaptions() {
+  setDisplayMode(selectedDisplayMode.value === "悬浮字幕" ? "逐句对照" : "悬浮字幕");
+}
 </script>
 
 <template>
   <main ref="root" class="workbench-shell" :class="{ live: isLive }">
-    <SetupBackdrop v-if="!isLive" />
+    <SetupBackdrop v-if="!isLive && !shouldShowSettings" />
 
     <template v-if="isLive">
     <header class="workbench-topbar">
@@ -80,15 +85,10 @@ async function setDisplayMode(mode: string) {
         <p>LingoSync Web</p>
         <strong>沉浸式同传工作台</strong>
       </div>
-      <button
-        v-if="selectedDisplayMode === '悬浮字幕'"
-        class="topbar-link"
-        type="button"
-        @click="setDisplayMode('逐句对照')"
-      >
-        展开字幕栏
+      <button class="topbar-link icon-link" type="button" @click="settingsOpen = true">
+        <Icon name="sliders-horizontal" :size="16" />
+        <span>同传设置</span>
       </button>
-      <button v-else class="topbar-link" type="button" @click="settingsOpen = true">同传设置</button>
     </header>
 
     <p v-if="errorMessage" class="workbench-error">{{ errorMessage }}</p>
@@ -109,13 +109,10 @@ async function setDisplayMode(mode: string) {
         :desktop-launch-state="desktopLaunchState"
         :desktop-launch-message="desktopLaunchMessage"
         :selected-display-mode="selectedDisplayMode"
-        @pause="sessionStore.pauseMode('quick')"
-        @resume="sessionStore.resumeMode('quick')"
         @end="sessionStore.askEnd('quick')"
         @reset="sessionStore.resetMode('quick')"
-        @open-settings="settingsOpen = true"
         @open-desktop="sessionStore.openDesktopFloating"
-        @expand-subtitles="setDisplayMode('逐句对照')"
+        @toggle-floating-captions="toggleFloatingCaptions"
         @sync-playback="sessionStore.syncFixturePlayback"
       />
       <SubtitleColumn
@@ -131,7 +128,7 @@ async function setDisplayMode(mode: string) {
     <section v-if="modeStates.quick === 'report'" class="report-panel">
       <div>
         <p>Session report</p>
-        <h2>会议报告</h2>
+        <h2>同传报告</h2>
       </div>
       <div class="report-grid">
         <article v-for="metric in reportMetrics" :key="metric.label">

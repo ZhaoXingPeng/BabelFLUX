@@ -63,7 +63,7 @@ function emitPlaybackTime(event: Event) {
               type="button"
               @click="emit('end')"
             >
-              结束
+              结束同传
             </button>
             <button v-if="state === 'report'" class="secondary-button compact-button" type="button" @click="emit('reset')">
               新建同传
@@ -184,7 +184,7 @@ function emitPlaybackTime(event: Event) {
 
     <section v-if="state === 'report'" class="rounded-lg border border-[#d7ddd8] bg-white p-4">
       <div class="flex items-center justify-between gap-3">
-        <h3 class="font-bold">会议报告</h3>
+        <h3 class="font-bold">同传报告</h3>
         <div class="flex gap-2">
           <button class="secondary-button compact-button" type="button">TXT</button>
           <button class="secondary-button compact-button" type="button">SRT</button>

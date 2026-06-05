@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectField from "../common/SelectField.vue";
 import FlowSteps from "./FlowSteps.vue";
 import SourcePreparation from "./SourcePreparation.vue";
 import SourceSelector from "./SourceSelector.vue";
@@ -45,31 +46,28 @@ const emit = defineEmits<{
 
       <label class="block">
         <span class="form-label">专业领域</span>
-        <select v-model="form.domain" class="form-control">
-          <option v-for="domain in domains" :key="domain">{{ domain }}</option>
-        </select>
+        <SelectField v-model="form.domain" name="legacy-domain" label="专业领域" :options="domains" />
       </label>
 
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
           <span class="form-label">源语言</span>
-          <select v-model="form.sourceLanguage" class="form-control">
-            <option v-for="language in languages" :key="language">{{ language }}</option>
-          </select>
+          <SelectField v-model="form.sourceLanguage" name="legacy-source-language" label="源语言" :options="languages" />
         </label>
         <label class="block">
           <span class="form-label">目标语言</span>
-          <select v-model="form.targetLanguage" class="form-control">
-            <option v-for="language in targetLanguages" :key="language">{{ language }}</option>
-          </select>
+          <SelectField
+            v-model="form.targetLanguage"
+            name="legacy-target-language"
+            label="目标语言"
+            :options="targetLanguages"
+          />
         </label>
       </div>
 
       <label class="block">
         <span class="form-label">模型选择</span>
-        <select v-model="form.modelProfile" class="form-control">
-          <option v-for="profile in modelProfiles" :key="profile">{{ profile }}</option>
-        </select>
+        <SelectField v-model="form.modelProfile" name="legacy-model-profile" label="模型选择" :options="modelProfiles" />
       </label>
 
       <div>
