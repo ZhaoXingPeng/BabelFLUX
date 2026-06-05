@@ -3,6 +3,7 @@ import type { SourceSyncState } from "./events";
 export type ProductMode = "quick" | "floating";
 export type RuntimeState = "setup" | "connecting" | "running" | "paused" | "report" | "error";
 export type SourcePermissionState = "idle" | "requesting" | "granted" | "denied";
+export type DesktopLaunchState = "idle" | "launching" | "launched" | "fallback" | "error";
 
 export interface ProductModeOption {
   key: ProductMode;

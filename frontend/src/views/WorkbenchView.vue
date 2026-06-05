@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import EndSessionDialog from "../components/workflow/EndSessionDialog.vue";
 import SettingsDialog from "../components/settings/SettingsDialog.vue";
+import DesktopLaunchPrompt from "../components/workbench/DesktopLaunchPrompt.vue";
 import MediaPanel from "../components/workbench/MediaPanel.vue";
 import SetupBackdrop from "../components/workbench/SetupBackdrop.vue";
 import SubtitleColumn from "../components/workbench/SubtitleColumn.vue";
@@ -18,6 +19,10 @@ const settingsOpen = ref(false);
 const {
   displayModes,
   domains,
+  desktopDownloadPromptOpen,
+  desktopHandoffUrl,
+  desktopLaunchMessage,
+  desktopLaunchState,
   endingMode,
   errorMessage,
   audioUrl,
@@ -101,6 +106,8 @@ async function setDisplayMode(mode: string) {
         :audio-url="audioUrl"
         :media-kind="mediaKind"
         :current-pair="currentPair"
+        :desktop-launch-state="desktopLaunchState"
+        :desktop-launch-message="desktopLaunchMessage"
         :selected-display-mode="selectedDisplayMode"
         @pause="sessionStore.pauseMode('quick')"
         @resume="sessionStore.resumeMode('quick')"
@@ -139,6 +146,16 @@ async function setDisplayMode(mode: string) {
       </div>
     </section>
     </template>
+
+    <DesktopLaunchPrompt
+      v-if="desktopDownloadPromptOpen"
+      :state="desktopLaunchState"
+      :message="desktopLaunchMessage"
+      :deep-link-url="desktopHandoffUrl"
+      @retry="sessionStore.openDesktopFloating"
+      @continue-web="sessionStore.continueWithWebFloating"
+      @close="sessionStore.dismissDesktopDownloadPrompt"
+    />
 
     <SettingsDialog
       v-if="shouldShowSettings"

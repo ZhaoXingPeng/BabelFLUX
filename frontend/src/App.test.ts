@@ -22,13 +22,15 @@ interface MockSocket {
 
 const mockRuntime = vi.hoisted(() => ({
   createSession: vi.fn(),
+  issueSessionHandoff: vi.fn(),
   createSessionSocket: vi.fn(),
   handlersBySession: new Map<string, SocketHandlers>(),
   sockets: [] as Array<{ sessionId: string; socket: MockSocket }>
 }));
 
 vi.mock("./api/client", () => ({
-  createSession: mockRuntime.createSession
+  createSession: mockRuntime.createSession,
+  issueSessionHandoff: mockRuntime.issueSessionHandoff
 }));
 
 vi.mock("./api/ws", () => ({
@@ -141,6 +143,7 @@ describe("同传工作台 mock 流程", () => {
       }
     });
     mockRuntime.createSession.mockReset();
+    mockRuntime.issueSessionHandoff.mockReset();
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.handlersBySession.clear();
     mockRuntime.sockets = [];
@@ -148,6 +151,8 @@ describe("同传工作台 mock 流程", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -322,5 +327,49 @@ describe("同传工作台 mock 流程", () => {
         sourcePermission: "idle"
       })
     );
+  });
+
+  it("投送桌面悬浮窗时签发 handoff token，并在未唤起时提供网页悬浮回退", async () => {
+    vi.useFakeTimers();
+    const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+    mockRuntime.issueSessionHandoff.mockResolvedValueOnce({
+      handoffToken: "h_demo",
+      expiresAt: "2026-06-06T00:00:30Z",
+      deepLinkUrl: "lingosync://floating/start?sessionId=local-test-video-fixture&displayMode=bilingual&token=h_demo"
+    });
+
+    const wrapper = mountApp();
+    const store = useSessionStore();
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    await findButton(wrapper, "投送桌面").trigger("click");
+    await flushPromises();
+
+    expect(mockRuntime.issueSessionHandoff).toHaveBeenCalledWith(
+      "local-test-video-fixture",
+      expect.objectContaining({
+        source: "fixture-video",
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        displayMode: "bilingual"
+      })
+    );
+    expect(assign).toHaveBeenCalledWith(
+      "lingosync://floating/start?sessionId=local-test-video-fixture&displayMode=bilingual&token=h_demo"
+    );
+    expect(store.desktopLaunchState).toBe("launching");
+
+    await vi.advanceTimersByTimeAsync(1600);
+    await nextTick();
+
+    expect(store.desktopLaunchState).toBe("fallback");
+    expect(wrapper.text()).toContain("未检测到桌面客户端");
+
+    await findButton(wrapper, "继续网页悬浮").trigger("click");
+    await nextTick();
+
+    expect(store.selectedDisplayMode).toBe("悬浮字幕");
+    expect(store.desktopDownloadPromptOpen).toBe(false);
   });
 });

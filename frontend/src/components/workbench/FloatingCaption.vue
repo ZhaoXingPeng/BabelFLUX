@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { gsap } from "gsap";
 import { Draggable } from "gsap/Draggable";
+import type { SourceSyncState } from "../../types/events";
 import type { FloatingFormState, TranscriptPair } from "../workflow/types";
 
 gsap.registerPlugin(Draggable);
@@ -9,6 +10,10 @@ gsap.registerPlugin(Draggable);
 const props = defineProps<{
   pair: TranscriptPair;
   form: FloatingFormState;
+  desktop?: boolean;
+  locked?: boolean;
+  displayMode?: "bilingual" | "translation-only" | "floating" | "compact";
+  status?: SourceSyncState;
 }>();
 
 const emit = defineEmits<{
@@ -31,7 +36,8 @@ const sizeClass = computed(() => {
   };
   return sizes[props.form.size] ?? "size-medium";
 });
-const showSource = computed(() => props.form.style !== "仅译文");
+const isCompact = computed(() => props.displayMode === "floating" || props.displayMode === "compact");
+const showSource = computed(() => !isCompact.value && props.displayMode !== "translation-only" && props.form.style !== "仅译文");
 
 function toggleStyle() {
   props.form.style = props.form.style === "仅译文" ? "双语字幕" : "仅译文";
@@ -52,7 +58,7 @@ function setSize(size: string) {
 function setupDrag() {
   drag.forEach((item) => item.kill());
   drag = [];
-  if (!root.value || props.form.captionPinned) return;
+  if (!root.value || props.form.captionPinned || props.locked || props.desktop) return;
   drag = Draggable.create(root.value, {
     type: "y",
     bounds: root.value.parentElement ?? undefined,
@@ -65,17 +71,22 @@ function setupDrag() {
 onMounted(setupDrag);
 onUnmounted(() => drag.forEach((item) => item.kill()));
 
-watch(() => props.form.captionPinned, setupDrag);
+watch([() => props.form.captionPinned, () => props.locked, () => props.desktop], setupDrag);
 </script>
 
 <template>
   <section
     ref="root"
     class="floating-caption-panel"
-    :class="sizeClass"
+    :class="[sizeClass, { 'desktop-overlay': desktop, locked, compact: isCompact }]"
+    :data-tauri-drag-region="desktop ? true : undefined"
     :style="{ opacity, transform: `translateY(${form.captionOffsetY}px)` }"
   >
-    <div class="floating-caption-toolbar">
+    <div v-if="!locked" class="floating-caption-toolbar">
+      <span v-if="status" class="floating-caption-status">
+        <span :class="['sync-dot', status.status]" />
+        {{ status.status === "lagging" ? "延迟" : status.status === "missing" ? "重连" : "LIVE" }}
+      </span>
       <button type="button" @click="toggleStyle">{{ form.style === "仅译文" ? "仅译文" : "源+译" }}</button>
       <button type="button" @click="togglePinned">{{ form.captionPinned ? "已固定" : "固定" }}</button>
       <button type="button" @click="setSize('小')">小</button>

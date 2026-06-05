@@ -1,5 +1,10 @@
 import { defineStore } from "pinia";
-import { createSession, type CreateSessionPayload } from "../api/client";
+import {
+  createSession,
+  issueSessionHandoff,
+  type CreateSessionPayload,
+  type DesktopDisplayMode
+} from "../api/client";
 import { createSessionSocket } from "../api/ws";
 import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
@@ -11,6 +16,7 @@ import type {
   SubtitleSegment
 } from "../types/events";
 import type {
+  DesktopLaunchState,
   FloatingFormState,
   ProductMode,
   ProductModeOption,
@@ -24,6 +30,10 @@ import type {
 } from "../types/workflow";
 
 let socket: WebSocket | null = null;
+let desktopLaunchTimer: number | null = null;
+let removeDesktopLaunchListeners: (() => void) | null = null;
+
+const DESKTOP_LAUNCH_TIMEOUT_MS = 1500;
 
 const defaultSourceSyncState: SourceSyncState = {
   status: "listening",
@@ -141,6 +151,10 @@ interface SessionState {
   endingMode: ProductMode | null;
   showEndDialog: boolean;
   selectedDisplayMode: string;
+  desktopLaunchState: DesktopLaunchState;
+  desktopLaunchMessage: string;
+  desktopDownloadPromptOpen: boolean;
+  desktopHandoffUrl: string | null;
   modeStates: Record<ProductMode, RuntimeState>;
   quickForm: QuickFormState;
   floatingForm: FloatingFormState;
@@ -209,6 +223,10 @@ function formatRuntimeState(state: RuntimeState): string {
 
 function toLanguageCode(label: string): string {
   return languageCodeByLabel[label] ?? label;
+}
+
+function toDesktopDisplayMode(style: string): DesktopDisplayMode {
+  return style === "仅译文" ? "translation-only" : "bilingual";
 }
 
 function getUrlError(sourceKey: string, url: string): string | null {
@@ -285,6 +303,10 @@ export const useSessionStore = defineStore("session", {
     endingMode: null,
     showEndDialog: false,
     selectedDisplayMode: "逐句对照",
+    desktopLaunchState: "idle",
+    desktopLaunchMessage: "等待投送到桌面悬浮窗",
+    desktopDownloadPromptOpen: false,
+    desktopHandoffUrl: null,
     modeStates: {
       quick: "setup",
       floating: "setup"
@@ -486,8 +508,100 @@ export const useSessionStore = defineStore("session", {
       }
     },
 
-    openDesktopFloating() {
-      window.location.href = "lingosync://floating/start";
+    clearDesktopLaunchWatchers() {
+      if (desktopLaunchTimer !== null) {
+        window.clearTimeout(desktopLaunchTimer);
+        desktopLaunchTimer = null;
+      }
+      removeDesktopLaunchListeners?.();
+      removeDesktopLaunchListeners = null;
+    },
+
+    markDesktopLaunchLaunched() {
+      if (this.desktopLaunchState !== "launching") return;
+      this.desktopLaunchState = "launched";
+      this.desktopLaunchMessage = "已投送到桌面悬浮窗";
+      this.desktopDownloadPromptOpen = false;
+      this.clearDesktopLaunchWatchers();
+      try {
+        window.localStorage.setItem("lingosync.clientSeen", "1");
+      } catch {
+        // localStorage can be unavailable in privacy modes; launch success should not depend on it.
+      }
+    },
+
+    armDesktopLaunchFallback() {
+      this.clearDesktopLaunchWatchers();
+
+      const handleVisibility = () => {
+        if (document.visibilityState === "hidden") this.markDesktopLaunchLaunched();
+      };
+      const handleBlur = () => this.markDesktopLaunchLaunched();
+      window.addEventListener("blur", handleBlur, { once: true });
+      document.addEventListener("visibilitychange", handleVisibility);
+      removeDesktopLaunchListeners = () => {
+        window.removeEventListener("blur", handleBlur);
+        document.removeEventListener("visibilitychange", handleVisibility);
+      };
+
+      desktopLaunchTimer = window.setTimeout(() => {
+        this.clearDesktopLaunchWatchers();
+        if (this.desktopLaunchState !== "launching") return;
+        this.desktopLaunchState = "fallback";
+        this.desktopLaunchMessage = "未检测到桌面客户端";
+        this.desktopDownloadPromptOpen = true;
+      }, DESKTOP_LAUNCH_TIMEOUT_MS);
+    },
+
+    launchDesktopUrl(deepLinkUrl: string) {
+      this.desktopHandoffUrl = deepLinkUrl;
+      this.desktopLaunchState = "launching";
+      this.desktopLaunchMessage = "正在唤起桌面悬浮窗";
+      this.desktopDownloadPromptOpen = false;
+      this.armDesktopLaunchFallback();
+      window.location.assign(deepLinkUrl);
+    },
+
+    async openDesktopFloating() {
+      if (!this.sessionId) {
+        const params = new URLSearchParams({
+          source: "system-audio",
+          sourceLanguage: "auto",
+          targetLanguage: toLanguageCode(this.floatingForm.targetLanguage),
+          displayMode: toDesktopDisplayMode(this.floatingForm.style)
+        });
+        this.launchDesktopUrl(`lingosync://floating/start?${params.toString()}`);
+        return;
+      }
+
+      try {
+        const handoff = await issueSessionHandoff(this.sessionId, {
+          source: this.quickForm.source,
+          sourceLanguage: toLanguageCode(this.quickForm.sourceLanguage),
+          targetLanguage: toLanguageCode(this.quickForm.targetLanguage),
+          displayMode: toDesktopDisplayMode(this.floatingForm.style)
+        });
+        this.launchDesktopUrl(handoff.deepLinkUrl);
+      } catch (error) {
+        this.desktopLaunchState = "error";
+        this.desktopLaunchMessage = error instanceof Error ? error.message : "无法创建桌面接管凭据";
+        this.desktopDownloadPromptOpen = true;
+      }
+    },
+
+    dismissDesktopDownloadPrompt() {
+      this.desktopDownloadPromptOpen = false;
+      if (this.desktopLaunchState === "fallback") {
+        this.desktopLaunchState = "idle";
+        this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
+      }
+    },
+
+    continueWithWebFloating() {
+      this.desktopDownloadPromptOpen = false;
+      this.selectedDisplayMode = "悬浮字幕";
+      this.desktopLaunchState = "idle";
+      this.desktopLaunchMessage = "已切回网页悬浮字幕";
     },
 
     async startMode(mode: ProductMode) {
