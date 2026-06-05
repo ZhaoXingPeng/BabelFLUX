@@ -90,3 +90,35 @@ def test_synthesize_speech_api_response() -> None:
     assert payload["audioBytes"] == 8
     assert payload["sampleRate"] == 24000
 
+
+def test_strategy_plan_api_response() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/models/strategy/plan",
+        json={
+            "sourceLanguage": "en",
+            "targetLanguage": "zh",
+            "domain": "技术",
+            "ttsEnabled": True,
+            "glossary": [
+                {
+                    "sourceTerm": "near win",
+                    "targetTerm": "差一点成功",
+                    "priority": 10,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["primaryProvider"] == "qwen_live_translate"
+    assert payload["ttsProvider"] == "qwen_tts"
+    assert payload["liveTranslateSession"]["event"]["session"]["modalities"] == ["text", "audio"]
+    assert (
+        payload["liveTranslateSession"]["event"]["session"]["translation"]["corpus"]["phrases"][
+            "near win"
+        ]
+        == "差一点成功"
+    )
+    assert "finalCorrectionPrompt" in payload
