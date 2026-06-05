@@ -38,3 +38,8 @@ build
 coverage/
 tmp/
 temp/
+
+# Rust / Tauri
+target/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

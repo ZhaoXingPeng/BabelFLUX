@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
 import { claimHandoffToken, connectDesktopSession } from "./api/sessionBridge";
-import { listenForDeepLinks, parseLaunchParams, type LaunchParams } from "./launcherBridge";
+import { getLaunchDeepLink, listenForDeepLinks, parseLaunchParams, type LaunchParams } from "./launcherBridge";
 import { defaultOverlaySettings, loadOverlaySettings, saveOverlaySettings, type OverlaySettings } from "./localSettings";
 import { registerUnlockShortcut, setOverlayLocked } from "./overlayWindow";
 
@@ -25,6 +26,7 @@ const errorMessage = ref("");
 const displayMode = ref<NonNullable<LaunchParams["displayMode"]>>("bilingual");
 let socket: WebSocket | null = null;
 let cleanupDeepLink: (() => void) | null = null;
+let cleanupForwardedDeepLink: (() => void) | null = null;
 let cleanupShortcut: (() => void) | null = null;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
@@ -109,6 +111,16 @@ async function startFromLaunchParams(params: LaunchParams) {
   }
 }
 
+async function listenForForwardedDeepLinks(handler: (params: LaunchParams) => void) {
+  try {
+    return await listen<string>("deep-link-url", (event) => {
+      handler(parseLaunchParams(event.payload));
+    });
+  } catch {
+    return () => undefined;
+  }
+}
+
 watch(
   settings,
   (value) => {
@@ -127,17 +139,20 @@ watch(
 
 onMounted(async () => {
   cleanupDeepLink = await listenForDeepLinks(startFromLaunchParams);
+  cleanupForwardedDeepLink = await listenForForwardedDeepLinks(startFromLaunchParams);
   cleanupShortcut = await registerUnlockShortcut(async () => {
     settings.value.locked = false;
     settings.value.form.captionPinned = false;
     await setOverlayLocked(false);
   });
-  await startFromLaunchParams(parseLaunchParams());
+  const launched = await getLaunchDeepLink();
+  await startFromLaunchParams(launched?.token ? launched : parseLaunchParams());
 });
 
 onUnmounted(() => {
   socket?.close();
   cleanupDeepLink?.();
+  cleanupForwardedDeepLink?.();
   cleanupShortcut?.();
 });
 </script>

@@ -37,6 +37,14 @@ class Settings(BaseSettings):
             origins.add(self.frontend_origin.replace("localhost", "127.0.0.1"))
         elif "127.0.0.1" in self.frontend_origin:
             origins.add(self.frontend_origin.replace("127.0.0.1", "localhost"))
+        origins.update(
+            {
+                "http://localhost:5175",
+                "http://127.0.0.1:5175",
+                "http://tauri.localhost",
+                "tauri://localhost",
+            }
+        )
         return sorted(origins)
 
 

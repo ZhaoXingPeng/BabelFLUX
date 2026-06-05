@@ -396,10 +396,12 @@ describe("同传工作台 mock 流程", () => {
     );
     expect(wrapper.text()).toContain("正在唤起桌面悬浮窗");
 
-    await vi.advanceTimersByTimeAsync(1600);
+    await vi.advanceTimersByTimeAsync(2600);
     await nextTick();
 
     expect(wrapper.text()).toContain("未检测到桌面客户端");
+    await findButton(wrapper, "我已安装，直接打开").trigger("click");
+    expect(assign).toHaveBeenCalledTimes(2);
   });
 
   it("投送桌面悬浮窗时签发 handoff token，并在未唤起时提供网页悬浮回退", async () => {
@@ -433,11 +435,19 @@ describe("同传工作台 mock 流程", () => {
     );
     expect(store.desktopLaunchState).toBe("launching");
 
-    await vi.advanceTimersByTimeAsync(1600);
+    await vi.advanceTimersByTimeAsync(2600);
     await nextTick();
 
     expect(store.desktopLaunchState).toBe("fallback");
     expect(wrapper.text()).toContain("未检测到桌面客户端");
+
+    await findButton(wrapper, "我已安装，直接打开").trigger("click");
+    expect(assign).toHaveBeenCalledTimes(2);
+    expect(store.desktopLaunchState).toBe("launching");
+
+    await vi.advanceTimersByTimeAsync(2600);
+    await nextTick();
+    expect(store.desktopLaunchState).toBe("fallback");
 
     await findButton(wrapper, "继续网页悬浮").trigger("click");
     await nextTick();

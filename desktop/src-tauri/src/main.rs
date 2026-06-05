@@ -1,21 +1,42 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+const DEEP_LINK_SCHEME: &str = "lingosync://";
+
+fn find_deep_link(argv: &[String]) -> Option<String> {
+    argv.iter().find_map(|arg| {
+        let trimmed = arg.trim().trim_matches(|ch| ch == '"' || ch == '\'');
+        let start = trimmed.find(DEEP_LINK_SCHEME)?;
+        Some(
+            trimmed[start..]
+                .trim_matches(|ch| ch == '"' || ch == '\'')
+                .to_string(),
+        )
+    })
+}
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("overlay") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+
+            if let Some(url) = find_deep_link(&argv) {
+                let _ = app.emit("deep-link-url", url.clone());
+                if let Some(window) = app.get_webview_window("overlay") {
+                    let _ = window.emit("deep-link-url", url);
+                }
+            }
         }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
             #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.deep_link().register("lingosync")?;
+                let _ = app.deep_link().register_all();
             }
             Ok(())
         })

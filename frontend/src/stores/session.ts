@@ -33,7 +33,7 @@ let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 
-const DESKTOP_LAUNCH_TIMEOUT_MS = 1500;
+const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 
 const defaultSourceSyncState: SourceSyncState = {
@@ -640,6 +640,14 @@ export const useSessionStore = defineStore("session", {
       this.selectedDisplayMode = "悬浮字幕";
       this.desktopLaunchState = "idle";
       this.desktopLaunchMessage = "已切回网页悬浮字幕";
+    },
+
+    reopenDesktop() {
+      if (!this.desktopHandoffUrl) {
+        this.openDesktopFloating();
+        return;
+      }
+      this.launchDesktopUrl(this.desktopHandoffUrl);
     },
 
     async startMode(mode: ProductMode) {
