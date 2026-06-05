@@ -58,6 +58,16 @@ Health: http://localhost:8000/api/health
 
 当前脚手架使用 `mock` 模型 provider，先跑通 `session_started`、`source_sync_state`、`transcript_segment`、`translation_segment` 和 `revision_event`。真实 Fun-ASR、千问实时音视频翻译、TTS 和最终纠偏大模型后续通过 `backend/app/services/providers/` 接入。
 
+DashScope provider 已封装为后端 API：
+
+```text
+POST /api/models/llm/generate
+POST /api/models/asr/transcriptions
+POST /api/models/tts/speech
+```
+
+真实调用需要在 `.env` 设置 `DASHSCOPE_API_KEY`，如使用业务空间再设置 `DASHSCOPE_WORKSPACE_ID`。常规测试使用 mock，不会消耗真实模型配额。
+
 ## 客户端阶段
 
 Web 端无法实现电脑全局悬浮和长期系统音频监听，这部分能力进入桌面客户端阶段：

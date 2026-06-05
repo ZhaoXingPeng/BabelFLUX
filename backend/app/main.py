@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, sessions, ws
+from app.api import health, model_gateway, sessions, ws
 from app.core.config import settings
 
 
@@ -18,6 +18,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix=settings.api_prefix)
     app.include_router(sessions.router, prefix=settings.api_prefix)
+    app.include_router(model_gateway.router, prefix=settings.api_prefix)
     app.include_router(ws.router, prefix=settings.api_prefix)
 
     return app
