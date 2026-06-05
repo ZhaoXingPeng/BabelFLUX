@@ -18,9 +18,13 @@ htmlcov/
 
 # Node
 node_modules/
+node_modules
 dist/
+dist
 build/
+build
 .next/
+.next
 
 # Logs and env
 *.log
