@@ -141,6 +141,41 @@ describe("App 同传 mock 流程", () => {
     vi.unstubAllGlobals();
   });
 
+  it("默认加载测试视频、提取音频和字幕，并按播放时间触发本地纠错", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    const audio = wrapper.find('[data-testid="fixture-audio"]');
+    expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
+    expect(audio.attributes("src")).toBe("/fixtures/test-video/voice.m4a");
+    expect(wrapper.text()).toContain("video.mp4 / voice.m4a / en.txt / ch.txt 已就绪");
+    expect(wrapper.text()).toContain("我感到很幸运");
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    expect(mockRuntime.createSession).not.toHaveBeenCalled();
+    expect(store.modeStates.quick).toBe("running");
+    expect(store.sessionId).toBe("local-test-video-fixture");
+
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 53 });
+    await video.trigger("timeupdate");
+    await nextTick();
+
+    expect(store.activeSegmentId).toBe("fixture-seg-016");
+    expect(wrapper.text()).toContain("我想，当我们开始珍视一次差一点成功的馈赠时，转变就发生了，");
+    expect(wrapper.text()).toContain("已修正");
+    expect(wrapper.text()).toContain("near win");
+
+    Object.defineProperty(audio.element, "currentTime", { configurable: true, value: 74 });
+    await audio.trigger("timeupdate");
+    await nextTick();
+
+    expect(store.activeSegmentId).toBe("fixture-seg-026");
+    expect(store.sourceSyncState.message).toContain("01:14");
+  });
+
   it("从快速同传配置走完开始、事件、暂停、继续和结束报告", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "ui-session-1", status: "created" });
     const wrapper = mountApp();

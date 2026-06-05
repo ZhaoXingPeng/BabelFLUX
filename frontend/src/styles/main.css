@@ -209,6 +209,40 @@ select:focus-visible {
   border-radius: 8px;
   background: #18222d;
   padding: 24px;
+  gap: 18px;
+}
+
+.media-player-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.fixture-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 460px;
+  border-radius: 8px;
+  background: #0d141b;
+  object-fit: contain;
+}
+
+.fixture-audio-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 8px 10px;
+  color: #d8e0da;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fixture-audio {
+  width: 100%;
+  min-width: 0;
 }
 
 .media-caption {
@@ -240,6 +274,15 @@ select:focus-visible {
 
 .transcript-row.compact {
   padding: 10px;
+}
+
+.transcript-row.active {
+  border-color: #245eaa;
+  background: #f1f6ff;
+}
+
+.transcript-row.revised {
+  border-color: #8fc4a8;
 }
 
 .tile-label,

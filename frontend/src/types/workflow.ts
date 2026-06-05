@@ -26,10 +26,14 @@ export interface SourceInputState {
 }
 
 export interface TranscriptPair {
+  segmentId?: string;
   time: string;
   source: string;
   translation: string;
   state: string;
+  isActive?: boolean;
+  originalTranslation?: string;
+  revisionReason?: string;
 }
 
 export interface WorkspaceTile {
