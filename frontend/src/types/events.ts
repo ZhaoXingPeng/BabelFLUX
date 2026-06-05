@@ -15,6 +15,8 @@ export interface SubtitleSegment {
   startMs: number;
   endMs: number;
   status: SegmentStatus;
+  originalText?: string;
+  revisionReason?: string;
 }
 
 export interface RevisionEvent {

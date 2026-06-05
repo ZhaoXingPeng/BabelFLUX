@@ -11,6 +11,8 @@ const {
   domains,
   endingMode,
   errorMessage,
+  audioUrl,
+  mediaUrl,
   languages,
   modeStates,
   modelProfiles,
@@ -79,6 +81,8 @@ const {
         :runtime-status="status"
         :ws-connected="wsConnected"
         :source-sync-state="sourceSyncState"
+        :media-url="mediaUrl"
+        :audio-url="audioUrl"
         :error-message="errorMessage"
         :display-modes="displayModes"
         :selected-display-mode="selectedDisplayMode"
@@ -91,6 +95,7 @@ const {
         @end="sessionStore.askEnd('quick')"
         @reset="sessionStore.resetMode('quick')"
         @update-display-mode="selectedDisplayMode = $event"
+        @sync-playback="sessionStore.syncFixturePlayback"
       />
     </section>
 

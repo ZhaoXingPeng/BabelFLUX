@@ -9,6 +9,8 @@ defineProps<{
   runtimeStatus: string;
   wsConnected: boolean;
   sourceSyncState: SourceSyncState;
+  mediaUrl: string | null;
+  audioUrl: string | null;
   errorMessage: string | null;
   displayModes: string[];
   selectedDisplayMode: string;
@@ -24,7 +26,12 @@ const emit = defineEmits<{
   end: [];
   reset: [];
   updateDisplayMode: [mode: string];
+  syncPlayback: [currentTimeSeconds: number];
 }>();
+
+function emitPlaybackTime(event: Event) {
+  emit("syncPlayback", (event.target as HTMLMediaElement).currentTime);
+}
 </script>
 
 <template>
@@ -74,7 +81,31 @@ const emit = defineEmits<{
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(380px,0.78fr)]">
       <section class="rounded-lg border border-[#d7ddd8] bg-white p-4">
         <div class="media-stage">
-          <div>
+          <div v-if="mediaUrl" class="media-player-stack">
+            <video
+              class="fixture-video"
+              :src="mediaUrl"
+              controls
+              playsinline
+              preload="metadata"
+              data-testid="fixture-video"
+              @timeupdate="emitPlaybackTime"
+              @seeked="emitPlaybackTime"
+            />
+            <div v-if="audioUrl" class="fixture-audio-row">
+              <span>voice.m4a</span>
+              <audio
+                class="fixture-audio"
+                :src="audioUrl"
+                controls
+                preload="metadata"
+                data-testid="fixture-audio"
+                @timeupdate="emitPlaybackTime"
+                @seeked="emitPlaybackTime"
+              />
+            </div>
+          </div>
+          <div v-else>
             <p class="text-sm text-[#d8e0da]">{{ source.label }} · {{ form.modelProfile }}</p>
             <p class="mt-2 text-2xl font-bold text-white">原始视频 / 音频</p>
             <p class="mt-3 max-w-xl text-sm leading-6 text-[#bec9c2]">
@@ -118,11 +149,20 @@ const emit = defineEmits<{
             v-for="pair in transcriptPairs"
             :key="`${pair.time}-${pair.source}`"
             class="transcript-row"
-            :class="{ compact: selectedDisplayMode === '分区对照' }"
+            :class="{
+              compact: selectedDisplayMode === '分区对照',
+              active: pair.isActive,
+              revised: pair.state === 'revised'
+            }"
           >
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs text-[#69776e]">{{ pair.time }}</span>
-              <span class="rounded-md bg-[#eef1ee] px-2 py-1 text-xs text-[#526057]">{{ pair.state }}</span>
+              <div class="flex flex-wrap justify-end gap-1">
+                <span class="rounded-md bg-[#eef1ee] px-2 py-1 text-xs text-[#526057]">{{ pair.state }}</span>
+                <span v-if="pair.state === 'revised'" class="rounded-md bg-[#e7f4ec] px-2 py-1 text-xs font-bold text-[#12462f]">
+                  已修正
+                </span>
+              </div>
             </div>
             <div
               class="mt-2 grid gap-2"
@@ -131,6 +171,12 @@ const emit = defineEmits<{
               <p class="text-sm leading-6 text-[#4a5a50]">{{ pair.source }}</p>
               <p class="text-base font-semibold leading-7 text-[#17212b]">{{ pair.translation }}</p>
             </div>
+            <p v-if="pair.originalTranslation" class="mt-2 text-xs leading-5 text-[#69776e]">
+              原译：{{ pair.originalTranslation }}
+            </p>
+            <p v-if="pair.revisionReason" class="mt-1 text-xs leading-5 text-[#1c7c54]">
+              {{ pair.revisionReason }}
+            </p>
           </article>
         </div>
       </section>

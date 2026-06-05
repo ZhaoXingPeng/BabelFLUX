@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { createSession, type CreateSessionPayload } from "../api/client";
 import { createSessionSocket } from "../api/ws";
+import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
   RevisionEvent,
   SegmentStatus,
@@ -47,6 +48,12 @@ const displayModeCopy: Record<string, string> = {
 };
 
 const quickSourceOptions: SourceOption[] = [
+  {
+    key: testVideoFixture.key,
+    label: testVideoFixture.label,
+    channel: "mp4 + m4a + 中英字幕",
+    availability: "web"
+  },
   { key: "video-file", label: "视频文件", channel: "mp4 / mov / webm", availability: "web" },
   { key: "audio-file", label: "音频文件", channel: "mp3 / wav / m4a", availability: "web" },
   { key: "url", label: "URL", channel: "网页视频或直播链接", availability: "web" },
@@ -74,6 +81,7 @@ const fileSourceKeys = new Set(["video-file", "audio-file"]);
 const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
+  [testVideoFixture.key]: "demo",
   "video-file": "upload_video",
   "audio-file": "upload_audio",
   url: "url",
@@ -119,6 +127,11 @@ interface SessionState {
   status: SessionStatus;
   wsConnected: boolean;
   sourceSyncState: SourceSyncState;
+  mediaUrl: string | null;
+  audioUrl: string | null;
+  playbackMs: number;
+  activeSegmentId: string | null;
+  fixtureAppliedRevisionIds: string[];
   sourceSegments: SubtitleSegment[];
   translationSegments: SubtitleSegment[];
   revisions: RevisionEvent[];
@@ -140,6 +153,46 @@ function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): Subt
   const index = items.findIndex((item) => item.segmentId === segment.segmentId);
   if (index === -1) return [...items, segment];
   return items.map((item, itemIndex) => (itemIndex === index ? segment : item));
+}
+
+function createFixtureSourceSegments(): SubtitleSegment[] {
+  return testVideoFixture.segments.map((segment) => ({
+    segmentId: segment.segmentId,
+    text: segment.en,
+    language: "en",
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    status: "final"
+  }));
+}
+
+function createFixtureTranslationSegments(): SubtitleSegment[] {
+  return testVideoFixture.segments.map((segment) => ({
+    segmentId: segment.segmentId,
+    text: segment.zh,
+    language: "zh",
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    status: "final"
+  }));
+}
+
+function createFixtureRevisionEvent(revision: TestVideoRevision): RevisionEvent {
+  return {
+    revisionId: revision.revisionId,
+    targetSegmentIds: [revision.segmentId],
+    beforeText: revision.beforeText,
+    afterText: revision.afterText,
+    reason: revision.reason,
+    confidence: revision.confidence
+  };
+}
+
+function formatPlaybackTime(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function formatRuntimeState(state: RuntimeState): string {
@@ -213,9 +266,18 @@ export const useSessionStore = defineStore("session", {
     sessionId: null,
     status: "idle",
     wsConnected: false,
-    sourceSyncState: { ...defaultSourceSyncState },
-    sourceSegments: [],
-    translationSegments: [],
+    sourceSyncState: {
+      status: "listening",
+      lagMs: 0,
+      message: "本地测试素材已就绪"
+    },
+    mediaUrl: testVideoFixture.videoUrl,
+    audioUrl: testVideoFixture.audioUrl,
+    playbackMs: 0,
+    activeSegmentId: testVideoFixture.segments[0]?.segmentId ?? null,
+    fixtureAppliedRevisionIds: [],
+    sourceSegments: createFixtureSourceSegments(),
+    translationSegments: createFixtureTranslationSegments(),
     revisions: [],
     errorMessage: null,
     productMode: "quick",
@@ -233,7 +295,7 @@ export const useSessionStore = defineStore("session", {
       sourceLanguage: "英语",
       targetLanguage: "中文",
       modelProfile: "智能默认",
-      source: "video-file"
+      source: testVideoFixture.key
     },
     floatingForm: {
       domain: "通用",
@@ -252,9 +314,13 @@ export const useSessionStore = defineStore("session", {
 
   getters: {
     activeSourceSegment: (state): SubtitleSegment | undefined =>
-      [...state.sourceSegments].reverse().find((segment) => segment.status !== "revised"),
+      state.activeSegmentId
+        ? state.sourceSegments.find((segment) => segment.segmentId === state.activeSegmentId)
+        : [...state.sourceSegments].reverse().find((segment) => segment.status !== "revised"),
     activeTranslationSegment: (state): SubtitleSegment | undefined =>
-      [...state.translationSegments].reverse().find((segment) => segment.status !== "revised"),
+      state.activeSegmentId
+        ? state.translationSegments.find((segment) => segment.segmentId === state.activeSegmentId)
+        : [...state.translationSegments].reverse().find((segment) => segment.status !== "revised"),
     productModes: (): ProductModeOption[] => productModeOptions,
     modelProfiles: (): string[] => modelProfileOptions,
     domains: (): string[] => domainOptions,
@@ -270,16 +336,25 @@ export const useSessionStore = defineStore("session", {
       return Array.from({ length: maxLength }, (_, index) => {
         const source = state.sourceSegments[index];
         const translation = state.translationSegments[index];
+        const segmentId = source?.segmentId ?? translation?.segmentId;
         return {
-          time: source ? `${Math.round(source.startMs / 1000)}s` : "--",
+          segmentId,
+          time: source ? formatPlaybackTime(source.startMs) : "--",
           source: source?.text ?? "等待源语言转写...",
           translation: translation?.text ?? "等待译文...",
-          state: translation?.status ?? source?.status ?? "partial"
+          state: translation?.status ?? source?.status ?? "partial",
+          isActive: Boolean(segmentId && segmentId === state.activeSegmentId),
+          originalTranslation: translation?.originalText,
+          revisionReason: translation?.revisionReason
         };
       });
     },
     currentPair(): TranscriptPair {
-      return this.transcriptPairs[this.transcriptPairs.length - 1] ?? samplePairs[0];
+      return (
+        this.transcriptPairs.find((pair) => pair.segmentId && pair.segmentId === this.activeSegmentId) ??
+        this.transcriptPairs[this.transcriptPairs.length - 1] ??
+        samplePairs[0]
+      );
     },
     quickSource(state): SourceOption {
       return quickSourceOptions.find((source) => source.key === state.quickForm.source) ?? quickSourceOptions[0];
@@ -348,6 +423,11 @@ export const useSessionStore = defineStore("session", {
       if (source.disabled || this.quickForm.source === source.key) return;
       this.quickForm.source = source.key;
       this.quickInput = { ...defaultSourceInputState };
+      if (source.key === testVideoFixture.key) {
+        this.loadTestVideoFixturePreview();
+      } else if (!this.activeMode) {
+        this.clearLocalMediaPreview();
+      }
     },
 
     selectFloatingSource(source: SourceOption) {
@@ -473,6 +553,9 @@ export const useSessionStore = defineStore("session", {
         this.resetSessionData();
       }
       this.modeStates[mode] = "setup";
+      if (mode === "quick" && this.quickForm.source === testVideoFixture.key && !this.activeMode) {
+        this.loadTestVideoFixturePreview();
+      }
     },
 
     buildSessionPayload(mode: ProductMode): CreateSessionPayload {
@@ -508,6 +591,11 @@ export const useSessionStore = defineStore("session", {
       this.resetSessionData();
       this.status = "connecting";
       this.errorMessage = null;
+
+      if (mode === "quick" && this.quickForm.source === testVideoFixture.key) {
+        this.startTestVideoFixtureSession(requestId);
+        return true;
+      }
 
       try {
         const session = await createSession(this.buildSessionPayload(mode));
@@ -556,10 +644,95 @@ export const useSessionStore = defineStore("session", {
     resetSessionData() {
       this.sessionId = null;
       this.sourceSyncState = { ...defaultSourceSyncState };
+      this.mediaUrl = null;
+      this.audioUrl = null;
+      this.playbackMs = 0;
+      this.activeSegmentId = null;
+      this.fixtureAppliedRevisionIds = [];
       this.sourceSegments = [];
       this.translationSegments = [];
       this.revisions = [];
       this.errorMessage = null;
+    },
+
+    loadTestVideoFixturePreview() {
+      this.mediaUrl = testVideoFixture.videoUrl;
+      this.audioUrl = testVideoFixture.audioUrl;
+      this.playbackMs = 0;
+      this.activeSegmentId = testVideoFixture.segments[0]?.segmentId ?? null;
+      this.fixtureAppliedRevisionIds = [];
+      this.sourceSegments = createFixtureSourceSegments();
+      this.translationSegments = createFixtureTranslationSegments();
+      this.revisions = [];
+      this.sourceSyncState = {
+        status: "listening",
+        lagMs: 0,
+        message: "本地测试素材已就绪"
+      };
+    },
+
+    clearLocalMediaPreview() {
+      this.mediaUrl = null;
+      this.audioUrl = null;
+      this.playbackMs = 0;
+      this.activeSegmentId = null;
+      this.fixtureAppliedRevisionIds = [];
+      this.sourceSegments = [];
+      this.translationSegments = [];
+      this.revisions = [];
+      this.sourceSyncState = { ...defaultSourceSyncState };
+    },
+
+    startTestVideoFixtureSession(requestId: number) {
+      if (!this.isCurrentStart("quick", requestId)) return;
+
+      this.sessionId = "local-test-video-fixture";
+      this.wsConnected = true;
+      this.status = "running";
+      this.loadTestVideoFixturePreview();
+      this.sourceSyncState = {
+        status: "syncing",
+        lagMs: 0,
+        message: "本地视频、音频和字幕已加载"
+      };
+    },
+
+    syncFixturePlayback(currentTimeSeconds: number) {
+      if (this.mediaUrl !== testVideoFixture.videoUrl && this.audioUrl !== testVideoFixture.audioUrl) return;
+
+      const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
+      const activeSegment = findActiveSegment(testVideoFixture.segments, playbackMs);
+
+      this.playbackMs = playbackMs;
+      this.activeSegmentId = activeSegment?.segmentId ?? null;
+      this.sourceSyncState = {
+        status: "syncing",
+        lagMs: 0,
+        message: `本地素材同步 ${formatPlaybackTime(playbackMs)}`
+      };
+
+      testVideoFixture.revisions
+        .filter(
+          (revision) =>
+            playbackMs >= revision.atMs && !this.fixtureAppliedRevisionIds.includes(revision.revisionId)
+        )
+        .forEach((revision) => this.applyTestVideoRevision(revision));
+    },
+
+    applyTestVideoRevision(revision: TestVideoRevision) {
+      this.fixtureAppliedRevisionIds = [...this.fixtureAppliedRevisionIds, revision.revisionId];
+      this.revisions = [createFixtureRevisionEvent(revision), ...this.revisions].slice(0, 20);
+      this.translationSegments = this.translationSegments.map((segment) =>
+        segment.segmentId === revision.segmentId
+          ? {
+              ...segment,
+              text: revision.afterText,
+              status: "revised" as SegmentStatus,
+              originalText: revision.beforeText,
+              revisionReason: revision.reason
+            }
+          : segment
+      );
     },
 
     connectSocket(sessionId: string, mode: ProductMode, requestId: number) {

@@ -21,6 +21,7 @@
 ```text
 frontend/           Vue 3 + Vite 前端控制台，负责视频区、字幕区、纠偏记录和会话控制
 backend/            FastAPI 后端，负责 REST、WebSocket、模型 provider 封装和后续数据存储
+desktop/            桌面客户端阶段入口，负责后续全局悬浮字幕、系统音频采集和 deep link 启动
 docs/
   project-selection/ 最终选题确认与决策说明
   project-plans/     三个候选议题的初步方案，保留为调研材料
@@ -56,6 +57,21 @@ Health: http://localhost:8000/api/health
 ```
 
 当前脚手架使用 `mock` 模型 provider，先跑通 `session_started`、`source_sync_state`、`transcript_segment`、`translation_segment` 和 `revision_event`。真实 Fun-ASR、千问实时音视频翻译、TTS 和最终纠偏大模型后续通过 `backend/app/services/providers/` 接入。
+
+## 客户端阶段
+
+Web 端无法实现电脑全局悬浮和长期系统音频监听，这部分能力进入桌面客户端阶段：
+
+1. Web 继续承担快速同传工作台。
+2. 桌面客户端承担全局悬浮字幕、系统音频采集、全局快捷键和托盘。
+3. Web 通过 `lingosync://floating/start` 唤起客户端。
+4. 客户端复用后端会话和 WebSocket 字幕事件协议。
+
+阶段规划见：
+
+```text
+docs/architecture/桌面客户端阶段规划_AI同声传译助手.txt
+```
 
 ## 开发原则
 
