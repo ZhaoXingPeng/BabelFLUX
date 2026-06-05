@@ -19,15 +19,47 @@ class Settings(BaseSettings):
     app_env: str = "development"
     frontend_origin: str = "http://localhost:5173"
     database_url: str = "sqlite:///./data/app.db"
+    # real = 接入阿里云百炼实时管线；mock = 纯演示事件流。
     model_provider: str = "mock"
     dashscope_api_key: str | None = Field(default=None, repr=False)
     dashscope_workspace_id: str | None = None
     dashscope_http_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     dashscope_websocket_base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1"
-    dashscope_request_timeout_seconds: float = 30.0
-    dashscope_websocket_timeout_seconds: float = 30.0
+    dashscope_request_timeout_seconds: float = 60.0
+    dashscope_websocket_timeout_seconds: float = 60.0
     dashscope_tls_verify: bool = True
     dashscope_data_inspection: str | None = None
+
+    # ===== 模型选型（已实测可用，见 docs/model-pipeline）=====
+    live_translate_model: str = "qwen3.5-livetranslate-flash-realtime"
+    live_translate_asr_model: str = "qwen3-asr-flash-realtime"
+    realtime_revision_model: str = "qwen-flash"
+    final_correction_model: str = "qwen-plus"
+    tts_model: str = "qwen3-tts-flash-realtime"
+    tts_voice: str = "Cherry"
+
+    # demo 模式下若指向存在的媒体文件，则用真实管线跑该样例；为空则回退到演示事件流。
+    demo_media_path: str = ""
+
+    # 运行期产物目录（上传媒体、生成报告）。相对 PROJECT_ROOT。
+    media_storage_dir: str = "backend/data/media"
+    report_storage_dir: str = "backend/data/reports"
+
+    @property
+    def media_dir(self) -> Path:
+        path = (PROJECT_ROOT / self.media_storage_dir).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def report_dir(self) -> Path:
+        path = (PROJECT_ROOT / self.report_storage_dir).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def use_real_pipeline(self) -> bool:
+        return self.model_provider == "real" and bool(self.dashscope_api_key)
 
     @property
     def cors_origins(self) -> list[str]:

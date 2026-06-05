@@ -1,14 +1,26 @@
 from datetime import datetime
-from typing import Literal
-from urllib.parse import urlencode
+from pathlib import Path
+from typing import Any, Literal
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
+from app.services.report import render_md, render_srt, render_txt
+from app.services.session_store import session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+class GlossaryTermPayload(BaseModel):
+    source_term: str = Field(alias="sourceTerm")
+    target_term: str = Field(alias="targetTerm")
+    priority: int = 0
+    note: str | None = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -35,6 +47,8 @@ class CreateSessionRequest(BaseModel):
         default="idle",
         alias="sourcePermission",
     )
+    tts_enabled: bool = Field(default=False, alias="ttsEnabled")
+    glossary: list[GlossaryTermPayload] = Field(default_factory=list)
 
 
 class CreateSessionResponse(BaseModel):
@@ -70,9 +84,148 @@ class ClaimHandoffResponse(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
+class UploadMediaResponse(BaseModel):
+    media_id: str = Field(alias="mediaId")
+    file_name: str = Field(alias="fileName")
+    size_bytes: int = Field(alias="sizeBytes")
+
+
+def _normalize_source_language(code: str) -> str:
+    # LiveTranslate 的 ASR 需要明确语种；auto 暂以英语兜底（演示素材以英文为主）。
+    return "en" if code in ("auto", "", None) else code
+
+
+def _register_session(req: CreateSessionRequest) -> str:
+    session_id = str(uuid4())
+    session_store.create(
+        session_id,
+        source_language=_normalize_source_language(req.source_language),
+        target_language=req.target_language or "zh",
+        domain=req.domain,
+        session_name=req.session_name,
+        glossary=[t.model_dump(by_alias=True) for t in req.glossary],
+        tts_enabled=req.tts_enabled,
+        input_mode=req.input_mode,
+        source_label=req.source_file_name or req.source_url or req.source_key,
+    )
+    record = session_store.get(session_id)
+    if record is not None and req.source_url:
+        record.source_url = req.source_url
+    return session_id
+
+
 @router.post("", response_model=CreateSessionResponse, response_model_by_alias=True)
-def create_session(_: CreateSessionRequest) -> CreateSessionResponse:
-    return CreateSessionResponse(sessionId=str(uuid4()), status="created")
+def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
+    session_id = _register_session(req)
+    return CreateSessionResponse(sessionId=session_id, status="created")
+
+
+@router.post(
+    "/{session_id}/media",
+    response_model=UploadMediaResponse,
+    response_model_by_alias=True,
+)
+async def upload_session_media(
+    session_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form("upload"),
+) -> UploadMediaResponse:
+    record = session_store.get(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    suffix = Path(file.filename or "media").suffix or ".bin"
+    media_path = settings.media_dir / f"{session_id}{suffix}"
+    size = 0
+    with media_path.open("wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+            size += len(chunk)
+    if size == 0:
+        media_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+    record.media_path = str(media_path)
+    record.source_label = file.filename or media_path.name
+    return UploadMediaResponse(
+        mediaId=media_path.name, fileName=file.filename or media_path.name, sizeBytes=size
+    )
+
+
+@router.get("/{session_id}/report")
+def get_session_report(session_id: str) -> JSONResponse:
+    record = session_store.get(session_id)
+    if record is None or record.report is None:
+        # 也尝试从磁盘读取（进程重启容错）
+        report = _load_report_from_disk(session_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="report not ready")
+        return JSONResponse(report)
+    return JSONResponse(record.report)
+
+
+@router.get("/{session_id}/report/download")
+def download_session_report(session_id: str, format: str = "txt"):
+    record = session_store.get(session_id)
+    report = record.report if record else None
+    if report is None:
+        report = _load_report_from_disk(session_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not ready")
+
+    fmt = format.lower()
+    renderers = {"txt": render_txt, "srt": render_srt, "md": render_md}
+    base = report.get("sessionName") or session_id
+    if fmt == "json":
+        import json
+
+        body = json.dumps(report, ensure_ascii=False, indent=2)
+        media_type = "application/json"
+        ext = "json"
+    elif fmt in renderers:
+        body = renderers[fmt](report)
+        media_type = "application/x-subrip" if fmt == "srt" else "text/plain"
+        ext = fmt
+    else:
+        raise HTTPException(status_code=400, detail="unsupported format")
+
+    filename = _safe_filename(f"{base}.{ext}")
+    return PlainTextResponse(
+        body,
+        media_type=f"{media_type}; charset=utf-8",
+        headers={"Content-Disposition": _content_disposition(filename, ext)},
+    )
+
+
+def _safe_filename(name: str) -> str:
+    keep = "-_.() "
+    cleaned = "".join(c for c in name if c.isalnum() or c in keep or "一" <= c <= "鿿")
+    return cleaned.strip() or "report.txt"
+
+
+def _content_disposition(filename: str, ext: str) -> str:
+    """构造兼容中文文件名的 Content-Disposition。
+
+    HTTP 头只能用 latin-1 编码，含中文的文件名直接写 filename="…" 会抛
+    UnicodeEncodeError（500）。按 RFC 6266 提供 ASCII 兜底 filename + RFC 5987
+    的 filename*（百分号编码 UTF-8），现代浏览器优先用后者还原中文名。
+    """
+    ascii_fallback = filename.encode("ascii", "ignore").decode("ascii").strip()
+    if not ascii_fallback or ascii_fallback in (f".{ext}", ext):
+        ascii_fallback = f"report.{ext}"
+    quoted = quote(filename, encoding="utf-8")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quoted}"
+
+
+def _load_report_from_disk(session_id: str) -> dict[str, Any] | None:
+    import json
+
+    for path in settings.report_dir.glob(f"{session_id}-report-*.json"):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 @router.post(
@@ -115,7 +268,9 @@ def claim_session_handoff(payload: ClaimHandoffRequest) -> ClaimHandoffResponse:
         claim = handoff_tokens.claim(payload.token)
     except HandoffTokenError as error:
         status_code = {"not_found": 404, "used": 409, "expired": 410}.get(error.code, 400)
-        raise HTTPException(status_code=status_code, detail=f"handoff token {error.code}") from error
+        raise HTTPException(
+            status_code=status_code, detail=f"handoff token {error.code}"
+        ) from error
 
     return ClaimHandoffResponse(
         sessionId=claim.session_id,

@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from typing import Literal
 
-
 DisplayMode = Literal["bilingual", "translation-only", "floating", "compact"]
 
 
@@ -106,11 +105,15 @@ class HandoffTokenStore:
 
     def _cleanup(self) -> None:
         now = datetime.now(UTC)
-        expired_tickets = [token for token, ticket in self._tickets.items() if ticket.expires_at <= now]
+        expired_tickets = [
+            token for token, ticket in self._tickets.items() if ticket.expires_at <= now
+        ]
         for token in expired_tickets:
             del self._tickets[token]
 
-        expired_ws_tokens = [token for token, (_, expires_at) in self._ws_tokens.items() if expires_at <= now]
+        expired_ws_tokens = [
+            token for token, (_, expires_at) in self._ws_tokens.items() if expires_at <= now
+        ]
         for token in expired_ws_tokens:
             del self._ws_tokens[token]
 
