@@ -563,14 +563,41 @@ export const useSessionStore = defineStore("session", {
     },
 
     async openDesktopFloating() {
+      const targetLanguage = toLanguageCode(this.floatingForm.targetLanguage);
+      const displayMode = toDesktopDisplayMode(this.floatingForm.style);
+
+      this.desktopLaunchState = "launching";
+      this.desktopLaunchMessage = "正在准备桌面悬浮窗";
+      this.desktopDownloadPromptOpen = false;
+
       if (!this.sessionId) {
-        const params = new URLSearchParams({
-          source: "system-audio",
-          sourceLanguage: "auto",
-          targetLanguage: toLanguageCode(this.floatingForm.targetLanguage),
-          displayMode: toDesktopDisplayMode(this.floatingForm.style)
-        });
-        this.launchDesktopUrl(`lingosync://floating/start?${params.toString()}`);
+        try {
+          const session = await createSession({
+            inputMode: "system_audio",
+            sourceLanguage: "auto",
+            targetLanguage,
+            productMode: "floating",
+            sessionName: "客户端悬浮字幕",
+            domain: this.floatingForm.domain,
+            modelProfile: this.floatingForm.modelProfile,
+            sourceKey: "system-audio",
+            sourceFileName: undefined,
+            sourceUrl: undefined,
+            sourcePermission: "idle"
+          });
+          const handoff = await issueSessionHandoff(session.sessionId, {
+            source: "system-audio",
+            sourceLanguage: "auto",
+            targetLanguage,
+            displayMode
+          });
+          this.launchDesktopUrl(handoff.deepLinkUrl);
+        } catch (error) {
+          this.desktopLaunchState = "error";
+          this.desktopLaunchMessage =
+            error instanceof Error ? error.message : "无法创建桌面悬浮窗会话";
+          this.desktopDownloadPromptOpen = true;
+        }
         return;
       }
 
@@ -579,7 +606,7 @@ export const useSessionStore = defineStore("session", {
           source: this.quickForm.source,
           sourceLanguage: toLanguageCode(this.quickForm.sourceLanguage),
           targetLanguage: toLanguageCode(this.quickForm.targetLanguage),
-          displayMode: toDesktopDisplayMode(this.floatingForm.style)
+          displayMode
         });
         this.launchDesktopUrl(handoff.deepLinkUrl);
       } catch (error) {

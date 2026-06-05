@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import EntryCard from "../components/home/EntryCard.vue";
+import DesktopLaunchPrompt from "../components/workbench/DesktopLaunchPrompt.vue";
 import { useGsapReveal } from "../composables/useGsapReveal";
 import { useSessionStore } from "../stores/session";
 
 const router = useRouter();
 const sessionStore = useSessionStore();
 const root = ref<HTMLElement | null>(null);
+const { desktopDownloadPromptOpen, desktopHandoffUrl, desktopLaunchMessage, desktopLaunchState } =
+  storeToRefs(sessionStore);
 
 useGsapReveal(root, { stagger: 0.09, y: 18 });
 
@@ -17,6 +21,11 @@ function enterWeb() {
 
 function activateDesktop() {
   sessionStore.openDesktopFloating();
+}
+
+function continueWithWebFloating() {
+  sessionStore.continueWithWebFloating();
+  router.push({ path: "/web" });
 }
 </script>
 
@@ -84,5 +93,15 @@ function activateDesktop() {
 
       <p class="home-footnote" data-reveal>多语种音视频 → 中文实时字幕 · 上下文自动纠偏 · 可选中文语音 · 双语稿导出</p>
     </section>
+
+    <DesktopLaunchPrompt
+      v-if="desktopDownloadPromptOpen || desktopLaunchState === 'launching'"
+      :state="desktopLaunchState"
+      :message="desktopLaunchMessage"
+      :deep-link-url="desktopHandoffUrl"
+      @retry="sessionStore.openDesktopFloating"
+      @continue-web="continueWithWebFloating"
+      @close="sessionStore.dismissDesktopDownloadPrompt"
+    />
   </main>
 </template>
