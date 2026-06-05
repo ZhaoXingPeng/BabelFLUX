@@ -1,0 +1,346 @@
+AI 同声传译助手 - 技术栈选型方案
+版本：v0.1
+日期：2026-06-05
+
+一、结论摘要
+本项目采用 Web 优先、前后端分离、Python AI 后端、Vue 前端的技术路线。
+
+最终推荐：
+1. 前端：Vue 3 + TypeScript + Vite + Pinia + Tailwind CSS。
+2. 后端：Python 3.11+ + FastAPI + WebSocket + Pydantic v2。
+3. 音视频处理：服务端 FFmpeg 优先，ffmpeg.wasm 作为后续补充。
+4. ASR：mock 流式数据先跑通产品闭环；上传视频/音频优先 faster-whisper 或 FunASR；实时流式优先 FunASR 或云端 ASR。
+5. 翻译与纠偏：实时阶段使用低延迟翻译链路；最终纠偏接入大模型，输出结构化报告。
+6. TTS：语音同步实现为用户可选开关，MVP 可先用浏览器 SpeechSynthesis 或 edge-tts。
+7. 存储：SQLite + SQLModel，满足会话、字幕、术语表和报告落库。
+8. 桌面端：暂不进入 MVP；Tauri 作为 P2 扩展。
+
+二、参考约束
+参考文件：
+/hy-tmp/claude/选题2_技术栈选型.txt
+
+继承的关键决策：
+1. 团队熟悉 Vue 3 + Pinia，因此前端不采用 React。
+2. 后端采用 Python FastAPI，便于接入 ASR、TTS、本地模型和多供应商 API。
+3. Web 优先，桌面端只作为后续加分项。
+4. 仓库采用单题单仓，结构为 frontend/、backend/、docs/，可选 desktop/。
+
+三、整体架构
+核心链路：
+输入来源 -> 音频提取或捕捉 -> ASR -> 字幕分段 -> 翻译 -> 实时纠偏 -> 字幕输出 -> 可选 TTS -> 最终纠偏报告
+
+模块划分：
+1. frontend
+负责页面、视频播放、字幕展示、悬浮字幕窗、会话控制、术语表编辑、最终报告展示。
+
+2. backend
+负责上传处理、音频提取、ASR 调用、翻译调用、纠偏逻辑、TTS 调用、WebSocket 事件推送、数据存储。
+
+3. docs
+保存方案、技术选型、PR 拆分、演示说明和依赖说明。
+
+4. desktop
+暂不实现。未来如需要系统级音频捕捉和全局悬浮窗，可用 Tauri 扩展。
+
+四、前端技术选型
+1. 基础框架
+语言：TypeScript
+框架：Vue 3
+构建工具：Vite
+状态管理：Pinia
+样式：Tailwind CSS
+
+选择理由：
+1. Vue 3 + Composition API 适合处理字幕段、状态流、局部响应式更新。
+2. Pinia 足够轻量，适合维护 session、segments、revisions、glossary、tts_queue。
+3. Vite 启动快，便于 3 天开发周期快速迭代。
+4. Tailwind CSS 适合快速构建一致视觉系统。
+
+2. 前端核心依赖
+1. @vueuse/core
+用于封装浏览器能力，例如媒体流、剪贴板、窗口尺寸、事件监听。
+
+2. @floating-ui/vue
+用于悬浮字幕窗、提示层、状态气泡定位。
+
+3. vue3-draggable-resizable
+用于实现可拖拽、可缩放悬浮字幕窗。
+
+4. video.js
+用于上传视频、演示视频播放，以及后续字幕轨道能力扩展。
+
+5. shadcn-vue 或 reka-ui
+用于基础 UI 组件。若时间紧，可先自写轻量组件，避免被组件库风格束缚。
+
+6. @fontsource/noto-sans-sc 与 @fontsource/space-grotesk
+用于页面字体，避免默认系统字体带来的廉价感。
+
+3. 前端状态模型
+建议 Pinia 拆分：
+1. useSessionStore
+保存 session_id、input_mode、language_pair、status、source_sync_state。
+
+2. useSubtitleStore
+保存 source_segments、translation_segments、active_segment_id。
+
+3. useRevisionStore
+保存 RevisionEvent、实时纠偏展示状态。
+
+4. useGlossaryStore
+保存术语表。
+
+5. useTtsStore
+保存 TTS 开关、播放队列、当前播报状态。
+
+五、后端技术选型
+1. 基础框架
+语言：Python 3.11+
+框架：FastAPI
+ASGI：uvicorn[standard]
+数据校验：Pydantic v2
+实时通道：WebSocket
+数据库：SQLite + SQLModel
+异步 HTTP：httpx
+配置：python-dotenv + pyyaml
+
+选择理由：
+1. Python 对 ASR、TTS、FFmpeg、本地模型生态支持最好。
+2. FastAPI 可以同时支持 REST、WebSocket、文件上传和后台任务。
+3. SQLite 零运维，足够支撑会话、字幕、术语表和报告。
+4. WebSocket 足够满足“前端音频/事件上行，字幕/状态下行”，不需要一开始使用 WebRTC。
+
+2. 后端核心依赖
+1. fastapi、uvicorn[standard]
+提供 API 和 WebSocket 服务。
+
+2. pydantic、sqlmodel
+提供数据模型、校验和 SQLite ORM。
+
+3. python-multipart、aiofiles
+支持上传视频/音频。
+
+4. httpx
+异步调用云端 ASR、LLM、TTS 服务。
+
+5. faster-whisper
+处理上传音频/视频的离线转写。
+
+6. FunASR
+作为国内生态更友好的 ASR 方案，可用于流式或离线识别。
+
+7. edge-tts
+作为 MVP 中文 TTS 可选方案。
+
+8. FFmpeg
+服务端提取上传视频中的音频，执行转码和切片。
+
+六、输入方式技术方案
+1. P0：演示视频/音频
+实现方式：
+前端内置示例视频或音频，后端返回 mock 字幕流、纠偏事件和最终报告。
+
+用途：
+保证评审稳定，不依赖外部网页、权限或网络。
+
+2. P0：上传视频
+实现方式：
+用户上传 mp4/mov/webm 等视频，后端用 FFmpeg 提取音频，ASR 生成源语言字幕，前端播放视频并叠加字幕。
+
+理由：
+视频比纯音频更贴近用户真实场景，且最适合展示“字幕输出 + 悬浮字幕 + 最终报告”。
+
+3. P1：浏览器标签页/屏幕音频捕捉
+实现方式：
+使用 getDisplayMedia 捕捉标签页或屏幕音频，前端用 MediaRecorder 或 Web Audio API 切分音频后传给后端。
+
+限制：
+需要用户授权；不同浏览器和系统对音频捕捉支持不同。MVP 可做为增强能力，不作为唯一演示链路。
+
+4. P1：上传音频
+实现方式：
+用户上传 mp3/wav/m4a，后端直接 ASR。
+
+5. P2：视频链接
+实现方式：
+只支持可直接访问的公开视频或媒体直链。百度网盘、B 站、YouTube 这类平台链接不作为 MVP 主链路。
+
+6. P2：麦克风
+实现方式：
+getUserMedia 获取麦克风流。适合线下外放或会议室，不适合作为网页视频观看的主输入。
+
+七、字幕输出技术方案
+字幕输出是最高优先级。
+
+1. 视频底部字幕
+用于上传视频和演示视频。
+
+2. 悬浮字幕窗
+使用 vue3-draggable-resizable + @floating-ui/vue 实现可拖动、可缩放、可折叠字幕窗。
+
+3. 右侧双语记录面板
+展示完整源语言和中文字幕，支持回看、定位和导出。
+
+4. 最终报告页
+展示最终纠偏、术语命中、同步质量统计和导出入口。
+
+八、AI 模型与模态选择
+1. ASR 语音识别
+P0：
+mock 字幕流，保证产品闭环和演示稳定。
+
+P1：
+faster-whisper 处理上传视频/音频，生成带时间戳的源语言字幕。
+
+P1/P2：
+FunASR 支持国内生态和流式 ASR，可作为实时字幕主候选。
+
+P2：
+SenseVoice 和 sherpa-onnx 作为多语种和本地化扩展。
+
+2. 翻译模型
+实时翻译：
+使用低延迟 LLM 或翻译 API，输出 temporary translation。
+
+稳定翻译：
+使用更强模型结合上下文、术语表和历史片段输出 final translation。
+
+3. 大模型最终纠偏
+最终纠偏建议接入大模型。
+
+输入：
+1. 全量源语言转写。
+2. 全量中文翻译。
+3. 术语表。
+4. RevisionEvent。
+5. source_sync_state 日志。
+
+输出：
+1. 最终双语稿。
+2. 纠偏列表。
+3. 术语一致性报告。
+4. 会话摘要。
+5. 可导出 JSON。
+
+4. TTS 语音合成
+MVP：
+浏览器 SpeechSynthesis 或 edge-tts。
+
+后续：
+CosyVoice 或云厂商 TTS，用于更自然的中文播报。
+
+策略：
+1. TTS 默认关闭。
+2. 用户可开启。
+3. TTS 基于 final 或 revised 后的翻译结果播放。
+4. TTS 不阻塞字幕输出。
+
+九、实时通信协议
+前端与后端使用 WebSocket。
+
+上行事件：
+1. start_session
+2. audio_chunk
+3. stop_session
+4. update_glossary
+5. toggle_tts
+
+下行事件：
+1. session_started
+2. source_sync_state
+3. transcript_segment
+4. translation_segment
+5. revision_event
+6. tts_audio
+7. session_report
+8. error
+
+十、数据存储设计
+数据库：
+SQLite + SQLModel。
+
+核心表：
+1. sessions
+2. transcript_segments
+3. translation_segments
+4. revision_events
+5. glossary_items
+6. session_reports
+
+MVP 可以先用 SQLite，本地开发和演示足够。后续如需多人协作或云部署，再迁移 PostgreSQL。
+
+十一、页面设计技术方案
+视觉风格：
+墨蓝、海盐白、青绿色状态光，避免默认紫色模板风。
+
+布局：
+1. 顶部状态栏：输入来源、语言方向、同步状态、TTS 开关。
+2. 中央视频区：上传视频或演示视频。
+3. 底部字幕区：大字号双语字幕。
+4. 右侧记录区：双语记录、修正记录、术语命中。
+5. 悬浮字幕窗：可拖动、可缩放、可折叠。
+6. 结束页：最终纠偏报告。
+
+动效：
+1. 字幕进入使用轻微上浮。
+2. revised 字幕用短暂高亮。
+3. lagging/missing 状态用状态芯片提示，不做大面积警告。
+
+十二、工程质量
+前端：
+pnpm、ESLint、Prettier、Vitest。
+
+后端：
+uv、ruff、black、pytest、pytest-asyncio。
+
+配置：
+.env 保存密钥，不入库。
+.env.example 提供变量模板。
+providers.yaml 保存模型路由和降级策略。
+
+十三、推荐仓库结构
+repo/
+├─ frontend/
+├─ backend/
+├─ docs/
+│  ├─ architecture/
+│  ├─ product-research/
+│  └─ process/
+├─ scripts/
+├─ .env.example
+├─ providers.example.yaml
+└─ README.md
+
+十四、开发优先级
+第一优先级：
+1. Vue 前端骨架。
+2. FastAPI 后端骨架。
+3. 上传视频和演示视频。
+4. mock 流式字幕。
+5. 字幕输出组件。
+6. 源语言同步状态。
+
+第二优先级：
+1. 实时纠偏 RevisionEvent。
+2. 最终纠偏 SessionReport。
+3. 术语表。
+4. 双语记录导出。
+5. 可选 TTS。
+
+第三优先级：
+1. faster-whisper 或 FunASR 真实 ASR。
+2. 大模型最终纠偏。
+3. 浏览器标签页音频捕捉。
+4. 视频链接支持。
+5. 桌面端或浏览器插件。
+
+十五、最终结论
+本项目技术栈应保持务实：
+1. Web 优先，不做桌面客户端 MVP。
+2. Vue 3 + FastAPI 是主技术栈。
+3. 上传视频和演示视频优先，保证 Demo 稳定。
+4. 字幕输出是核心，TTS 是可选增强。
+5. 真实 ASR 可以逐步接入，先用 mock 字幕流确保闭环。
+6. 最终纠偏接入大模型，实时纠偏保持轻量。
+7. 悬浮字幕、视频播放、音频处理、TTS 都优先使用成熟工具。
+
+本方案可作为进入工程初始化阶段的技术基准。
