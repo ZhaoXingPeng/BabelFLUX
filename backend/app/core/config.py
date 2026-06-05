@@ -25,7 +25,13 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [self.frontend_origin]
+        # 同时放行 localhost 与 127.0.0.1 两种本地访问形式（Vite 绑定 0.0.0.0，两者都可能用到）
+        origins = {self.frontend_origin}
+        if "localhost" in self.frontend_origin:
+            origins.add(self.frontend_origin.replace("localhost", "127.0.0.1"))
+        elif "127.0.0.1" in self.frontend_origin:
+            origins.add(self.frontend_origin.replace("127.0.0.1", "localhost"))
+        return sorted(origins)
 
 
 @lru_cache
