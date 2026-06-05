@@ -63,14 +63,14 @@ AI 同声传译助手 - 技术栈选型方案
 2. @floating-ui/vue
 用于悬浮字幕窗、提示层、状态气泡定位。
 
-3. vue3-draggable-resizable
-用于实现可拖拽、可缩放悬浮字幕窗。
+3. vue-draggable-resizable / vue3-draggable-resizable
+用于实现可拖拽、可缩放悬浮字幕窗。优先选择维护更成熟、Vue 3 支持明确的 vue-draggable-resizable；如果需要吸附对齐和实时参考线，再评估 vue3-draggable-resizable。
 
 4. video.js
 用于上传视频、演示视频播放，以及后续字幕轨道能力扩展。
 
-5. shadcn-vue 或 reka-ui
-用于基础 UI 组件。若时间紧，可先自写轻量组件，避免被组件库风格束缚。
+5. Element Plus / Naive UI / shadcn-vue
+如果基于 vue-pure-admin 起步，沿用 Element Plus 最省时间；如果基于 SoybeanAdmin 起步，沿用 Naive UI；如果从零搭建轻量界面，再考虑 shadcn-vue。不要在 MVP 中混用多个重型 UI 体系。
 
 6. @fontsource/noto-sans-sc 与 @fontsource/space-grotesk
 用于页面字体，避免默认系统字体带来的廉价感。
@@ -333,7 +333,223 @@ repo/
 4. 视频链接支持。
 5. 桌面端或浏览器插件。
 
-十五、最终结论
+十五、成熟开源仓库复用确认
+结论：
+目前没有发现可以直接覆盖“上传/实时音频 -> 源语言字幕同步 -> 实时翻译 -> 纠偏 -> 可选 TTS -> 最终报告”的成熟开源整仓。推荐采用“成熟前端模板 + 自研实时字幕业务层 + 后端统一模型网关”的组合方案。
+
+1. 前端整仓模板
+首选：pure-admin/vue-pure-admin
+地址：https://github.com/pure-admin/vue-pure-admin
+用途：
+适合作为 frontend/ 起点。该项目是 Vue 3 + Vite + TypeScript + Pinia + Element Plus + Tailwind CSS 方向，和本项目选型重合度最高，适合不擅长前端的开发者快速获得路由、布局、菜单、状态管理、工程规范和基础页面。
+
+使用方式：
+1. 使用其精简版本或最小化模板起步。
+2. 保留路由、布局、Pinia、请求封装、基础组件。
+3. 删除权限后台、业务示例、mock 数据和不需要的管理页。
+4. 新增本项目页面：会话控制台、视频播放区、双语字幕区、纠偏记录区、最终报告页。
+
+备选：vbenjs/vue-vben-admin
+地址：https://github.com/vbenjs/vue-vben-admin
+用途：
+工程能力强，适合长期后台系统；但结构更重，学习成本更高，不建议作为 3 天 MVP 首选。
+
+备选：soybeanjs/soybean-admin
+地址：https://github.com/soybeanjs/soybean-admin
+用途：
+现代 Vue 3 管理后台模板，适合接受 Naive UI / UnoCSS 技术体系的团队；但与本文 Tailwind + Element Plus 路线不完全一致。
+
+前端判断：
+本项目建议优先基于 vue-pure-admin 精简版本改造。原因是用户前端经验不足，使用成熟模板比从空白 Vue 项目搭建导航、布局、状态管理、请求层和工程规范更稳。
+
+2. 后端与全栈模板
+可参考：fastapi/full-stack-fastapi-template
+地址：https://github.com/fastapi/full-stack-fastapi-template
+用途：
+可参考 FastAPI 项目结构、配置、测试、容器化、SQLModel 使用方式。该模板前端是 React，不适合直接作为本项目整仓基础。
+
+可参考：mizhexiaoxiao/vue-fastapi-admin
+地址：https://github.com/mizhexiaoxiao/vue-fastapi-admin
+用途：
+可参考 Vue + FastAPI 的前后端拆分、后台接口组织和权限页面。该项目不是实时 AI 音视频项目，不能直接解决字幕流、WebSocket 模型代理和纠偏逻辑。
+
+后端判断：
+backend/ 不建议直接套完整后台管理仓库。更稳的做法是自建 FastAPI 最小骨架，只借鉴成熟模板的目录结构、配置管理、测试和数据库写法。
+
+3. AI 与音视频相关仓库
+FunASR
+地址：https://github.com/modelscope/FunASR
+用途：
+用于真实 ASR、流式识别、本地或服务端部署参考。适合支撑源语言字幕主链路。
+
+faster-whisper
+地址：https://github.com/SYSTRAN/faster-whisper
+用途：
+用于上传视频/音频的离线转写，适合生成带时间戳的源语言字幕。
+
+阿里云百炼语音示例
+地址：https://github.com/aliyun/alibabacloud-bailian-speech-demo
+用途：
+用于参考 DashScope 语音识别、实时翻译、实时 TTS 的 SDK 或 WebSocket 调用示例。
+
+Video.js
+地址：https://github.com/videojs/video.js
+用途：
+用于上传视频、演示视频播放和字幕轨道能力扩展。
+
+4. 复用边界
+可以直接复用：
+1. 前端工程骨架、布局、路由、状态管理、基础组件。
+2. FastAPI 工程组织、配置、测试、数据库样例。
+3. ASR/TTS/实时翻译的官方示例代码和事件协议。
+4. 视频播放、拖拽字幕窗、定位组件。
+
+必须自研：
+1. 字幕同步状态 source_sync_state。
+2. 双语字幕段 Segment 模型。
+3. RevisionEvent 实时纠偏事件。
+4. SessionReport 最终纠偏报告。
+5. 前端与后端之间的统一 WebSocket 协议。
+6. 模型供应商路由、降级和日志。
+
+十六、模型调用方案确认
+默认结论：
+前端不要直连 DashScope、FunASR、TTS 或大模型服务。所有模型连接由 FastAPI 后端统一封装，前端只连接本项目后端。
+
+推荐链路：
+1. 前端 -> FastAPI REST：上传视频、上传音频、创建会话、查询报告。
+2. 前端 -> FastAPI WebSocket：发送控制事件或音频块，接收字幕、翻译、纠偏、TTS 和状态事件。
+3. FastAPI -> 模型服务 WebSocket/SDK/HTTP：连接 Fun-ASR、千问实时音视频翻译、Qwen-TTS、CosyVoice、最终纠偏大模型。
+4. FastAPI -> SQLite：记录 session、segments、revision_events、source_sync_state、session_reports。
+
+不推荐前端直连模型的原因：
+1. API Key 不能暴露在浏览器。
+2. 浏览器直连云端 WebSocket 容易遇到鉴权头、CORS、网络重连和协议差异问题。
+3. 前端同时适配 FunASR、千问实时翻译、TTS、大模型会显著增加复杂度。
+4. 后端代理可以统一输出本项目自己的字幕事件，便于替换模型和做降级。
+5. 纠偏、同步统计、术语命中和最终报告需要后端维护会话状态。
+
+模型调用对比：
+1. Fun-ASR 实时语音识别
+调用方式：WebSocket。
+端点：wss://dashscope.aliyuncs.com/api-ws/v1/inference。
+鉴权：Authorization: Bearer <DASHSCOPE_API_KEY>。
+核心流程：建立连接 -> run-task -> 发送单声道二进制音频 -> 接收 result-generated -> finish-task -> task-finished。
+适合用途：源语言字幕识别、实时字幕主链路、同步状态监测。
+
+2. 千问实时音视频翻译
+调用方式：WebSocket。
+端点：wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime。
+鉴权：Authorization: Bearer <DASHSCOPE_API_KEY>。
+核心流程：建立连接 -> session.update 配置语言、输出模态、热词、可选源语言识别 -> input_audio_buffer.append 发送音频 -> 可选 input_image_buffer.append 发送视频帧 -> 接收源语言识别、目标翻译和可选音频。
+可用事件：conversation.item.input_audio_transcription.text、conversation.item.input_audio_transcription.completed、response.text.done、response.audio_transcript.done、response.audio.delta。
+适合用途：快速获得“源语言识别 + 翻译 + 可选语音”的一体化实时能力，也适合利用画面上下文提升翻译准确性。
+
+3. 实时语音合成
+调用方式：DashScope SDK 或 WebSocket。
+候选模型：Qwen-TTS、CosyVoice。
+核心流程：建立连接 -> session.update 设置音色、格式、server_commit 或 commit 模式 -> input_text_buffer.append -> 可选 input_text_buffer.commit -> 接收 response.audio.delta -> response.done。
+适合用途：TTS 可选开关。MVP 中不要让 TTS 阻塞字幕输出。
+
+4. 最终纠偏大模型
+调用方式：HTTP/SDK。
+输入：全量源语言字幕、全量翻译、术语表、RevisionEvent、source_sync_state 日志。
+输出：最终双语稿、纠偏列表、术语一致性报告、同步质量统计和会话摘要。
+适合用途：会话结束后的 SessionReport，不放在实时字幕主链路里阻塞输出。
+
+推荐供应商模式：
+1. P0：mock_provider
+后端生成稳定的 transcript_segment、translation_segment、revision_event、session_report，保证演示闭环。
+
+2. P1：pipeline_provider
+Fun-ASR 或 faster-whisper 负责源语言字幕，翻译模型负责目标语言字幕，Qwen-TTS/CosyVoice 负责可选语音。该模式最符合“先把源语言字幕同步做好”的产品核心。
+
+3. P1/P2：livetranslate_provider
+千问实时音视频翻译负责源语言识别、目标语言翻译和可选音频。该模式接入最快，但应用层仍要把模型事件转换成本项目自己的 Segment、RevisionEvent 和 source_sync_state。
+
+工程建议：
+backend/ 内定义统一 provider 接口：
+1. start(session_config)
+2. send_audio(chunk)
+3. send_video_frame(frame)
+4. update_glossary(glossary)
+5. stop()
+6. emit_model_event()
+
+前端永远只消费本项目事件：
+1. transcript_segment
+2. translation_segment
+3. revision_event
+4. source_sync_state
+5. tts_audio
+6. session_report
+7. error
+
+十七、模型纠偏能力边界确认
+结论：
+模型具备一定的“流式稳定化”和“最终结果生成”能力，但不能替代本项目自定义的实时纠偏机制。RevisionEvent 仍然必须由应用层维护。
+
+1. ASR/实时翻译的原生能力
+Fun-ASR 会持续返回 result-generated 识别结果，适合形成 partial/final 字幕段。
+
+千问实时音视频翻译可以流式返回源语言识别文本，并在识别完成后返回 completed 事件；也可以返回完整翻译文本或音频转写完成事件。热词和视觉上下文能提升准确率。
+
+这些能力可以帮助模型在当前语义单元内稳定输出，但它们不是本项目需要的完整纠偏系统。
+
+2. 模型原生能力不足的地方
+1. 不保证按本项目 segment_id 返回“请替换第几条字幕”的结构化事件。
+2. 不保证覆盖跨多句的术语一致性修正。
+3. 不保证输出可解释的纠偏原因。
+4. 不保证给出同步质量统计。
+5. 不保证在前端可控地只修最近几条字幕。
+
+3. 应用层实时纠偏
+后端应在以下情况生成 RevisionEvent：
+1. partial 字幕被 final 字幕替换。
+2. 翻译结合上下文后修正最近 3 到 5 条字幕。
+3. 术语表命中后替换错误译法。
+4. 音视频时间戳漂移导致字幕重新对齐。
+5. 用户手动纠正术语或译文后，需要更新后续输出。
+
+RevisionEvent 建议字段：
+1. revision_id
+2. session_id
+3. target_segment_ids
+4. before_text
+5. after_text
+6. reason
+7. confidence
+8. created_at
+9. display_policy
+
+实时纠偏范围：
+只修最近 3 到 5 条字幕，或最近 10 到 20 秒窗口。更早内容不在实时主链路中频繁改写，避免用户阅读体验抖动。
+
+4. 最终纠偏
+最终纠偏由会话结束后的大模型批处理完成。
+
+它负责：
+1. 重新整理全量源语言稿。
+2. 统一术语翻译。
+3. 修正跨段语义和上下文翻译。
+4. 给出最终双语稿。
+5. 输出纠偏记录和同步质量统计。
+
+最终纠偏不替代实时纠偏。实时纠偏负责观看过程中的可读性，最终纠偏负责会后稿件质量。
+
+5. 与核心痛点的关系
+源语言字幕同步不能完全依赖模型自然输出。后端必须持续计算 source_sync_state：
+1. 当前视频或音频播放时间。
+2. 最近字幕段开始/结束时间。
+3. partial 延迟。
+4. final 延迟。
+5. 空字幕持续时间。
+6. 修正次数。
+7. 时间戳漂移。
+
+只有先把 source_sync_state 做清楚，实时翻译和 TTS 才有可靠基础。
+
+十八、最终结论
 本项目技术栈应保持务实：
 1. Web 优先，不做桌面客户端 MVP。
 2. Vue 3 + FastAPI 是主技术栈。
@@ -342,5 +558,8 @@ repo/
 5. 真实 ASR 可以逐步接入，先用 mock 字幕流确保闭环。
 6. 最终纠偏接入大模型，实时纠偏保持轻量。
 7. 悬浮字幕、视频播放、音频处理、TTS 都优先使用成熟工具。
+8. 前端优先基于 vue-pure-admin 精简版本改造，降低页面搭建难度。
+9. 模型调用统一由 FastAPI 后端代理，前端不直连云端模型。
+10. 模型原生流式结果只能作为纠偏输入，RevisionEvent 和 SessionReport 必须由应用层生成。
 
 本方案可作为进入工程初始化阶段的技术基准。
