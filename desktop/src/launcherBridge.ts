@@ -31,3 +31,14 @@ export async function listenForDeepLinks(handler: (params: LaunchParams) => void
     return () => undefined;
   }
 }
+
+export async function getLaunchDeepLink(): Promise<LaunchParams | null> {
+  try {
+    const { getCurrent } = await import("@tauri-apps/plugin-deep-link");
+    const urls = await getCurrent();
+    const latest = urls?.at(-1);
+    return latest ? parseLaunchParams(latest) : null;
+  } catch {
+    return null;
+  }
+}

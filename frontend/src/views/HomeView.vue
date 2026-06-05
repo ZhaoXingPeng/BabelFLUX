@@ -100,6 +100,7 @@ function continueWithWebFloating() {
       :message="desktopLaunchMessage"
       :deep-link-url="desktopHandoffUrl"
       @retry="sessionStore.openDesktopFloating"
+      @reopen="sessionStore.reopenDesktop"
       @continue-web="continueWithWebFloating"
       @close="sessionStore.dismissDesktopDownloadPrompt"
     />

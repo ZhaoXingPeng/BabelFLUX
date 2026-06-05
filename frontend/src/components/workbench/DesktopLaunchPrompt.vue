@@ -9,6 +9,7 @@ defineProps<{
 
 const emit = defineEmits<{
   retry: [];
+  reopen: [];
   continueWeb: [];
   close: [];
 }>();
@@ -25,6 +26,9 @@ const emit = defineEmits<{
     </div>
     <div class="desktop-launch-actions">
       <button class="stage-button" type="button" @click="emit('retry')">重试唤起</button>
+      <button v-if="state === 'fallback'" class="stage-button" type="button" @click="emit('reopen')">
+        我已安装，直接打开
+      </button>
       <button class="stage-button primary" type="button" @click="emit('continueWeb')">继续网页悬浮</button>
       <a v-if="deepLinkUrl" class="stage-button" :href="deepLinkUrl">打开协议</a>
       <button class="stage-button" type="button" aria-label="关闭桌面唤起提示" @click="emit('close')">×</button>

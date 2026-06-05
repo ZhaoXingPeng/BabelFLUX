@@ -150,6 +150,7 @@ function toggleFloatingCaptions() {
       :message="desktopLaunchMessage"
       :deep-link-url="desktopHandoffUrl"
       @retry="sessionStore.openDesktopFloating"
+      @reopen="sessionStore.reopenDesktop"
       @continue-web="sessionStore.continueWithWebFloating"
       @close="sessionStore.dismissDesktopDownloadPrompt"
     />
