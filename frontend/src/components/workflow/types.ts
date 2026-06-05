@@ -5,6 +5,7 @@ export type {
   QuickFormState,
   ReportMetric,
   RuntimeState,
+  SourceInputState,
   SourceOption,
   TranscriptPair,
   WorkspaceTile

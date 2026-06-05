@@ -171,6 +171,37 @@ select:focus-visible {
   background: #f7f7f7;
 }
 
+.source-prep {
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #f7f9f7;
+  padding: 10px;
+}
+
+.file-control {
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.source-prep-status {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: #607064;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.source-prep-status.ready {
+  color: #1c7c54;
+  font-weight: 700;
+}
+
+.source-prep-status.error {
+  color: #b14242;
+  font-weight: 700;
+}
+
 .media-stage {
   display: grid;
   min-height: 340px;

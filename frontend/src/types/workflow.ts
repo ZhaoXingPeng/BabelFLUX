@@ -2,6 +2,7 @@ import type { SourceSyncState } from "./events";
 
 export type ProductMode = "quick" | "floating";
 export type RuntimeState = "setup" | "connecting" | "running" | "paused" | "report" | "error";
+export type SourcePermissionState = "idle" | "requesting" | "granted" | "denied";
 
 export interface ProductModeOption {
   key: ProductMode;
@@ -15,6 +16,13 @@ export interface SourceOption {
   channel: string;
   availability: "web" | "desktop";
   disabled?: boolean;
+}
+
+export interface SourceInputState {
+  fileName: string;
+  url: string;
+  permissionState: SourcePermissionState;
+  permissionMessage: string;
 }
 
 export interface TranscriptPair {

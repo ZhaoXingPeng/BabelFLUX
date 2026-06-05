@@ -17,6 +17,9 @@ export interface CreateSessionPayload {
   domain: string;
   modelProfile: string;
   sourceKey: string;
+  sourceFileName?: string;
+  sourceUrl?: string;
+  sourcePermission?: "idle" | "requesting" | "granted" | "denied";
 }
 
 export interface CreateSessionResponse {

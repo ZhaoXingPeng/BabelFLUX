@@ -16,9 +16,11 @@ const {
   errorMessage,
   floatingCanStart,
   floatingForm,
+  floatingInput,
   floatingSource,
   floatingSources,
   floatingStatusLabel,
+  floatingUrlError,
   languages,
   modeStates,
   modelProfiles,
@@ -26,9 +28,11 @@ const {
   productModes,
   quickCanStart,
   quickForm,
+  quickInput,
   quickSource,
   quickSources,
   quickStatusLabel,
+  quickUrlError,
   reportMetrics,
   selectedDisplayDescription,
   selectedDisplayMode,
@@ -72,10 +76,16 @@ const {
         :target-languages="targetLanguages"
         :model-profiles="modelProfiles"
         :sources="quickSources"
+        :selected-source="quickSource"
+        :input="quickInput"
+        :url-error="quickUrlError"
         :can-start="quickCanStart"
         @start="sessionStore.startMode('quick')"
         @switch-floating="sessionStore.selectMode('floating')"
         @select-source="sessionStore.selectQuickSource"
+        @select-file="sessionStore.setQuickSourceFile"
+        @update-url="sessionStore.updateQuickSourceUrl"
+        @request-permission="sessionStore.requestQuickSourceAccess"
       />
       <QuickWorkspace
         :form="quickForm"
@@ -110,10 +120,16 @@ const {
         :target-languages="targetLanguages"
         :model-profiles="modelProfiles"
         :sources="floatingSources"
+        :selected-source="floatingSource"
+        :input="floatingInput"
+        :url-error="floatingUrlError"
         :can-start="floatingCanStart"
         @start="sessionStore.startMode('floating')"
         @switch-quick="sessionStore.selectMode('quick')"
         @select-source="sessionStore.selectFloatingSource"
+        @select-file="sessionStore.setFloatingSourceFile"
+        @update-url="sessionStore.updateFloatingSourceUrl"
+        @request-permission="sessionStore.requestFloatingSourceAccess"
       />
       <FloatingSubtitlePreview
         :form="floatingForm"

@@ -31,6 +31,7 @@ def test_create_session_accepts_configured_frontend_payload() -> None:
             "domain": "商务",
             "modelProfile": "高准确",
             "sourceKey": "browser-tab",
+            "sourcePermission": "granted",
         },
     )
 
