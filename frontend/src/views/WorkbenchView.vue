@@ -5,11 +5,14 @@ import { useRouter } from "vue-router";
 import EndSessionDialog from "../components/workflow/EndSessionDialog.vue";
 import SettingsDialog from "../components/settings/SettingsDialog.vue";
 import MediaPanel from "../components/workbench/MediaPanel.vue";
+import SetupBackdrop from "../components/workbench/SetupBackdrop.vue";
 import SubtitleColumn from "../components/workbench/SubtitleColumn.vue";
+import { withFlipMode } from "../composables/useFlipMode";
 import { useSessionStore } from "../stores/session";
 
 const router = useRouter();
 const sessionStore = useSessionStore();
+const root = ref<HTMLElement | null>(null);
 const settingsOpen = ref(false);
 
 const {
@@ -18,7 +21,10 @@ const {
   endingMode,
   errorMessage,
   audioUrl,
+  floatingForm,
+  isLive,
   mediaUrl,
+  mediaKind,
   languages,
   modeStates,
   modelProfiles,
@@ -49,24 +55,43 @@ async function startQuickSession() {
   await sessionStore.startMode("quick");
   settingsOpen.value = false;
 }
+
+async function setDisplayMode(mode: string) {
+  if (selectedDisplayMode.value === mode) return;
+  await withFlipMode(root, ".media-panel, .subtitle-column", () => {
+    selectedDisplayMode.value = mode;
+  });
+}
 </script>
 
 <template>
-  <main class="workbench-shell">
+  <main ref="root" class="workbench-shell" :class="{ live: isLive }">
+    <SetupBackdrop v-if="!isLive" />
+
+    <template v-if="isLive">
     <header class="workbench-topbar">
       <button class="topbar-link" type="button" @click="router.push('/')">返回主屏</button>
       <div>
         <p>LingoSync Web</p>
         <strong>沉浸式同传工作台</strong>
       </div>
-      <button class="topbar-link" type="button" @click="settingsOpen = true">同传设置</button>
+      <button
+        v-if="selectedDisplayMode === '悬浮字幕'"
+        class="topbar-link"
+        type="button"
+        @click="setDisplayMode('逐句对照')"
+      >
+        展开字幕栏
+      </button>
+      <button v-else class="topbar-link" type="button" @click="settingsOpen = true">同传设置</button>
     </header>
 
     <p v-if="errorMessage" class="workbench-error">{{ errorMessage }}</p>
 
-    <section class="workbench-grid">
+    <section class="workbench-grid" :class="{ floating: selectedDisplayMode === '悬浮字幕' }">
       <MediaPanel
         :form="quickForm"
+        :floating-form="floatingForm"
         :state="modeStates.quick"
         :source="quickSource"
         :runtime-status="status"
@@ -74,6 +99,7 @@ async function startQuickSession() {
         :source-sync-state="sourceSyncState"
         :media-url="mediaUrl"
         :audio-url="audioUrl"
+        :media-kind="mediaKind"
         :current-pair="currentPair"
         :selected-display-mode="selectedDisplayMode"
         @pause="sessionStore.pauseMode('quick')"
@@ -82,14 +108,16 @@ async function startQuickSession() {
         @reset="sessionStore.resetMode('quick')"
         @open-settings="settingsOpen = true"
         @open-desktop="sessionStore.openDesktopFloating"
+        @expand-subtitles="setDisplayMode('逐句对照')"
         @sync-playback="sessionStore.syncFixturePlayback"
       />
       <SubtitleColumn
+        v-if="selectedDisplayMode !== '悬浮字幕'"
         :display-modes="displayModes"
         :selected-display-mode="selectedDisplayMode"
         :selected-display-description="selectedDisplayDescription"
         :pairs="transcriptPairs"
-        @update-display-mode="selectedDisplayMode = $event"
+        @update-display-mode="setDisplayMode"
       />
     </section>
 
@@ -110,6 +138,7 @@ async function startQuickSession() {
         <button class="secondary-button compact-button" type="button">MD</button>
       </div>
     </section>
+    </template>
 
     <SettingsDialog
       v-if="shouldShowSettings"

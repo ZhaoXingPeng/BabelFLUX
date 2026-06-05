@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { SourceSyncState } from "../../types/events";
-import type { QuickFormState, RuntimeState, SourceOption, TranscriptPair } from "../workflow/types";
+import type { FloatingFormState, QuickFormState, RuntimeState, SourceOption, TranscriptPair } from "../workflow/types";
+import FloatingCaption from "./FloatingCaption.vue";
 
 defineProps<{
   form: QuickFormState;
+  floatingForm: FloatingFormState;
   state: RuntimeState;
   source: SourceOption;
   runtimeStatus: string;
@@ -11,6 +13,7 @@ defineProps<{
   sourceSyncState: SourceSyncState;
   mediaUrl: string | null;
   audioUrl: string | null;
+  mediaKind: "video" | "audio";
   currentPair: TranscriptPair;
   selectedDisplayMode: string;
 }>();
@@ -22,6 +25,7 @@ const emit = defineEmits<{
   reset: [];
   openSettings: [];
   openDesktop: [];
+  expandSubtitles: [];
   syncPlayback: [currentTimeSeconds: number];
 }>();
 
@@ -45,7 +49,7 @@ function emitPlaybackTime(event: Event) {
     </header>
 
     <div class="media-screen">
-      <div v-if="mediaUrl" class="media-player-stack">
+      <div v-if="mediaKind === 'video' && mediaUrl" class="media-player-stack">
         <video
           class="fixture-video"
           :src="mediaUrl"
@@ -56,18 +60,22 @@ function emitPlaybackTime(event: Event) {
           @timeupdate="emitPlaybackTime"
           @seeked="emitPlaybackTime"
         />
-        <div v-if="audioUrl" class="fixture-audio-row">
-          <span>测试音频</span>
-          <audio
-            class="fixture-audio"
-            :src="audioUrl"
-            controls
-            preload="metadata"
-            data-testid="fixture-audio"
-            @timeupdate="emitPlaybackTime"
-            @seeked="emitPlaybackTime"
-          />
+      </div>
+      <div v-else-if="mediaKind === 'audio' && audioUrl" class="audio-stage">
+        <div>
+          <p>{{ source.label }} · {{ form.modelProfile }}</p>
+          <strong>音频同传</strong>
+          <span>{{ currentPair.source }}</span>
         </div>
+        <audio
+          class="fixture-audio"
+          :src="audioUrl"
+          controls
+          preload="metadata"
+          data-testid="fixture-audio"
+          @timeupdate="emitPlaybackTime"
+          @seeked="emitPlaybackTime"
+        />
       </div>
       <div v-else class="empty-media">
         <p>{{ source.label }} · {{ form.modelProfile }}</p>
@@ -75,9 +83,12 @@ function emitPlaybackTime(event: Event) {
         <span>{{ currentPair.source }}</span>
       </div>
 
-      <div class="floating-caption" :class="{ detached: selectedDisplayMode === '悬浮字幕' }">
-        {{ currentPair.translation }}
-      </div>
+      <FloatingCaption
+        v-if="selectedDisplayMode === '悬浮字幕'"
+        :pair="currentPair"
+        :form="floatingForm"
+        @close="emit('expandSubtitles')"
+      />
     </div>
 
     <footer class="media-panel-footer">
@@ -89,6 +100,9 @@ function emitPlaybackTime(event: Event) {
       <div class="media-actions">
         <button class="stage-button" type="button" @click="emit('openSettings')">设置</button>
         <button class="stage-button" type="button" @click="emit('openDesktop')">悬浮</button>
+        <button v-if="selectedDisplayMode === '悬浮字幕'" class="stage-button" type="button" @click="emit('expandSubtitles')">
+          展开字幕栏
+        </button>
         <button v-if="state === 'running'" class="stage-button" type="button" @click="emit('pause')">暂停</button>
         <button v-if="state === 'paused'" class="stage-button primary" type="button" @click="emit('resume')">继续</button>
         <button v-if="state !== 'setup' && state !== 'report'" class="stage-button danger" type="button" @click="emit('end')">

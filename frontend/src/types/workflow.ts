@@ -64,6 +64,8 @@ export interface FloatingFormState {
   style: string;
   size: string;
   opacity: string;
+  captionPinned: boolean;
+  captionOffsetY: number;
 }
 
 export interface RuntimeSummary {

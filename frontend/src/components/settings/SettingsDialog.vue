@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import LanguagePairField from "./LanguagePairField.vue";
+import SourceSelect from "./SourceSelect.vue";
 import SourcePreparation from "../workflow/SourcePreparation.vue";
-import SourceSelector from "../workflow/SourceSelector.vue";
 import type { QuickFormState, RuntimeState, SourceInputState, SourceOption } from "../workflow/types";
 
 defineProps<{
@@ -48,17 +49,21 @@ const emit = defineEmits<{
             <span>01</span>
             <strong>基本信息</strong>
           </div>
-          <label class="block">
-            <span class="form-label">会话名称</span>
-            <input v-model="form.name" class="form-control" type="text" />
-          </label>
+          <div class="settings-two">
+            <label class="block">
+              <span class="form-label">会话名称</span>
+              <input v-model="form.name" class="form-control" type="text" />
+              <small class="field-hint">用于会话报告与导出文件命名</small>
+            </label>
 
-          <label class="block">
-            <span class="form-label">专业领域</span>
-            <select v-model="form.domain" class="form-control">
-              <option v-for="domain in domains" :key="domain">{{ domain }}</option>
-            </select>
-          </label>
+            <label class="block">
+              <span class="form-label">专业领域</span>
+              <select v-model="form.domain" class="form-control">
+                <option v-for="domain in domains" :key="domain">{{ domain }}</option>
+              </select>
+              <small class="field-hint">决定术语风格，参与实时与会后纠偏</small>
+            </label>
+          </div>
         </section>
 
         <section class="settings-group">
@@ -66,25 +71,15 @@ const emit = defineEmits<{
             <span>02</span>
             <strong>音源与方向</strong>
           </div>
-          <div class="settings-two">
-            <label class="block">
-              <span class="form-label">源语言</span>
-              <select v-model="form.sourceLanguage" class="form-control">
-                <option v-for="language in languages" :key="language">{{ language }}</option>
-              </select>
-            </label>
-            <label class="block">
-              <span class="form-label">目标语言</span>
-              <select v-model="form.targetLanguage" class="form-control">
-                <option v-for="language in targetLanguages" :key="language">{{ language }}</option>
-              </select>
-            </label>
-          </div>
-
-          <div>
-            <span class="form-label">输入声源</span>
-            <SourceSelector :sources="sources" :selected-key="form.source" @select="emit('selectSource', $event)" />
-          </div>
+          <LanguagePairField
+            :source-language="form.sourceLanguage"
+            :target-language="form.targetLanguage"
+            :languages="languages"
+            :target-languages="targetLanguages"
+            @update-source-language="form.sourceLanguage = $event"
+            @update-target-language="form.targetLanguage = $event"
+          />
+          <SourceSelect :sources="sources" :selected-key="form.source" @select="emit('selectSource', $event)" />
           <SourcePreparation
             :source="selectedSource"
             :input="input"
