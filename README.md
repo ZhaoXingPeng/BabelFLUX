@@ -68,6 +68,20 @@ POST /api/models/tts/speech
 
 真实调用需要在 `.env` 设置 `DASHSCOPE_API_KEY`，如使用业务空间再设置 `DASHSCOPE_WORKSPACE_ID`。常规测试使用 mock，不会消耗真实模型配额。
 
+## 第三方依赖
+
+**前端（`frontend/`）**
+
+- `vue` / `vue-router` / `pinia`：框架、路由（主屏到工作台）和状态管理。
+- `tailwindcss` / `postcss` / `autoprefixer`：原子化样式和设计 token。
+- `gsap`：主屏入场、字幕纠偏高亮和工作台状态动效。
+- `@fontsource/fraunces` / `@fontsource-variable/geist`：自托管 Web 字体，随前端构建打包。
+- `video.js` / `@vueuse/core` / `@floating-ui/vue`：媒体播放、组合式工具和浮层定位。
+
+**后端（`backend/`）**
+
+- `fastapi` / `uvicorn` / `pydantic` / `httpx` / `pyyaml`：REST、WebSocket、数据校验、供应商调用和配置加载。
+
 ## 客户端阶段
 
 Web 端无法实现电脑全局悬浮和长期系统音频监听，这部分能力进入桌面客户端阶段：
