@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "LingoSync AI Backend"
+    app_name: str = "AI Product Lab Backend"
     api_prefix: str = "/api"
     app_env: str = "development"
     frontend_origin: str = "http://localhost:5173"
