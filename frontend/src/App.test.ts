@@ -63,15 +63,35 @@ function mountHome(): VueWrapper {
 }
 
 function findButton(wrapper: VueWrapper, text: string) {
-  const button = wrapper.findAll("button").find((item) => item.text().includes(text));
+  const button = wrapper
+    .findAll("button")
+    .find(
+      (item) =>
+        item.text().includes(text) ||
+        item.attributes("aria-label")?.includes(text) ||
+        item.attributes("title")?.includes(text)
+    );
   expect(button, `button "${text}" should exist`).toBeTruthy();
   return button!;
 }
 
+async function chooseSelect(wrapper: VueWrapper, name: string, value: string) {
+  const root = wrapper.find(`[data-select-id="${name}"]`);
+  expect(root.exists(), `select "${name}" should exist`).toBe(true);
+
+  const trigger = root.find(".select-trigger");
+  expect(trigger.exists(), `select "${name}" trigger should exist`).toBe(true);
+  await trigger.trigger("keydown", { key: "ArrowDown" });
+  await nextTick();
+
+  const option = root.find(`[data-select-option="${value}"]`);
+  expect(option.exists(), `select "${name}" option "${value}" should exist`).toBe(true);
+  await option.trigger("click");
+  await nextTick();
+}
+
 async function setSource(wrapper: VueWrapper, sourceKey: string) {
-  const sourceSelect = wrapper.findAll("select")[3];
-  expect(sourceSelect, "source select should exist").toBeTruthy();
-  await sourceSelect.setValue(sourceKey);
+  await chooseSelect(wrapper, "source-select", sourceKey);
 }
 
 function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
@@ -173,7 +193,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(wrapper.find('[data-testid="fixture-video"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="fixture-audio"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain("灵犀同传");
+    expect(wrapper.text()).toContain("同声传译设置");
     expect(wrapper.text()).toContain("video.mp4 / voice.m4a / en.txt / ch.txt 已就绪");
 
     await findButton(wrapper, "开始同传").trigger("click");
@@ -206,18 +226,17 @@ describe("同传工作台 mock 流程", () => {
     expect(store.sourceSyncState.message).toContain("01:14");
   });
 
-  it("从快速同传配置走完开始、事件、暂停、继续和结束报告", async () => {
+  it("从快速同传配置走完开始、事件和结束报告", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "ui-session-1", status: "created" });
     const wrapper = mountApp();
     const store = useSessionStore();
 
     await wrapper.find('input[type="text"]').setValue("季度发布会同传");
-    const selects = wrapper.findAll("select");
-    await selects[0].setValue("商务");
-    await selects[1].setValue("英语");
-    await selects[2].setValue("日语");
+    await chooseSelect(wrapper, "domain", "商务");
+    await chooseSelect(wrapper, "source-language", "英语");
+    await chooseSelect(wrapper, "target-language", "日语");
     await setSource(wrapper, "browser-tab");
-    await wrapper.findAll("select")[4].setValue("高准确");
+    await chooseSelect(wrapper, "model-profile", "高准确");
     await findButton(wrapper, "申请权限").trigger("click");
     await flushPromises();
     await findButton(wrapper, "开始同传").trigger("click");
@@ -254,21 +273,15 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.text()).toContain("原译季度发布计划");
     expect(wrapper.text()).toContain("已修正");
 
-    await findButton(wrapper, "暂停").trigger("click");
-    expect(store.status).toBe("paused");
-    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "pause_session" }));
-
-    await findButton(wrapper, "继续").trigger("click");
-    expect(store.status).toBe("running");
-    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "resume_session" }));
-
-    await findButton(wrapper, "结束").trigger("click");
+    await findButton(wrapper, "结束同传").trigger("click");
     expect(wrapper.text()).toContain("结束本次同传？");
-    await findButton(wrapper, "结束会议").trigger("click");
+    const confirmEndButton = wrapper.findAll("button").find((item) => item.text() === "结束同传");
+    expect(confirmEndButton, "confirm end button should exist").toBeTruthy();
+    await confirmEndButton!.trigger("click");
     await nextTick();
 
     expect(store.modeStates.quick).toBe("report");
-    expect(wrapper.text()).toContain("会议报告");
+    expect(wrapper.text()).toContain("同传报告");
     expect(wrapper.text()).toContain("1 条");
   });
 

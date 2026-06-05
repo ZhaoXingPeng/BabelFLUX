@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import SelectField from "../common/SelectField.vue";
 
 const props = defineProps<{
   sourceLanguage: string;
@@ -41,9 +42,14 @@ function swapLanguages() {
   <div class="language-pair-field">
     <label>
       <span>源语言</span>
-      <select :value="sourceLanguage" @change="emit('updateSourceLanguage', ($event.target as HTMLSelectElement).value)">
-        <option v-for="language in languages" :key="language">{{ language }}</option>
-      </select>
+      <SelectField
+        :model-value="sourceLanguage"
+        name="source-language"
+        label="源语言"
+        variant="language"
+        :options="languages"
+        @update:model-value="emit('updateSourceLanguage', $event)"
+      />
       <strong>{{ sourceCode }}</strong>
     </label>
     <button class="language-swap" type="button" :disabled="!canSwap" aria-label="交换源语言和目标语言" @click="swapLanguages">
@@ -51,9 +57,14 @@ function swapLanguages() {
     </button>
     <label>
       <span>目标语言</span>
-      <select :value="targetLanguage" @change="emit('updateTargetLanguage', ($event.target as HTMLSelectElement).value)">
-        <option v-for="language in targetLanguages" :key="language">{{ language }}</option>
-      </select>
+      <SelectField
+        :model-value="targetLanguage"
+        name="target-language"
+        label="目标语言"
+        variant="language"
+        :options="targetLanguages"
+        @update:model-value="emit('updateTargetLanguage', $event)"
+      />
       <strong>{{ targetCode }}</strong>
     </label>
   </div>

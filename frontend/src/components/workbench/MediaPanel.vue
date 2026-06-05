@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SourceSyncState } from "../../types/events";
+import Icon from "../icons/Icon.vue";
 import type {
   DesktopLaunchState,
   FloatingFormState,
@@ -28,13 +29,10 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  pause: [];
-  resume: [];
   end: [];
   reset: [];
-  openSettings: [];
   openDesktop: [];
-  expandSubtitles: [];
+  toggleFloatingCaptions: [];
   syncPlayback: [currentTimeSeconds: number];
 }>();
 
@@ -96,7 +94,7 @@ function emitPlaybackTime(event: Event) {
         v-if="selectedDisplayMode === '悬浮字幕'"
         :pair="currentPair"
         :form="floatingForm"
-        @close="emit('expandSubtitles')"
+        @close="emit('toggleFloatingCaptions')"
       />
     </div>
 
@@ -108,19 +106,47 @@ function emitPlaybackTime(event: Event) {
         <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
-        <button class="stage-button" type="button" @click="emit('openSettings')">设置</button>
-        <button class="stage-button" type="button" :disabled="desktopLaunchState === 'launching'" @click="emit('openDesktop')">
-          {{ desktopLaunchState === "launching" ? "唤起中" : "投送桌面" }}
+        <button
+          class="stage-button icon-stage-button"
+          type="button"
+          :disabled="desktopLaunchState === 'launching'"
+          :aria-label="desktopLaunchState === 'launching' ? '正在唤起桌面悬浮窗' : '投送桌面悬浮窗'"
+          :title="desktopLaunchState === 'launching' ? '正在唤起桌面悬浮窗' : '投送桌面悬浮窗'"
+          @click="emit('openDesktop')"
+        >
+          <Icon name="monitor-up" :size="18" />
         </button>
-        <button v-if="selectedDisplayMode === '悬浮字幕'" class="stage-button" type="button" @click="emit('expandSubtitles')">
-          展开字幕栏
+        <button
+          v-if="state !== 'report'"
+          class="stage-button icon-stage-button"
+          type="button"
+          :class="{ active: selectedDisplayMode === '悬浮字幕' }"
+          :aria-label="selectedDisplayMode === '悬浮字幕' ? '展开字幕栏' : '切换悬浮字幕'"
+          :title="selectedDisplayMode === '悬浮字幕' ? '展开字幕栏' : '切换悬浮字幕'"
+          @click="emit('toggleFloatingCaptions')"
+        >
+          <Icon name="picture-in-picture-2" :size="18" />
         </button>
-        <button v-if="state === 'running'" class="stage-button" type="button" @click="emit('pause')">暂停</button>
-        <button v-if="state === 'paused'" class="stage-button primary" type="button" @click="emit('resume')">继续</button>
-        <button v-if="state !== 'setup' && state !== 'report'" class="stage-button danger" type="button" @click="emit('end')">
-          结束
+        <button
+          v-if="state !== 'setup' && state !== 'report'"
+          class="stage-button icon-stage-button danger"
+          type="button"
+          aria-label="结束同传"
+          title="结束同传"
+          @click="emit('end')"
+        >
+          <Icon name="square" :size="15" />
         </button>
-        <button v-if="state === 'report'" class="stage-button" type="button" @click="emit('reset')">新建同传</button>
+        <button
+          v-if="state === 'report'"
+          class="stage-button icon-stage-button"
+          type="button"
+          aria-label="新建同传"
+          title="新建同传"
+          @click="emit('reset')"
+        >
+          <Icon name="plus" :size="18" />
+        </button>
       </div>
     </footer>
   </section>

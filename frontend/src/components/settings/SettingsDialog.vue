@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SelectField from "../common/SelectField.vue";
+import Icon from "../icons/Icon.vue";
 import LanguagePairField from "./LanguagePairField.vue";
 import SourceSelect from "./SourceSelect.vue";
 import SourcePreparation from "../workflow/SourcePreparation.vue";
@@ -39,7 +41,9 @@ const emit = defineEmits<{
         </div>
         <div class="settings-actions">
           <span>{{ statusLabel }}</span>
-          <button class="icon-button light" type="button" aria-label="关闭设置" @click="emit('close')">×</button>
+          <button class="icon-button light" type="button" aria-label="关闭设置" @click="emit('close')">
+            <Icon name="x" :size="18" />
+          </button>
         </div>
       </header>
 
@@ -58,9 +62,7 @@ const emit = defineEmits<{
 
             <label class="block">
               <span class="form-label">专业领域</span>
-              <select v-model="form.domain" class="form-control">
-                <option v-for="domain in domains" :key="domain">{{ domain }}</option>
-              </select>
+              <SelectField v-model="form.domain" name="domain" label="专业领域" :options="domains" />
               <small class="field-hint">决定术语风格，参与实时与会后纠偏</small>
             </label>
           </div>
@@ -97,9 +99,7 @@ const emit = defineEmits<{
           </div>
           <label class="block">
             <span class="form-label">模型选择</span>
-            <select v-model="form.modelProfile" class="form-control">
-              <option v-for="profile in modelProfiles" :key="profile">{{ profile }}</option>
-            </select>
+            <SelectField v-model="form.modelProfile" name="model-profile" label="模型选择" :options="modelProfiles" />
           </label>
           <p class="settings-note">使用后端模型策略统一路由，前端不接触供应商密钥。</p>
         </section>

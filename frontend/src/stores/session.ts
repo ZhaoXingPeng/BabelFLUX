@@ -34,6 +34,7 @@ let desktopLaunchTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 1500;
+const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 
 const defaultSourceSyncState: SourceSyncState = {
   status: "listening",
@@ -209,6 +210,16 @@ function formatPlaybackTime(ms: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function defaultSessionName(): string {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `同传_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function shouldRefreshDefaultSessionName(name: string): boolean {
+  return name.trim().length === 0 || DEFAULT_SESSION_NAME_PATTERN.test(name);
+}
+
 function formatRuntimeState(state: RuntimeState): string {
   const labels: Record<RuntimeState, string> = {
     setup: "待开始",
@@ -312,8 +323,8 @@ export const useSessionStore = defineStore("session", {
       floating: "setup"
     },
     quickForm: {
-      name: "国际技术分享同传",
-      domain: "技术",
+      name: defaultSessionName(),
+      domain: "通用",
       sourceLanguage: "英语",
       targetLanguage: "中文",
       modelProfile: "智能默认",
@@ -639,6 +650,10 @@ export const useSessionStore = defineStore("session", {
           : isSourceInputReady(this.floatingForm.source, this.floatingInput);
       if (blockedSource || !inputReady || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
 
+      if (mode === "quick" && shouldRefreshDefaultSessionName(this.quickForm.name)) {
+        this.quickForm.name = defaultSessionName();
+      }
+
       const requestId = this.startRequestId + 1;
       this.startRequestId = requestId;
 
@@ -704,6 +719,9 @@ export const useSessionStore = defineStore("session", {
         this.resetSessionData();
       }
       this.modeStates[mode] = "setup";
+      if (mode === "quick" && shouldRefreshDefaultSessionName(this.quickForm.name)) {
+        this.quickForm.name = defaultSessionName();
+      }
       if (mode === "quick" && this.quickForm.source === testVideoFixture.key && !this.activeMode) {
         this.loadTestVideoFixturePreview();
       }
