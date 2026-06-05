@@ -1,0 +1,150 @@
+AI 同声传译助手 - 桌面客户端阶段规划
+版本：v0.1
+日期：2026-06-05
+
+一、阶段结论
+桌面客户端正式进入下一阶段，但不替代 Web 工作台。
+
+Web 端定位：
+1. 快速同传工作台。
+2. 上传文件、URL、麦克风、浏览器标签页/屏幕音频等浏览器授权范围内的输入。
+3. 原始视频/音频、分区对照、逐句对照、Web 内嵌悬浮字幕展示。
+4. 通过 deep link 快速唤起桌面客户端全局悬浮能力。
+
+桌面客户端定位：
+1. 电脑全局悬浮字幕。
+2. 系统级音频采集或特定应用音频采集。
+3. 跨应用置顶、锁定、透明度、缩放、热键和托盘控制。
+4. 与 Web/Backend 共享会话协议、字幕事件和导出结果。
+
+二、为什么必须有客户端
+浏览器无法可靠实现以下能力：
+1. 将字幕窗口浮在浏览器之外的其他应用上方。
+2. 长时间监听整个电脑的系统音频。
+3. 读取或选择任意桌面应用音频流。
+4. 注册全局快捷键、系统托盘、开机自启动、窗口穿透和系统级权限提示。
+
+浏览器可实现的能力边界：
+1. 用户授权后的麦克风采集。
+2. 用户授权后的标签页、窗口或屏幕采集。
+3. Web 页面内部的字幕层展示。
+4. 唤起已安装客户端，例如 lingosync://floating/start。
+
+三、客户端产品边界
+P0：客户端骨架与全局悬浮演示
+1. 启动客户端主进程。
+2. 注册 deep link：lingosync://floating/start。
+3. 打开透明、置顶、可拖拽的字幕窗口。
+4. 从 mock 或 WebSocket 会话接收字幕事件。
+5. 支持锁定、关闭、字号、透明度、暂停/继续。
+
+P1：系统音频采集
+1. Windows：优先评估 WASAPI loopback。
+2. macOS：优先评估 ScreenCaptureKit 或系统音频权限链路。
+3. Linux：优先评估 PipeWire/PulseAudio。
+4. 将音频切片后复用后端 audio_chunk 协议。
+
+P2：应用级集成与稳定性
+1. 指定应用或窗口音频源。
+2. 全局快捷键。
+3. 托盘菜单。
+4. 崩溃恢复和会话续连。
+5. 自动更新。
+
+四、推荐技术路线
+客户端优先使用 Tauri 路线，理由：
+1. 复用当前 Vue 3 + TypeScript 前端能力。
+2. 客户端系统能力可通过 Rust 侧实现或封装系统 API。
+3. 体积通常比 Electron 更小。
+4. 适合渐进式从 Web 工作台扩展到桌面端。
+
+备选：
+1. Electron：生态成熟，适合快速做全局窗口和协议注册，但体积较大。
+2. 原生 Swift/Windows App SDK：系统能力更强，但跨平台成本高，不适合当前阶段。
+
+五、客户端模块拆分
+1. Shell
+负责客户端启动、单实例、协议注册、托盘和窗口生命周期。
+
+2. OverlayWindow
+负责全局悬浮字幕窗口：置顶、透明、拖拽、锁定、缩放、关闭。
+
+3. CaptureAdapter
+负责系统音频、麦克风、应用音频或屏幕音频采集。
+
+4. SessionBridge
+负责和后端会话通信，复用当前 WebSocket 事件：
+session_started、source_sync_state、transcript_segment、translation_segment、revision_event、error。
+
+5. LocalSettings
+负责保存客户端本地设置，例如字幕样式、快捷键、默认输入源、后端地址。
+
+6. LauncherBridge
+负责处理 Web deep link：
+lingosync://floating/start?sessionId=...&source=system-audio&targetLanguage=zh。
+
+六、Web 到客户端启动协议
+最小 deep link：
+lingosync://floating/start
+
+建议扩展参数：
+1. sessionId：已有 Web 会话 ID，可选。
+2. source：system-audio、microphone、browser-tab、screen-window。
+3. sourceLanguage：auto、en、zh、ja 等。
+4. targetLanguage：zh、en、ja 等。
+5. displayMode：floating、bilingual、translation-only。
+
+示例：
+lingosync://floating/start?source=system-audio&sourceLanguage=auto&targetLanguage=zh&displayMode=floating
+
+客户端处理策略：
+1. 若客户端已运行，则唤醒现有实例并打开悬浮字幕。
+2. 若带 sessionId，则尝试加入现有会话。
+3. 若不带 sessionId，则创建新的桌面端会话。
+4. 若系统权限不足，则展示系统权限引导。
+
+七、安全与隐私原则
+1. 不做隐式全局监听，必须由用户主动开始。
+2. 系统音频采集必须在客户端界面展示明确状态。
+3. 默认不保存原始音频。
+4. 字幕、报告和日志的保存策略由用户明确选择。
+5. deep link 只作为启动指令，不携带敏感凭据。
+
+八、PR 拆分建议
+PR21：建立客户端阶段规划
+1. 新增客户端阶段文档。
+2. 新增 desktop/README.md。
+3. 更新 README 和技术栈说明。
+
+PR22：客户端工程脚手架
+1. 新增 desktop/ 基础工程。
+2. 建立客户端 lint/build 命令。
+3. 不接系统音频，只能打开本地窗口。
+
+PR23：deep link 和 Web 启动闭环
+1. 客户端注册 lingosync:// 协议。
+2. Web 点击启动客户端后可打开悬浮窗口。
+3. 增加未安装客户端时的提示策略。
+
+PR24：全局悬浮字幕窗口 MVP
+1. 透明置顶窗口。
+2. 字幕 mock 流展示。
+3. 锁定、关闭、字号、透明度。
+
+PR25：系统音频采集原型
+1. Windows/macOS 至少完成一个平台可采集。
+2. 音频切片后走后端 audio_chunk。
+3. 加入权限和失败状态。
+
+PR26：客户端会话与后端协议打通
+1. 桌面端创建/加入会话。
+2. 接收真实 WebSocket 字幕事件。
+3. 支持暂停、继续、结束和报告导出。
+
+九、当前阶段验收标准
+本阶段完成后，应能清楚回答：
+1. 为什么 Web 不能实现电脑全局悬浮。
+2. 客户端第一阶段具体实现什么，不实现什么。
+3. Web 如何快速唤起客户端。
+4. 客户端后续 PR 如何拆分。
+5. 后续代码落在哪个目录，如何与现有 frontend/backend 共享协议。
