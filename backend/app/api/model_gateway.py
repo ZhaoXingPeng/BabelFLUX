@@ -12,6 +12,8 @@ from app.models.model_gateway import (
     TTSSynthesizeRequest,
     TTSSynthesizeResponse,
 )
+from app.models.model_strategy import StrategyPlanRequest, StrategyPlanResponse
+from app.services.model_strategy import build_strategy_plan
 from app.services.providers.dashscope import (
     DashScopeAPIError,
     DashScopeClient,
@@ -70,6 +72,15 @@ async def generate_llm(
         finishReason=result.finish_reason,
         usage=result.usage,
     )
+
+
+@router.post(
+    "/strategy/plan",
+    response_model=StrategyPlanResponse,
+    response_model_by_alias=True,
+)
+def plan_model_strategy(request: StrategyPlanRequest) -> StrategyPlanResponse:
+    return build_strategy_plan(request)
 
 
 @router.post(
@@ -151,4 +162,3 @@ async def synthesize_speech(
         sessionId=result.session_id,
         events=result.events,
     )
-

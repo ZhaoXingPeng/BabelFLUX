@@ -1,0 +1,325 @@
+AI 同声传译助手 - 模型调用与实时同传实现方案
+版本：v0.1
+日期：2026-06-05
+
+一、目标
+
+本方案把模型能力与产品功能绑定清楚，形成可落地的实时链路：
+
+英文音视频输入 -> 英文源文 -> 中文字幕 -> 实时纠偏 -> 可选中文语音 -> 会话结束后的全文纠偏报告。
+
+首版优先保证字幕同传稳定。中文语音播报是用户可选增强，不阻塞字幕主链路。
+
+二、模型分工
+
+1. 主实时同传模型：Qwen LiveTranslate
+
+模型：qwen3.5-livetranslate-flash-realtime。
+
+定位：
+1. 实时接收英文音频。
+2. 输出英文源文。
+3. 输出中文字幕。
+4. 可选输出中文音频。
+5. 支持热词和视觉增强。
+
+主链路默认使用文本输出：
+
+modalities = ["text"]
+
+用户开启“听中文同传”后再切换为：
+
+modalities = ["text", "audio"]
+
+2. 文本同传 fallback：Gummy
+
+模型：gummy-realtime-v1。
+
+定位：
+1. 同时输出源文识别结果和翻译结果。
+2. 适合不需要视觉增强和中文音频的文本同传。
+
+已用默认英文测试视频小段验证：
+1. 源文：I feel so fortunate that my first job was working at the Museum of Modern Art...
+2. 中文：我感到很幸运，我的第一份工作是在现代艺术博物馆做回顾展。
+
+3. ASR-only fallback：Fun-ASR
+
+模型：fun-asr-realtime。
+
+定位：
+1. 只输出源语言文本。
+2. 不承担翻译。
+3. 适合排查实时翻译模型问题，或后续改为 ASR + 独立翻译链路。
+
+4. 可选中文语音：Qwen-TTS
+
+模型：qwen3-tts-flash-realtime。
+
+定位：
+1. 当主链路未启用 LiveTranslate 音频输出时，按 final 中文句子做 TTS。
+2. 只对 final/revised 译文合成，避免 partial 文本频繁播报。
+
+5. 全文纠偏和报告：LLM
+
+模型：qwen3.7-plus 或同级别文本模型。
+
+定位：
+1. 会话结束后处理完整英文转写、完整中文字幕、术语表和实时修正记录。
+2. 输出最终双语稿、最终修正记录、术语命中、摘要和质量提示。
+3. 实时阶段只在高风险小窗口里少量调用，避免拖慢字幕。
+
+三、实时主链路
+
+1. 会话初始化
+
+后端创建 provider runtime，默认选择 Qwen LiveTranslate。
+
+session.update 配置：
+
+{
+  "modalities": ["text"],
+  "input_audio_format": "pcm",
+  "input_audio_transcription": {
+    "model": "qwen3-asr-flash-realtime",
+    "language": "en"
+  },
+  "translation": {
+    "language": "zh",
+    "corpus": {
+      "phrases": {
+        "near win": "差一点成功"
+      }
+    }
+  }
+}
+
+2. 输入
+
+输入统一转为 16kHz、mono、PCM。
+
+来源：
+1. 默认测试视频音频。
+2. 上传视频提取音频。
+3. 上传音频。
+4. 浏览器标签页或屏幕音频。
+
+3. 输出映射
+
+模型原始事件映射为项目事件：
+
+conversation.item.input_audio_transcription.text
+-> transcript_segment，status = partial
+
+conversation.item.input_audio_transcription.completed
+-> transcript_segment，status = final
+
+response.text.text
+-> translation_segment，status = partial
+
+response.text.done
+-> translation_segment，status = final
+
+response.audio.delta
+-> translation_audio_chunk，只有用户开启中文语音时转发。
+
+四、实时纠偏
+
+实时纠偏由项目自己的策略层实现，不直接等同于模型能力。
+
+策略层维护一个可修正窗口：
+1. 最近 3 至 5 条字幕。
+2. 或最近 20 至 40 秒。
+
+触发条件：
+1. partial 变 final，文本差异明显。
+2. 新上下文让前文翻译需要调整。
+3. 术语表命中，但译文没有使用目标术语。
+4. 数字、人名、否定、专有名词等高风险内容。
+5. 源语言同步从 lagging 或 missing 恢复。
+6. 用户更新术语表。
+
+处理优先级：
+1. 术语表和规则修正。
+2. 模型 final 结果覆盖 partial。
+3. 高风险片段再调用 LLM 小窗口纠偏。
+
+输出统一为 RevisionEvent：
+
+{
+  "type": "revision_event",
+  "revision": {
+    "revisionId": "...",
+    "targetSegmentIds": ["..."],
+    "beforeText": "...",
+    "afterText": "...",
+    "reason": "术语修正",
+    "confidence": 0.92
+  }
+}
+
+五、最终全文纠偏
+
+最终纠偏在 stop_session 后异步执行。
+
+输入：
+1. 完整英文源文。
+2. 完整中文字幕。
+3. 实时 RevisionEvent 列表。
+4. 会话领域 domain。
+5. 术语表。
+6. 源同步状态日志。
+
+输出：
+1. finalTranscript。
+2. finalTranslation。
+3. finalRevisions。
+4. glossaryHits。
+5. summary。
+6. qualityNotes。
+
+LLM 输出必须是 JSON，方便前端展示和导出。
+
+六、领域策略
+
+不同 domain 使用不同纠偏侧重点：
+
+通用：
+1. 忠实、自然、字幕可读。
+
+技术：
+1. 保留 API、模型名、框架名、论文术语。
+2. 优先用户术语表。
+3. 不把代码和产品名翻译成普通词。
+
+商务：
+1. 保留公司名、职位、指标、货币和会议语气。
+
+教育：
+1. 概念解释准确，表达清晰。
+
+医疗：
+1. 谨慎表达，不自行扩写诊断结论。
+
+法律：
+1. 术语准确，不擅自解释法条。
+
+七、后端落地模块
+
+建议模块：
+
+backend/app/services/model_strategy.py
+1. 生成 provider 选择策略。
+2. 生成 LiveTranslate session.update。
+3. 生成 Gummy fallback 配置。
+4. 生成实时纠偏策略。
+5. 生成最终全文纠偏 prompt。
+
+backend/app/services/providers/dashscope/live_translate.py
+1. 连接 Qwen LiveTranslate。
+2. 发送音频帧。
+3. 标准化模型事件。
+
+backend/app/services/providers/dashscope/gummy.py
+1. 连接 Gummy。
+2. 标准化源文和译文。
+
+backend/app/services/revision.py
+1. 维护可修正窗口。
+2. 根据术语表和 final 结果生成 RevisionEvent。
+3. 对高风险片段发起 LLM 小窗口纠偏。
+
+backend/app/services/final_report.py
+1. 调用 LLM 生成最终报告。
+
+八、API 落地
+
+新增策略预览 API：
+
+POST /api/models/strategy/plan
+
+输入：
+
+{
+  "sourceLanguage": "en",
+  "targetLanguage": "zh",
+  "domain": "技术",
+  "ttsEnabled": false,
+  "providerPreference": "auto",
+  "glossary": [
+    {
+      "sourceTerm": "near win",
+      "targetTerm": "差一点成功",
+      "priority": 10
+    }
+  ]
+}
+
+输出：
+1. primaryProvider。
+2. fallbackProviders。
+3. liveTranslateSession。
+4. gummyConfig。
+5. realtimeRevisionPolicy。
+6. finalCorrectionPrompt。
+
+后续会话 API 可以直接复用该策略结果。
+
+九、前端落地
+
+前端继续复用现有事件：
+1. source_sync_state。
+2. transcript_segment。
+3. translation_segment。
+4. revision_event。
+
+需要新增配置项：
+1. 模型策略：auto / live_translate / gummy / fun_asr。
+2. 是否开启中文语音。
+3. domain。
+4. glossary。
+
+十、测试策略
+
+1. 单测
+
+使用 fake WebSocket 和 mock HTTP，不消耗真实模型配额。
+
+2. 小流量真实验证
+
+每次只用默认英文测试视频 4 至 6 秒音频：
+1. Qwen LiveTranslate：验证英文源文 + 中文译文。
+2. Gummy：验证英文源文 + 中文译文。
+3. Qwen-TTS：验证中文音频字节返回。
+
+3. 前端回归
+
+继续验证默认视频时间轴、52 秒模拟纠偏和字幕 UI。
+
+十一、实施顺序
+
+第一步：
+1. 落地 model_strategy。
+2. 提供 /api/models/strategy/plan。
+3. 固化文档。
+
+第二步：
+1. 接入 LiveTranslate provider。
+2. 用默认测试视频音频输出真实双语字幕。
+
+第三步：
+1. 接入 Gummy fallback。
+2. 增加 provider 自动降级。
+
+第四步：
+1. 实现实时纠偏窗口。
+2. 接入术语表修正。
+
+第五步：
+1. 实现最终全文纠偏报告。
+2. 接入 domain prompt 和导出。
+
+第六步：
+1. 接入可选 TTS。
+2. 前端增加中文语音播放控制。
+
