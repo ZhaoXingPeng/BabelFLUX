@@ -18,6 +18,26 @@ def test_create_session() -> None:
     assert payload["sessionId"]
 
 
+def test_create_session_accepts_configured_frontend_payload() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/sessions",
+        json={
+            "inputMode": "browser_audio",
+            "sourceLanguage": "en",
+            "targetLanguage": "ja",
+            "productMode": "quick",
+            "sessionName": "季度发布会同传",
+            "domain": "商务",
+            "modelProfile": "高准确",
+            "sourceKey": "browser-tab",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+
+
 def test_mock_websocket_stream() -> None:
     client = TestClient(app)
     session_id = "test-session"
@@ -37,6 +57,23 @@ def test_mock_websocket_stream() -> None:
         "translation_segment",
         "revision_event",
     ]
+
+
+def test_mock_websocket_pause_and_resume() -> None:
+    client = TestClient(app)
+
+    with client.websocket_connect("/api/ws/sessions/test-session") as websocket:
+        websocket.receive_json()
+
+        websocket.send_json({"type": "pause_session"})
+        pause_event = websocket.receive_json()
+        assert pause_event["type"] == "source_sync_state"
+        assert pause_event["state"]["status"] == "missing"
+
+        websocket.send_json({"type": "resume_session"})
+        resume_event = websocket.receive_json()
+        assert resume_event["type"] == "source_sync_state"
+        assert resume_event["state"]["status"] == "syncing"
 
 
 def test_mock_events_conform_to_event_models() -> None:

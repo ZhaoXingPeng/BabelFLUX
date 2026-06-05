@@ -42,7 +42,7 @@ const { status, sessionId, sourceSyncState, wsConnected, errorMessage } = storeT
       <button
         class="rounded-full bg-tide px-5 py-3 text-sm font-bold text-ink transition hover:-translate-y-0.5 hover:shadow-lg"
         type="button"
-        @click="sessionStore.startDemoSession()"
+        @click="sessionStore.startMode('quick')"
       >
         启动 Demo
       </button>

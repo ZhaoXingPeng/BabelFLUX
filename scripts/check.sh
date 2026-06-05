@@ -24,5 +24,6 @@ if [ -f "$repo_root/frontend/package.json" ]; then
     (cd "$repo_root/frontend" && npm ci)
   fi
 
+  (cd "$repo_root/frontend" && npm run test)
   (cd "$repo_root/frontend" && npm run build)
 fi
