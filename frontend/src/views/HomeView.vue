@@ -40,12 +40,13 @@ function activateDesktop() {
         <span>流畅中文同传</span>
       </h1>
       <p class="home-subtitle" data-reveal>
-        面向技术分享、国际会议和网课内容，实时生成双语字幕，并在上下文到达后自动校正历史译文。
+        实时双语字幕，随上下文自动校正历史译文
       </p>
 
       <div class="entry-grid">
         <EntryCard
           data-reveal
+          index="01"
           badge="In browser"
           title="Web 端同传"
           subtitle="浏览器内音视频工作台"
@@ -54,10 +55,16 @@ function activateDesktop() {
           variant="primary"
           @activate="enterWeb"
         >
-          <template #mark>WEB</template>
+          <template #icon>
+            <svg viewBox="0 0 36 36" role="img" aria-label="Web 端">
+              <rect x="6" y="8" width="24" height="20" rx="3" />
+              <path d="M6 14h24M12 11h.01M16 11h.01" />
+            </svg>
+          </template>
         </EntryCard>
         <EntryCard
           data-reveal
+          index="02"
           badge="Desktop"
           title="客户端悬浮框"
           subtitle="全局置顶字幕窗"
@@ -65,11 +72,17 @@ function activateDesktop() {
           cta="激活客户端"
           @activate="activateDesktop"
         >
-          <template #mark>DESK</template>
+          <template #icon>
+            <svg viewBox="0 0 36 36" role="img" aria-label="客户端悬浮框">
+              <rect x="5" y="9" width="20" height="16" rx="3" />
+              <rect x="17" y="17" width="14" height="10" rx="2" />
+              <path d="M9 28h11" />
+            </svg>
+          </template>
         </EntryCard>
       </div>
 
-      <p class="home-footnote" data-reveal>英 / 日 / 韩 到中文 · 实时自动纠偏 · 双语记录导出</p>
+      <p class="home-footnote" data-reveal>多语种音视频 → 中文实时字幕 · 上下文自动纠偏 · 可选中文语音 · 双语稿导出</p>
     </section>
   </main>
 </template>

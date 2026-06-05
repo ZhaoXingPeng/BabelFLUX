@@ -305,7 +305,9 @@ export const useSessionStore = defineStore("session", {
       source: "browser-tab",
       style: "双语字幕",
       size: "标准",
-      opacity: "90%"
+      opacity: "90%",
+      captionPinned: false,
+      captionOffsetY: 0
     },
     quickInput: { ...defaultSourceInputState },
     floatingInput: { ...defaultSourceInputState },
@@ -373,6 +375,14 @@ export const useSessionStore = defineStore("session", {
     },
     selectedDisplayDescription(state): string {
       return displayModeCopy[state.selectedDisplayMode];
+    },
+    mediaKind(state): "video" | "audio" {
+      return state.quickForm.source === testVideoFixture.key || state.quickForm.source === "video-file" || state.quickForm.source === "url"
+        ? "video"
+        : "audio";
+    },
+    isLive(state): boolean {
+      return ["running", "paused", "report"].includes(state.modeStates.quick);
     },
     quickUrlError(state): string | null {
       return getUrlError(state.quickForm.source, state.quickInput.url);
@@ -787,7 +797,7 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "revision_event") {
         this.revisions = [event.revision, ...this.revisions].slice(0, 20);
-        this.markRevised(event.revision.targetSegmentIds);
+        this.markRevised(event.revision);
         return;
       }
 
@@ -797,14 +807,24 @@ export const useSessionStore = defineStore("session", {
       }
     },
 
-    markRevised(segmentIds: string[]) {
+    markRevised(revision: RevisionEvent) {
       const updateStatus = (segment: SubtitleSegment): SubtitleSegment =>
-        segmentIds.includes(segment.segmentId)
+        revision.targetSegmentIds.includes(segment.segmentId)
           ? { ...segment, status: "revised" as SegmentStatus }
           : segment;
 
       this.sourceSegments = this.sourceSegments.map(updateStatus);
-      this.translationSegments = this.translationSegments.map(updateStatus);
+      this.translationSegments = this.translationSegments.map((segment) =>
+        revision.targetSegmentIds.includes(segment.segmentId)
+          ? {
+              ...segment,
+              text: revision.afterText,
+              status: "revised" as SegmentStatus,
+              originalText: revision.beforeText,
+              revisionReason: revision.reason
+            }
+          : segment
+      );
     }
   }
 });

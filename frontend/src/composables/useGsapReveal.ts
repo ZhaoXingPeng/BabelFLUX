@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted, type Ref } from "vue";
 import { gsap } from "gsap";
+import { DUR, EASE, STAGGER, shouldReduceMotion } from "./motion";
 
 interface RevealOptions {
   duration?: number;
@@ -13,15 +14,15 @@ export function useGsapReveal(scope: Ref<HTMLElement | null>, options: RevealOpt
   onMounted(() => {
     const element = scope.value;
     if (!element) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (shouldReduceMotion()) return;
 
     ctx = gsap.context(() => {
       gsap.from("[data-reveal]", {
         autoAlpha: 0,
         y: options.y ?? 14,
-        duration: options.duration ?? 0.55,
-        ease: "power2.out",
-        stagger: options.stagger ?? 0.08
+        duration: options.duration ?? DUR.base,
+        ease: EASE,
+        stagger: options.stagger ?? STAGGER
       });
     }, element);
   });

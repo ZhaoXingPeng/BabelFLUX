@@ -12,8 +12,6 @@
   },
   "dependencies": {
     "@floating-ui/vue": "^1.1.9",
-    "@fontsource-variable/geist": "^5.2.9",
-    "@fontsource/fraunces": "^5.2.9",
     "@vueuse/core": "^12.8.2",
     "gsap": "^3.15.0",
     "pinia": "^2.3.1",

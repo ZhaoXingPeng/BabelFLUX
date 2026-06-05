@@ -55,6 +55,12 @@ function findButton(wrapper: VueWrapper, text: string) {
   return button!;
 }
 
+async function setSource(wrapper: VueWrapper, sourceKey: string) {
+  const sourceSelect = wrapper.findAll("select")[3];
+  expect(sourceSelect, "source select should exist").toBeTruthy();
+  await sourceSelect.setValue(sourceKey);
+}
+
 function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
   const socket: MockSocket = {
     readyState: 1,
@@ -149,15 +155,19 @@ describe("同传工作台 mock 流程", () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
-    const video = wrapper.find('[data-testid="fixture-video"]');
-    const audio = wrapper.find('[data-testid="fixture-audio"]');
-    expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
-    expect(audio.attributes("src")).toBe("/fixtures/test-video/voice.m4a");
+    expect(wrapper.find('[data-testid="fixture-video"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="fixture-audio"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("灵犀同传");
     expect(wrapper.text()).toContain("video.mp4 / voice.m4a / en.txt / ch.txt 已就绪");
-    expect(wrapper.text()).toContain("我感到很幸运");
 
     await findButton(wrapper, "开始同传").trigger("click");
     await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    const audio = wrapper.find('[data-testid="fixture-audio"]');
+    expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
+    expect(audio.exists()).toBe(false);
+    expect(wrapper.text()).toContain("我感到很幸运");
 
     expect(mockRuntime.createSession).not.toHaveBeenCalled();
     expect(store.modeStates.quick).toBe("running");
@@ -172,8 +182,8 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.text()).toContain("已修正");
     expect(wrapper.text()).toContain("near win");
 
-    Object.defineProperty(audio.element, "currentTime", { configurable: true, value: 74 });
-    await audio.trigger("timeupdate");
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 74 });
+    await video.trigger("timeupdate");
     await nextTick();
 
     expect(store.activeSegmentId).toBe("fixture-seg-026");
@@ -190,8 +200,8 @@ describe("同传工作台 mock 流程", () => {
     await selects[0].setValue("商务");
     await selects[1].setValue("英语");
     await selects[2].setValue("日语");
-    await selects[3].setValue("高准确");
-    await findButton(wrapper, "浏览器标签页音频").trigger("click");
+    await setSource(wrapper, "browser-tab");
+    await wrapper.findAll("select")[4].setValue("高准确");
     await findButton(wrapper, "申请权限").trigger("click");
     await flushPromises();
     await findButton(wrapper, "开始同传").trigger("click");
@@ -224,7 +234,8 @@ describe("同传工作台 mock 流程", () => {
 
     expect(wrapper.text()).toContain("已连接");
     expect(wrapper.text()).not.toContain("同声传译设置");
-    expect(wrapper.text()).toContain("请审阅季度发布计划。");
+    expect(wrapper.text()).toContain("季度发布方案");
+    expect(wrapper.text()).toContain("原译季度发布计划");
     expect(wrapper.text()).toContain("已修正");
 
     await findButton(wrapper, "暂停").trigger("click");
@@ -269,13 +280,13 @@ describe("同传工作台 mock 流程", () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
-    await findButton(wrapper, "浏览器标签页音频").trigger("click");
+    await setSource(wrapper, "browser-tab");
     await findButton(wrapper, "申请权限").trigger("click");
     await flushPromises();
     expect(store.quickInput.permissionState).toBe("granted");
     expect(store.quickCanStart).toBe(true);
 
-    await findButton(wrapper, "麦克风").trigger("click");
+    await setSource(wrapper, "microphone");
     await nextTick();
 
     expect(store.quickInput.permissionState).toBe("idle");
@@ -287,7 +298,7 @@ describe("同传工作台 mock 流程", () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
-    await findButton(wrapper, "URL").trigger("click");
+    await setSource(wrapper, "url");
     await nextTick();
     const startButton = findButton(wrapper, "开始同传");
     expect((startButton.element as HTMLButtonElement).disabled).toBe(true);

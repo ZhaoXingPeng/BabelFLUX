@@ -1,5 +1,6 @@
 <script setup lang="ts">
 defineProps<{
+  index: string;
   badge: string;
   title: string;
   subtitle: string;
@@ -20,8 +21,11 @@ const emit = defineEmits<{
     type="button"
     @click="emit('activate')"
   >
-    <span class="entry-card-mark" aria-hidden="true">
-      <slot name="mark">LS</slot>
+    <span class="entry-card-top">
+      <span>{{ index }}</span>
+      <span class="entry-card-icon" aria-hidden="true">
+        <slot name="icon" />
+      </span>
     </span>
     <span class="entry-card-copy">
       <span class="entry-card-badge">{{ badge }}</span>
@@ -33,7 +37,7 @@ const emit = defineEmits<{
     </span>
     <span class="entry-card-cta">
       {{ cta }}
-      <span aria-hidden="true">/</span>
+      <span aria-hidden="true">→</span>
     </span>
   </button>
 </template>
