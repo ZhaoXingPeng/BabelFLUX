@@ -1,0 +1,171 @@
+"""同传管线 / 纠偏 / 报告 的单元测试（不触网，用脚本化假 WebSocket）。
+
+重点回归：译文比源滞后约 2.8s，常常跨越「下一句的 speech_started」才到达——
+必须按 item_id（源）+ response_id（译文 FIFO 绑定）正确配对，绝不能张冠李戴。
+"""
+
+import asyncio
+import json
+
+import pytest
+
+from app.core.config import settings
+from app.services.pipeline import InterpretationPipeline
+from app.services.providers.dashscope import DashScopeConfig, LiveTranslateSession
+from app.services.report import render_md, render_srt, render_txt
+from app.services.revision import RealtimeReviser
+from app.services.session_store import SegmentRecord, SessionRecord
+
+
+class FakeWS:
+    """脚本化假 WS：按顺序产出服务端消息（JSON 字符串）。"""
+
+    def __init__(self, messages: list[dict]) -> None:
+        self._messages = [json.dumps(m, ensure_ascii=False) for m in messages]
+        self.sent: list[str] = []
+
+    async def send(self, data: str) -> None:
+        self.sent.append(data)
+
+    async def close(self) -> None:
+        return None
+
+    def __aiter__(self) -> "FakeWS":
+        self._iter = iter(self._messages)
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            await asyncio.sleep(0)
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+def _dummy_config() -> DashScopeConfig:
+    return DashScopeConfig(api_key="sk-test", workspace_id="ws-test")
+
+
+@pytest.mark.asyncio
+async def test_lagged_translation_pairs_with_correct_source() -> None:
+    # 两句话：A 的译文滞后到 B 的 speech_started 之后才到达。
+    src_txt = "conversation.item.input_audio_transcription.text"
+    src_done = "conversation.item.input_audio_transcription.completed"
+    messages = [
+        {"type": "session.created"},
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+        {"type": src_txt, "item_id": "itemA", "stash": "Hello"},
+        {"type": src_done, "item_id": "itemA", "transcript": "Hello world."},
+        # 下一句已经开始（B），但 A 的译文还没回来
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemB"},
+        {"type": src_txt, "item_id": "itemB", "stash": "Goodbye"},
+        # A 的译文现在才到（滞后，跨越了 B 的 speech_started）
+        {"type": "response.created", "response": {"id": "resp1"}},
+        {"type": "response.text.text", "response_id": "resp1", "text": "你好"},
+        {"type": "response.text.done", "response_id": "resp1", "text": "你好，世界。"},
+        {"type": "response.done", "response": {"id": "resp1"}},
+        {"type": src_done, "item_id": "itemB", "transcript": "Goodbye world."},
+        {"type": "response.created", "response": {"id": "resp2"}},
+        {"type": "response.text.done", "response_id": "resp2", "text": "再见，世界。"},
+        {"type": "response.done", "response": {"id": "resp2"}},
+    ]
+    record = SessionRecord(session_id="t", source_language="en", target_language="zh")
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._reviser.enabled = False  # 禁用 LLM 复核，避免触网
+
+    session = LiveTranslateSession(
+        _dummy_config(),
+        model="m",
+        websocket_connect=lambda *_a, **_k: _async_return(FakeWS(messages)),
+    )
+    await session.connect()
+    await pipeline._consume(session)
+
+    segs = {s.item_id: s for s in record.segments}
+    assert segs["itemA"].source_text == "Hello world."
+    assert segs["itemA"].translation_text == "你好，世界。"  # A 的译文配到 A，而非 B
+    assert segs["itemB"].source_text == "Goodbye world."
+    assert segs["itemB"].translation_text == "再见，世界。"
+
+
+async def _async_return(value: object) -> object:
+    return value
+
+
+def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
+    reviser = RealtimeReviser(
+        client=None, model="m", source_language="en", target_language="zh", domain="通用"
+    )
+    window = [
+        SegmentRecord(segment_id="s1", index=1, source_text="A", translation_text="旧译文"),
+        SegmentRecord(segment_id="s2", index=2, source_text="B", translation_text="最新句"),
+    ]
+    content = json.dumps(
+        {
+            "revisions": [
+                {"segmentId": "s1", "afterText": "新译文", "reason": "术语", "confidence": 0.9},
+                {"segmentId": "s1", "afterText": "低分", "reason": "x", "confidence": 0.2},
+                {"segmentId": "s2", "afterText": "改最新句", "reason": "x", "confidence": 0.9},
+                {"segmentId": "s1", "afterText": "旧译文", "reason": "无变化", "confidence": 0.9},
+            ]
+        }
+    )
+    out = reviser._parse(content, revisable_ids={"s1"}, window=window)
+    assert len(out) == 1
+    assert out[0]["segmentId"] == "s1"
+    assert out[0]["afterText"] == "新译文"
+    assert out[0]["beforeText"] == "旧译文"
+
+
+def _sample_report() -> dict:
+    return {
+        "reportId": "r1",
+        "sessionName": "测试报告",
+        "domain": "通用",
+        "sourceLanguage": "en",
+        "targetLanguage": "zh",
+        "durationText": "01:23",
+        "generatedAt": "2026-06-06 10:00:00",
+        "summary": "摘要内容",
+        "qualityNotes": "质量说明",
+        "metrics": {"segments": 1, "realtimeRevisions": 0, "finalRevisions": 1},
+        "segments": [
+            {
+                "segmentId": "s1",
+                "startMs": 0,
+                "endMs": 4000,
+                "timecode": "00:00",
+                "sourceText": "Hello world",
+                "liveTranslation": "你好世界",
+                "finalTranslation": "你好，世界",
+                "revisedRealtime": False,
+            }
+        ],
+        "finalRevisions": [
+            {
+                "segmentId": "s1",
+                "beforeText": "你好世界",
+                "afterText": "你好，世界",
+                "reason": "标点",
+            }
+        ],
+    }
+
+
+def test_report_renderers_produce_expected_formats() -> None:
+    report = _sample_report()
+    txt = render_txt(report)
+    assert "测试报告" in txt and "你好，世界" in txt and "会后校正记录" in txt
+
+    srt = render_srt(report)
+    assert "00:00:00,000 --> 00:00:04,000" in srt
+    assert "Hello world" in srt and "你好，世界" in srt
+
+    md = render_md(report)
+    assert md.startswith("# 测试报告")
+    assert "| 时间 | 原文 | 终稿译文 |" in md

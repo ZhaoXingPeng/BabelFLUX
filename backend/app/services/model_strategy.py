@@ -9,7 +9,10 @@ LIVE_TRANSLATE_PROVIDER = "qwen_live_translate"
 GUMMY_PROVIDER = "gummy_realtime"
 FUN_ASR_PROVIDER = "fun_asr"
 QWEN_TTS_PROVIDER = "qwen_tts"
-FINAL_CORRECTION_MODEL = "qwen3.7-plus"
+# 会后完整纠偏模型：经实测，七牛云 marketplace 名（qwen3.7-plus 等）在标准
+# dashscope.aliyuncs.com 端点报 "url error"，故选用标准端点实测可用的强模型。
+# 可选 qwen3-max / deepseek-v4-pro（均已验证），默认与 .env 的 qwen-plus 一致。
+FINAL_CORRECTION_MODEL = "qwen-plus"
 
 
 DOMAIN_GUIDANCE = {

@@ -102,7 +102,9 @@ def test_issue_and_claim_session_handoff_token_once() -> None:
     assert issued["deepLinkUrl"].startswith("lingosync://floating/start?")
     assert "token=h_" in issued["deepLinkUrl"]
 
-    claim_response = client.post("/api/sessions/handoff/claim", json={"token": issued["handoffToken"]})
+    claim_response = client.post(
+        "/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}
+    )
     assert claim_response.status_code == 200
     claim = claim_response.json()
     assert claim["sessionId"] == "desktop-session"
@@ -120,7 +122,9 @@ def test_issue_and_claim_session_handoff_token_once() -> None:
 def test_handoff_websocket_token_is_validated_when_present() -> None:
     client = TestClient(app)
     issued = client.post("/api/sessions/ws-session/handoff", json={}).json()
-    claim = client.post("/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}).json()
+    claim = client.post(
+        "/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}
+    ).json()
 
     with client.websocket_connect(claim["wsUrl"]) as websocket:
         assert websocket.receive_json() == {
