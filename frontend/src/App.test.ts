@@ -2,6 +2,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
+import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
 import type { ServerEvent } from "./types/events";
@@ -45,6 +46,16 @@ function mountApp(): VueWrapper {
   const pinia = createPinia();
   setActivePinia(pinia);
   return mount(WorkbenchView, {
+    global: {
+      plugins: [pinia]
+    }
+  });
+}
+
+function mountHome(): VueWrapper {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  return mount(HomeView, {
     global: {
       plugins: [pinia]
     }
@@ -327,6 +338,55 @@ describe("同传工作台 mock 流程", () => {
         sourcePermission: "idle"
       })
     );
+  });
+
+  it("主屏激活客户端时创建桌面会话并签发 handoff token", async () => {
+    vi.useFakeTimers();
+    const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "desktop-home-session", status: "created" });
+    mockRuntime.issueSessionHandoff.mockResolvedValueOnce({
+      handoffToken: "h_home",
+      expiresAt: "2026-06-06T00:00:30Z",
+      deepLinkUrl:
+        "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
+    });
+
+    const wrapper = mountHome();
+
+    await findButton(wrapper, "激活客户端").trigger("click");
+    await flushPromises();
+
+    expect(mockRuntime.createSession).toHaveBeenCalledWith({
+      inputMode: "system_audio",
+      sourceLanguage: "auto",
+      targetLanguage: "zh",
+      productMode: "floating",
+      sessionName: "客户端悬浮字幕",
+      domain: "通用",
+      modelProfile: "快速低延迟",
+      sourceKey: "system-audio",
+      sourceFileName: undefined,
+      sourceUrl: undefined,
+      sourcePermission: "idle"
+    });
+    expect(mockRuntime.issueSessionHandoff).toHaveBeenCalledWith(
+      "desktop-home-session",
+      expect.objectContaining({
+        source: "system-audio",
+        sourceLanguage: "auto",
+        targetLanguage: "zh",
+        displayMode: "bilingual"
+      })
+    );
+    expect(assign).toHaveBeenCalledWith(
+      "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
+    );
+    expect(wrapper.text()).toContain("正在唤起桌面悬浮窗");
+
+    await vi.advanceTimersByTimeAsync(1600);
+    await nextTick();
+
+    expect(wrapper.text()).toContain("未检测到桌面客户端");
   });
 
   it("投送桌面悬浮窗时签发 handoff token，并在未唤起时提供网页悬浮回退", async () => {
