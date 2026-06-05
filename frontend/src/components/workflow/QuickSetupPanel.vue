@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import FlowSteps from "./FlowSteps.vue";
+import SourcePreparation from "./SourcePreparation.vue";
 import SourceSelector from "./SourceSelector.vue";
-import type { QuickFormState, RuntimeState, SourceOption } from "./types";
+import type { QuickFormState, RuntimeState, SourceInputState, SourceOption } from "./types";
 
 defineProps<{
   form: QuickFormState;
@@ -12,13 +13,18 @@ defineProps<{
   targetLanguages: string[];
   modelProfiles: string[];
   sources: SourceOption[];
+  selectedSource: SourceOption;
+  input: SourceInputState;
+  urlError: string | null;
   canStart: boolean;
 }>();
 
 const emit = defineEmits<{
   start: [];
-  switchFloating: [];
   selectSource: [source: SourceOption];
+  selectFile: [file: File | null];
+  updateUrl: [url: string];
+  requestPermission: [];
 }>();
 </script>
 
@@ -70,14 +76,20 @@ const emit = defineEmits<{
         <span class="form-label">输入声源</span>
         <SourceSelector :sources="sources" :selected-key="form.source" @select="emit('selectSource', $event)" />
       </div>
+
+      <SourcePreparation
+        :source="selectedSource"
+        :input="input"
+        :url-error="urlError"
+        @select-file="emit('selectFile', $event)"
+        @update-url="emit('updateUrl', $event)"
+        @request-permission="emit('requestPermission')"
+      />
     </div>
 
     <div class="mt-5 grid gap-2">
       <button class="primary-button" type="button" :disabled="!canStart" @click="emit('start')">
         {{ state === "connecting" ? "连接中" : "开始同传" }}
-      </button>
-      <button class="secondary-button" type="button" @click="emit('switchFloating')">
-        切到悬浮字幕
       </button>
     </div>
   </aside>

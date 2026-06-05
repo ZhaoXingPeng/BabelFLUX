@@ -25,6 +25,12 @@ class CreateSessionRequest(BaseModel):
     domain: str = "通用"
     model_profile: str = Field(default="智能默认", alias="modelProfile")
     source_key: str = Field(default="demo", alias="sourceKey")
+    source_file_name: str | None = Field(default=None, alias="sourceFileName")
+    source_url: str | None = Field(default=None, alias="sourceUrl")
+    source_permission: Literal["idle", "requesting", "granted", "denied"] = Field(
+        default="idle",
+        alias="sourcePermission",
+    )
 
 
 class CreateSessionResponse(BaseModel):

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { QuickFormState, ReportMetric, RuntimeState, SourceOption, TranscriptPair, WorkspaceTile } from "./types";
+import type { QuickFormState, ReportMetric, RuntimeState, SourceOption, TranscriptPair } from "./types";
 import type { SourceSyncState } from "../../types/events";
 
 defineProps<{
@@ -15,7 +15,6 @@ defineProps<{
   selectedDisplayDescription: string;
   currentPair: TranscriptPair;
   transcriptPairs: TranscriptPair[];
-  workspaceTiles: WorkspaceTile[];
   reportMetrics: ReportMetric[];
 }>();
 
@@ -30,18 +29,39 @@ const emit = defineEmits<{
 
 <template>
   <section class="grid gap-4">
-    <div class="rounded-lg border border-[#d7ddd8] bg-white p-4">
+    <div class="workspace-header rounded-lg border border-[#d7ddd8] bg-white p-4">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p class="text-xs text-[#607064]">
             {{ form.name }} · {{ form.sourceLanguage }} -> {{ form.targetLanguage }}
           </p>
-          <h2 class="mt-1 text-xl font-bold">快速同传工作台</h2>
+          <h2 class="mt-1 text-xl font-bold">同传中</h2>
         </div>
-        <div class="flex flex-wrap gap-2">
-          <span class="status-pill">{{ runtimeStatus }}</span>
-          <span class="status-pill">{{ wsConnected ? "WebSocket 已连接" : "WebSocket 未连接" }}</span>
-          <span class="status-pill">{{ sourceSyncState.status }} · {{ sourceSyncState.lagMs }}ms</span>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div class="flex flex-wrap gap-2">
+            <span class="status-pill">{{ runtimeStatus }}</span>
+            <span class="status-pill">{{ wsConnected ? "已连接" : "未连接" }}</span>
+            <span class="status-pill">{{ sourceSyncState.status }} · {{ sourceSyncState.lagMs }}ms</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button v-if="state === 'running'" class="secondary-button compact-button" type="button" @click="emit('pause')">
+              暂停
+            </button>
+            <button v-if="state === 'paused'" class="primary-button compact-button" type="button" @click="emit('resume')">
+              继续
+            </button>
+            <button
+              v-if="state !== 'setup' && state !== 'report'"
+              class="danger-button compact-button"
+              type="button"
+              @click="emit('end')"
+            >
+              结束
+            </button>
+            <button v-if="state === 'report'" class="secondary-button compact-button" type="button" @click="emit('reset')">
+              新建同传
+            </button>
+          </div>
         </div>
       </div>
 
@@ -49,46 +69,20 @@ const emit = defineEmits<{
         {{ errorMessage }}
       </p>
 
-      <div class="mt-4 flex flex-wrap gap-2">
-        <button v-if="state === 'running'" class="secondary-button compact-button" type="button" @click="emit('pause')">
-          暂停
-        </button>
-        <button v-if="state === 'paused'" class="primary-button compact-button" type="button" @click="emit('resume')">
-          继续
-        </button>
-        <button
-          v-if="state !== 'setup' && state !== 'report'"
-          class="danger-button compact-button"
-          type="button"
-          @click="emit('end')"
-        >
-          结束
-        </button>
-        <button v-if="state === 'report'" class="secondary-button compact-button" type="button" @click="emit('reset')">
-          新建同传
-        </button>
-      </div>
     </div>
 
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(380px,0.78fr)]">
       <section class="rounded-lg border border-[#d7ddd8] bg-white p-4">
         <div class="media-stage">
           <div>
             <p class="text-sm text-[#d8e0da]">{{ source.label }} · {{ form.modelProfile }}</p>
-            <p class="mt-2 text-2xl font-bold text-white">视频 / 音频展示区</p>
+            <p class="mt-2 text-2xl font-bold text-white">原始视频 / 音频</p>
             <p class="mt-3 max-w-xl text-sm leading-6 text-[#bec9c2]">
               {{ currentPair.source }}
             </p>
           </div>
-          <div class="media-caption">
+          <div class="media-caption" :class="{ floating: selectedDisplayMode === '悬浮字幕' }">
             {{ currentPair.translation }}
-          </div>
-        </div>
-
-        <div class="mt-4 grid gap-3 md:grid-cols-2">
-          <div v-for="tile in workspaceTiles" :key="tile.label" class="workspace-tile">
-            <p class="tile-label">{{ tile.label }}</p>
-            <p class="tile-text">{{ tile.value }}</p>
           </div>
         </div>
       </section>
@@ -102,7 +96,7 @@ const emit = defineEmits<{
           <span class="rounded-md bg-[#fff4df] px-2 py-1 text-xs text-[#7a4c00]">{{ selectedDisplayMode }}</span>
         </div>
 
-        <div class="mt-3 grid grid-cols-2 gap-2">
+        <div class="mt-3 grid grid-cols-3 gap-2">
           <button
             v-for="mode in displayModes"
             :key="mode"
@@ -120,13 +114,23 @@ const emit = defineEmits<{
         </div>
 
         <div class="mt-4 max-h-[520px] space-y-3 overflow-auto pr-1">
-          <article v-for="pair in transcriptPairs" :key="`${pair.time}-${pair.source}`" class="transcript-row">
+          <article
+            v-for="pair in transcriptPairs"
+            :key="`${pair.time}-${pair.source}`"
+            class="transcript-row"
+            :class="{ compact: selectedDisplayMode === '分区对照' }"
+          >
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs text-[#69776e]">{{ pair.time }}</span>
               <span class="rounded-md bg-[#eef1ee] px-2 py-1 text-xs text-[#526057]">{{ pair.state }}</span>
             </div>
-            <p class="mt-2 text-sm leading-6 text-[#4a5a50]">{{ pair.source }}</p>
-            <p class="mt-2 text-base font-semibold leading-7 text-[#17212b]">{{ pair.translation }}</p>
+            <div
+              class="mt-2 grid gap-2"
+              :class="selectedDisplayMode === '分区对照' ? 'md:grid-cols-2' : 'grid-cols-1'"
+            >
+              <p class="text-sm leading-6 text-[#4a5a50]">{{ pair.source }}</p>
+              <p class="text-base font-semibold leading-7 text-[#17212b]">{{ pair.translation }}</p>
+            </div>
           </article>
         </div>
       </section>

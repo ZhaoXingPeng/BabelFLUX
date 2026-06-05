@@ -16,6 +16,7 @@ import type {
   QuickFormState,
   ReportMetric,
   RuntimeState,
+  SourceInputState,
   SourceOption,
   TranscriptPair,
   WorkspaceTile
@@ -30,22 +31,19 @@ const defaultSourceSyncState: SourceSyncState = {
 };
 
 const productModeOptions: ProductModeOption[] = [
-  { key: "quick", label: "快速同传", description: "完整工作台" },
-  { key: "floating", label: "悬浮字幕", description: "轻量字幕层" }
+  { key: "quick", label: "快速同传", description: "Web 工作台" },
+  { key: "floating", label: "客户端悬浮", description: "桌面端全局能力" }
 ];
 
 const modelProfileOptions = ["智能默认", "快速低延迟", "高准确", "成本优先", "指定供应商"];
 const domainOptions = ["通用", "技术", "商务", "教育", "医疗", "法律", "自定义术语表"];
 const languageOptions = ["自动检测", "英语", "中文", "日语", "韩语", "法语", "德语"];
 const targetLanguageOptions = ["中文", "英语", "日语", "韩语"];
-const displayModeOptions = ["分区对照", "转写翻译", "分区显示", "逐句对照", "按句分段", "语意清晰"];
+const displayModeOptions = ["分区对照", "逐句对照", "悬浮字幕"];
 const displayModeCopy: Record<string, string> = {
   分区对照: "原文和译文分栏审阅",
-  转写翻译: "按时间流展示处理过程",
-  分区显示: "媒体、转写、翻译和修正分屏",
   逐句对照: "一句原文对应一句译文",
-  按句分段: "严格句级段落，适合字幕导出",
-  语意清晰: "按语义块聚合，译文更自然"
+  悬浮字幕: "Web 内嵌字幕层，桌面端可全局悬浮"
 };
 
 const quickSourceOptions: SourceOption[] = [
@@ -64,6 +62,16 @@ const floatingSourceOptions: SourceOption[] = [
   { key: "screen-window", label: "屏幕或窗口音频", channel: "浏览器权限能力", availability: "web" },
   { key: "system-audio", label: "系统音频", channel: "桌面端能力", availability: "desktop", disabled: true }
 ];
+
+const defaultSourceInputState: SourceInputState = {
+  fileName: "",
+  url: "",
+  permissionState: "idle",
+  permissionMessage: "等待准备声源"
+};
+
+const fileSourceKeys = new Set(["video-file", "audio-file"]);
+const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
   "video-file": "upload_video",
@@ -123,6 +131,8 @@ interface SessionState {
   modeStates: Record<ProductMode, RuntimeState>;
   quickForm: QuickFormState;
   floatingForm: FloatingFormState;
+  quickInput: SourceInputState;
+  floatingInput: SourceInputState;
   startRequestId: number;
 }
 
@@ -146,6 +156,56 @@ function formatRuntimeState(state: RuntimeState): string {
 
 function toLanguageCode(label: string): string {
   return languageCodeByLabel[label] ?? label;
+}
+
+function getUrlError(sourceKey: string, url: string): string | null {
+  if (sourceKey !== "url") return null;
+  const value = url.trim();
+  if (!value) return "请输入 URL";
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? null
+      : "仅支持 http 或 https URL";
+  } catch {
+    return "URL 格式不正确";
+  }
+}
+
+function isSourceInputReady(sourceKey: string, input: SourceInputState): boolean {
+  if (fileSourceKeys.has(sourceKey)) return input.fileName.trim().length > 0;
+  if (sourceKey === "url") return getUrlError(sourceKey, input.url) === null;
+  if (permissionSourceKeys.has(sourceKey)) return input.permissionState === "granted";
+  return true;
+}
+
+function canStartMode(source: SourceOption, sourceKey: string, input: SourceInputState, state: RuntimeState): boolean {
+  return ["setup", "report", "error"].includes(state) && !source.disabled && isSourceInputReady(sourceKey, input);
+}
+
+function stopMediaStream(stream: MediaStream) {
+  stream.getTracks().forEach((track) => track.stop());
+}
+
+async function requestBrowserPermission(sourceKey: string): Promise<string> {
+  const mediaDevices = navigator.mediaDevices;
+  if (!mediaDevices) throw new Error("当前浏览器不支持媒体权限");
+
+  if (sourceKey === "microphone") {
+    const stream = await mediaDevices.getUserMedia({ audio: true });
+    stopMediaStream(stream);
+    return "麦克风已授权";
+  }
+
+  if (sourceKey === "browser-tab" || sourceKey === "screen-window") {
+    if (!mediaDevices.getDisplayMedia) throw new Error("当前浏览器不支持屏幕或标签页采集");
+    const stream = await mediaDevices.getDisplayMedia({ audio: true, video: true });
+    stopMediaStream(stream);
+    return sourceKey === "browser-tab" ? "浏览器标签页音频已授权" : "屏幕或窗口音频已授权";
+  }
+
+  throw new Error("该声源不需要浏览器授权");
 }
 
 export const useSessionStore = defineStore("session", {
@@ -185,6 +245,8 @@ export const useSessionStore = defineStore("session", {
       size: "标准",
       opacity: "90%"
     },
+    quickInput: { ...defaultSourceInputState },
+    floatingInput: { ...defaultSourceInputState },
     startRequestId: 0
   }),
 
@@ -237,11 +299,22 @@ export const useSessionStore = defineStore("session", {
     selectedDisplayDescription(state): string {
       return displayModeCopy[state.selectedDisplayMode];
     },
+    quickUrlError(state): string | null {
+      return getUrlError(state.quickForm.source, state.quickInput.url);
+    },
+    floatingUrlError(state): string | null {
+      return getUrlError(state.floatingForm.source, state.floatingInput.url);
+    },
     quickCanStart(): boolean {
-      return ["setup", "report", "error"].includes(this.modeStates.quick) && !this.quickSource.disabled;
+      return canStartMode(this.quickSource, this.quickForm.source, this.quickInput, this.modeStates.quick);
     },
     floatingCanStart(): boolean {
-      return ["setup", "report", "error"].includes(this.modeStates.floating) && !this.floatingSource.disabled;
+      return canStartMode(
+        this.floatingSource,
+        this.floatingForm.source,
+        this.floatingInput,
+        this.modeStates.floating
+      );
     },
     workspaceTiles(): WorkspaceTile[] {
       return [
@@ -272,16 +345,68 @@ export const useSessionStore = defineStore("session", {
     },
 
     selectQuickSource(source: SourceOption) {
-      if (!source.disabled) this.quickForm.source = source.key;
+      if (source.disabled || this.quickForm.source === source.key) return;
+      this.quickForm.source = source.key;
+      this.quickInput = { ...defaultSourceInputState };
     },
 
     selectFloatingSource(source: SourceOption) {
-      if (!source.disabled) this.floatingForm.source = source.key;
+      if (source.disabled || this.floatingForm.source === source.key) return;
+      this.floatingForm.source = source.key;
+      this.floatingInput = { ...defaultSourceInputState };
+    },
+
+    setQuickSourceFile(file: File | null) {
+      this.quickInput.fileName = file?.name ?? "";
+    },
+
+    updateQuickSourceUrl(url: string) {
+      this.quickInput.url = url;
+    },
+
+    setFloatingSourceFile(file: File | null) {
+      this.floatingInput.fileName = file?.name ?? "";
+    },
+
+    updateFloatingSourceUrl(url: string) {
+      this.floatingInput.url = url;
+    },
+
+    async requestQuickSourceAccess() {
+      await this.requestSourceAccess("quick");
+    },
+
+    async requestFloatingSourceAccess() {
+      await this.requestSourceAccess("floating");
+    },
+
+    async requestSourceAccess(mode: ProductMode) {
+      const form = mode === "quick" ? this.quickForm : this.floatingForm;
+      const input = mode === "quick" ? this.quickInput : this.floatingInput;
+
+      input.permissionState = "requesting";
+      input.permissionMessage = "正在请求权限";
+
+      try {
+        input.permissionMessage = await requestBrowserPermission(form.source);
+        input.permissionState = "granted";
+      } catch (error) {
+        input.permissionState = "denied";
+        input.permissionMessage = error instanceof Error ? error.message : "权限申请失败";
+      }
+    },
+
+    openDesktopFloating() {
+      window.location.href = "lingosync://floating/start";
     },
 
     async startMode(mode: ProductMode) {
       const blockedSource = mode === "quick" ? this.quickSource.disabled : this.floatingSource.disabled;
-      if (blockedSource || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
+      const inputReady =
+        mode === "quick"
+          ? isSourceInputReady(this.quickForm.source, this.quickInput)
+          : isSourceInputReady(this.floatingForm.source, this.floatingInput);
+      if (blockedSource || !inputReady || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
 
       const requestId = this.startRequestId + 1;
       this.startRequestId = requestId;
@@ -352,6 +477,7 @@ export const useSessionStore = defineStore("session", {
 
     buildSessionPayload(mode: ProductMode): CreateSessionPayload {
       const form = mode === "quick" ? this.quickForm : this.floatingForm;
+      const input = mode === "quick" ? this.quickInput : this.floatingInput;
       const sourceKey = form.source;
 
       return {
@@ -362,7 +488,10 @@ export const useSessionStore = defineStore("session", {
         sessionName: mode === "quick" ? this.quickForm.name : "悬浮字幕",
         domain: form.domain,
         modelProfile: form.modelProfile,
-        sourceKey
+        sourceKey,
+        sourceFileName: input.fileName || undefined,
+        sourceUrl: sourceKey === "url" ? input.url.trim() : undefined,
+        sourcePermission: input.permissionState
       };
     },
 

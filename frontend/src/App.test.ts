@@ -67,6 +67,12 @@ function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
   return socket;
 }
 
+function buildStream() {
+  return {
+    getTracks: () => [{ stop: vi.fn() }]
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -117,6 +123,13 @@ const revisionEvent: ServerEvent = {
 describe("App 同传 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(buildStream()),
+        getDisplayMedia: vi.fn().mockResolvedValue(buildStream())
+      }
+    });
     mockRuntime.createSession.mockReset();
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.handlersBySession.clear();
@@ -140,6 +153,8 @@ describe("App 同传 mock 流程", () => {
     await selects[2].setValue("日语");
     await selects[3].setValue("高准确");
     await findButton(wrapper, "浏览器标签页音频").trigger("click");
+    await findButton(wrapper, "申请权限").trigger("click");
+    await flushPromises();
     await findButton(wrapper, "开始同传").trigger("click");
     await flushPromises();
 
@@ -151,7 +166,10 @@ describe("App 同传 mock 流程", () => {
       sessionName: "季度发布会同传",
       domain: "商务",
       modelProfile: "高准确",
-      sourceKey: "browser-tab"
+      sourceKey: "browser-tab",
+      sourceFileName: undefined,
+      sourceUrl: undefined,
+      sourcePermission: "granted"
     });
     expect(store.modeStates.quick).toBe("running");
 
@@ -165,9 +183,10 @@ describe("App 同传 mock 流程", () => {
     mockRuntime.handlersBySession.get("ui-session-1")?.onEvent(revisionEvent);
     await nextTick();
 
-    expect(wrapper.text()).toContain("WebSocket 已连接");
+    expect(wrapper.text()).toContain("已连接");
+    expect(wrapper.text()).not.toContain("快速同传设置");
     expect(wrapper.text()).toContain("请审阅季度发布计划。");
-    expect(wrapper.text()).toContain("季度发布计划 -> 季度发布方案");
+    expect(wrapper.text()).toContain("revised");
 
     await findButton(wrapper, "暂停").trigger("click");
     expect(store.status).toBe("paused");
@@ -187,30 +206,71 @@ describe("App 同传 mock 流程", () => {
     expect(wrapper.text()).toContain("1 条");
   });
 
-  it("快速切换模式时旧的创建请求不会连接旧 WebSocket", async () => {
+  it("启动中重置时旧的创建请求不会连接旧 WebSocket", async () => {
     const quickRequest = deferred<{ sessionId: string; status: string }>();
-    const floatingRequest = deferred<{ sessionId: string; status: string }>();
-    mockRuntime.createSession
-      .mockReturnValueOnce(quickRequest.promise)
-      .mockReturnValueOnce(floatingRequest.promise);
+    mockRuntime.createSession.mockReturnValueOnce(quickRequest.promise);
     mountApp();
     const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
 
     const quickStart = store.startMode("quick");
-    const floatingStart = store.startMode("floating");
+    store.resetMode("quick");
 
     quickRequest.resolve({ sessionId: "stale-quick", status: "created" });
     await quickStart;
+
     expect(mockRuntime.handlersBySession.has("stale-quick")).toBe(false);
-    expect(store.activeMode).toBe("floating");
+    expect(store.activeMode).toBe(null);
     expect(store.modeStates.quick).toBe("setup");
+    expect(mockRuntime.createSessionSocket).not.toHaveBeenCalled();
+  });
 
-    floatingRequest.resolve({ sessionId: "current-floating", status: "created" });
-    await floatingStart;
+  it("切换权限类声源会重置已有授权状态", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
 
-    expect(mockRuntime.handlersBySession.has("current-floating")).toBe(true);
-    expect(store.sessionId).toBe("current-floating");
-    expect(store.modeStates.floating).toBe("running");
-    expect(mockRuntime.createSessionSocket).toHaveBeenCalledTimes(1);
+    await findButton(wrapper, "浏览器标签页音频").trigger("click");
+    await findButton(wrapper, "申请权限").trigger("click");
+    await flushPromises();
+    expect(store.quickInput.permissionState).toBe("granted");
+    expect(store.quickCanStart).toBe(true);
+
+    await findButton(wrapper, "麦克风").trigger("click");
+    await nextTick();
+
+    expect(store.quickInput.permissionState).toBe("idle");
+    expect(store.quickCanStart).toBe(false);
+  });
+
+  it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {
+    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "url-session", status: "created" });
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "URL").trigger("click");
+    await nextTick();
+    const startButton = findButton(wrapper, "开始同传");
+    expect((startButton.element as HTMLButtonElement).disabled).toBe(true);
+
+    await wrapper.find('input[type="url"]').setValue("not-a-url");
+    expect(wrapper.text()).toContain("URL 格式不正确");
+    expect((startButton.element as HTMLButtonElement).disabled).toBe(true);
+
+    await wrapper.find('input[type="url"]').setValue("https://example.com/live");
+    await nextTick();
+    expect(store.quickCanStart).toBe(true);
+
+    await startButton.trigger("click");
+    await flushPromises();
+
+    expect(mockRuntime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputMode: "url",
+        sourceKey: "url",
+        sourceUrl: "https://example.com/live",
+        sourcePermission: "idle"
+      })
+    );
   });
 });
