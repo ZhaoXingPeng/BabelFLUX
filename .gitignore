@@ -1,5 +1,6 @@
 # OS and editor
 .DS_Store
+.ipynb_checkpoints/
 .idea/
 .vscode/
 
@@ -8,6 +9,12 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
@@ -19,6 +26,9 @@ build/
 *.log
 .env
 .env.*
+!.env.example
+!frontend/.env.example
+!backend/.env.example
 
 # Generated artifacts
 coverage/
