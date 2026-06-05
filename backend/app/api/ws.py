@@ -16,20 +16,25 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
     try:
         while True:
             raw_message = await websocket.receive_text()
-            message = json.loads(raw_message)
 
-            if message.get("type") == "start_session":
+            try:
+                message = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON message"})
+                continue
+
+            message_type = message.get("type")
+
+            if message_type == "start_session":
                 for event in build_mock_events(session_id):
                     await websocket.send_json(event)
                     await asyncio.sleep(0.25)
                 continue
 
-            if message.get("type") == "stop_session":
+            if message_type == "stop_session":
                 await websocket.close()
                 return
 
             await websocket.send_json({"type": "error", "message": "Unsupported client event"})
     except WebSocketDisconnect:
         return
-    except json.JSONDecodeError:
-        await websocket.send_json({"type": "error", "message": "Invalid JSON message"})

@@ -57,17 +57,26 @@ export const useSessionStore = defineStore("session", {
       this.status = "connecting";
       this.errorMessage = null;
 
-      const session = await createSession({
-        inputMode: "demo",
-        sourceLanguage: "en",
-        targetLanguage: "zh"
-      });
+      try {
+        const session = await createSession({
+          inputMode: "demo",
+          sourceLanguage: "en",
+          targetLanguage: "zh"
+        });
 
-      this.sessionId = session.sessionId;
-      this.connectSocket(session.sessionId);
+        this.sessionId = session.sessionId;
+        this.connectSocket(session.sessionId);
+      } catch (error) {
+        this.status = "error";
+        this.errorMessage =
+          error instanceof Error ? error.message : "创建会话失败，请确认后端已启动";
+      }
     },
 
     stopSession() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "stop_session" }));
+      }
       socket?.close();
       socket = null;
       this.wsConnected = false;
