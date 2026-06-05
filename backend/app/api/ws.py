@@ -31,6 +31,32 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     await asyncio.sleep(0.25)
                 continue
 
+            if message_type == "pause_session":
+                await websocket.send_json(
+                    {
+                        "type": "source_sync_state",
+                        "state": {
+                            "status": "missing",
+                            "lagMs": 0,
+                            "message": "会话已暂停",
+                        },
+                    }
+                )
+                continue
+
+            if message_type == "resume_session":
+                await websocket.send_json(
+                    {
+                        "type": "source_sync_state",
+                        "state": {
+                            "status": "syncing",
+                            "lagMs": 160,
+                            "message": "会话已继续",
+                        },
+                    }
+                )
+                continue
+
             if message_type == "stop_session":
                 await websocket.close()
                 return

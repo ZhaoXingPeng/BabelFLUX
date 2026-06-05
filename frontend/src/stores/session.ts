@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { createSession } from "../api/client";
+import { createSession, type CreateSessionPayload } from "../api/client";
 import { createSessionSocket } from "../api/ws";
 import type {
   RevisionEvent,
@@ -65,6 +65,26 @@ const floatingSourceOptions: SourceOption[] = [
   { key: "system-audio", label: "系统音频", channel: "桌面端能力", availability: "desktop", disabled: true }
 ];
 
+const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
+  "video-file": "upload_video",
+  "audio-file": "upload_audio",
+  url: "url",
+  microphone: "microphone",
+  "browser-tab": "browser_audio",
+  "screen-window": "screen_window",
+  "system-audio": "system_audio"
+};
+
+const languageCodeByLabel: Record<string, string> = {
+  自动检测: "auto",
+  英语: "en",
+  中文: "zh",
+  日语: "ja",
+  韩语: "ko",
+  法语: "fr",
+  德语: "de"
+};
+
 const samplePairs: TranscriptPair[] = [
   {
     time: "00:00:04",
@@ -103,6 +123,7 @@ interface SessionState {
   modeStates: Record<ProductMode, RuntimeState>;
   quickForm: QuickFormState;
   floatingForm: FloatingFormState;
+  startRequestId: number;
 }
 
 function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): SubtitleSegment[] {
@@ -121,6 +142,10 @@ function formatRuntimeState(state: RuntimeState): string {
     error: "启动失败"
   };
   return labels[state];
+}
+
+function toLanguageCode(label: string): string {
+  return languageCodeByLabel[label] ?? label;
 }
 
 export const useSessionStore = defineStore("session", {
@@ -159,7 +184,8 @@ export const useSessionStore = defineStore("session", {
       style: "双语字幕",
       size: "标准",
       opacity: "90%"
-    }
+    },
+    startRequestId: 0
   }),
 
   getters: {
@@ -212,10 +238,10 @@ export const useSessionStore = defineStore("session", {
       return displayModeCopy[state.selectedDisplayMode];
     },
     quickCanStart(): boolean {
-      return this.modeStates.quick !== "connecting" && !this.quickSource.disabled;
+      return ["setup", "report", "error"].includes(this.modeStates.quick) && !this.quickSource.disabled;
     },
     floatingCanStart(): boolean {
-      return this.modeStates.floating !== "connecting" && !this.floatingSource.disabled;
+      return ["setup", "report", "error"].includes(this.modeStates.floating) && !this.floatingSource.disabled;
     },
     workspaceTiles(): WorkspaceTile[] {
       return [
@@ -234,7 +260,7 @@ export const useSessionStore = defineStore("session", {
       return [
         { label: "时长", value: "18:24" },
         { label: "语言", value: `${this.quickForm.sourceLanguage} -> ${this.quickForm.targetLanguage}` },
-        { label: "修正", value: `${this.revisions.length || 1} 条` },
+        { label: "修正", value: `${this.revisions.length} 条` },
         { label: "导出", value: "TXT / SRT / MD" }
       ];
     }
@@ -255,7 +281,10 @@ export const useSessionStore = defineStore("session", {
 
     async startMode(mode: ProductMode) {
       const blockedSource = mode === "quick" ? this.quickSource.disabled : this.floatingSource.disabled;
-      if (blockedSource || this.modeStates[mode] === "connecting") return;
+      if (blockedSource || !["setup", "report", "error"].includes(this.modeStates[mode])) return;
+
+      const requestId = this.startRequestId + 1;
+      this.startRequestId = requestId;
 
       const previousMode = this.activeMode;
       if (previousMode && previousMode !== mode) {
@@ -268,8 +297,8 @@ export const useSessionStore = defineStore("session", {
       this.modeStates.quick = mode === "quick" ? "connecting" : "setup";
       this.modeStates.floating = mode === "floating" ? "connecting" : "setup";
 
-      const started = await this.startDemoSession();
-      if (this.activeMode !== mode) return;
+      const started = await this.startConfiguredSession(mode, requestId);
+      if (!this.isCurrentStart(mode, requestId)) return;
 
       if (started) {
         this.modeStates[mode] = "running";
@@ -303,6 +332,7 @@ export const useSessionStore = defineStore("session", {
 
     confirmEnd() {
       if (!this.endingMode) return;
+      this.startRequestId += 1;
       this.modeStates[this.endingMode] = "report";
       if (this.activeMode === this.endingMode) this.activeMode = null;
       this.showEndDialog = false;
@@ -312,6 +342,7 @@ export const useSessionStore = defineStore("session", {
 
     resetMode(mode: ProductMode) {
       if (this.activeMode === mode) {
+        this.startRequestId += 1;
         this.activeMode = null;
         this.stopSession("idle");
         this.resetSessionData();
@@ -319,23 +350,47 @@ export const useSessionStore = defineStore("session", {
       this.modeStates[mode] = "setup";
     },
 
-    async startDemoSession(): Promise<boolean> {
+    buildSessionPayload(mode: ProductMode): CreateSessionPayload {
+      const form = mode === "quick" ? this.quickForm : this.floatingForm;
+      const sourceKey = form.source;
+
+      return {
+        inputMode: inputModeBySourceKey[sourceKey] ?? "demo",
+        sourceLanguage: toLanguageCode(form.sourceLanguage),
+        targetLanguage: toLanguageCode(form.targetLanguage),
+        productMode: mode,
+        sessionName: mode === "quick" ? this.quickForm.name : "悬浮字幕",
+        domain: form.domain,
+        modelProfile: form.modelProfile,
+        sourceKey
+      };
+    },
+
+    isCurrentStart(mode: ProductMode, requestId: number, sessionId?: string): boolean {
+      return (
+        this.activeMode === mode &&
+        this.startRequestId === requestId &&
+        (sessionId === undefined || this.sessionId === sessionId)
+      );
+    },
+
+    async startConfiguredSession(mode: ProductMode, requestId: number): Promise<boolean> {
       this.stopSession("idle");
       this.resetSessionData();
       this.status = "connecting";
       this.errorMessage = null;
 
       try {
-        const session = await createSession({
-          inputMode: "demo",
-          sourceLanguage: "en",
-          targetLanguage: "zh"
-        });
+        const session = await createSession(this.buildSessionPayload(mode));
+
+        if (!this.isCurrentStart(mode, requestId)) return false;
 
         this.sessionId = session.sessionId;
-        this.connectSocket(session.sessionId);
+        this.connectSocket(session.sessionId, mode, requestId);
         return true;
       } catch (error) {
+        if (!this.isCurrentStart(mode, requestId)) return false;
+
         this.status = "error";
         this.errorMessage =
           error instanceof Error ? error.message : "创建会话失败，请确认后端已启动";
@@ -354,11 +409,19 @@ export const useSessionStore = defineStore("session", {
     },
 
     pauseSession() {
-      if (this.status === "running") this.status = "paused";
+      if (this.status !== "running") return;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "pause_session" }));
+      }
+      this.status = "paused";
     },
 
     resumeSession() {
-      if (this.status === "paused") this.status = "running";
+      if (this.status !== "paused") return;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "resume_session" }));
+      }
+      this.status = "running";
     },
 
     resetSessionData() {
@@ -370,23 +433,33 @@ export const useSessionStore = defineStore("session", {
       this.errorMessage = null;
     },
 
-    connectSocket(sessionId: string) {
+    connectSocket(sessionId: string, mode: ProductMode, requestId: number) {
       socket?.close();
-      socket = createSessionSocket(sessionId, {
+      let connection: WebSocket;
+      connection = createSessionSocket(sessionId, {
         onOpen: () => {
+          if (!this.isCurrentStart(mode, requestId, sessionId)) {
+            connection.close();
+            return;
+          }
           this.wsConnected = true;
           this.status = "running";
         },
         onClose: () => {
+          if (!this.isCurrentStart(mode, requestId, sessionId)) return;
           this.wsConnected = false;
           if (this.status === "running") this.status = "stopped";
         },
         onError: (message) => {
+          if (!this.isCurrentStart(mode, requestId, sessionId)) return;
           this.status = "error";
           this.errorMessage = message;
         },
-        onEvent: (event) => this.applyServerEvent(event)
+        onEvent: (event) => {
+          if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
+        }
       });
+      socket = connection;
     },
 
     applyServerEvent(event: ServerEvent) {
