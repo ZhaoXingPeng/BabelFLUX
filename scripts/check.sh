@@ -14,8 +14,15 @@ else
   echo "pytest not found; skip backend tests"
 fi
 
-if [ -d "$repo_root/frontend/node_modules" ]; then
+if [ -f "$repo_root/frontend/package.json" ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm not found; cannot build frontend" >&2
+    exit 1
+  fi
+
+  if [ -f "$repo_root/frontend/package-lock.json" ]; then
+    (cd "$repo_root/frontend" && npm ci)
+  fi
+
   (cd "$repo_root/frontend" && npm run build)
-else
-  echo "frontend/node_modules not found; skip frontend build"
 fi

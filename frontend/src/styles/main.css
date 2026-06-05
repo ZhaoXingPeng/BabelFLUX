@@ -4,7 +4,7 @@
 
 :root {
   color: #102234;
-  background: #f7fbf8;
+  background: #f4f6f4;
   font-family: "Avenir Next", "Noto Sans SC", sans-serif;
 }
 
@@ -18,4 +18,240 @@ button,
 input,
 select {
   font: inherit;
+}
+
+button {
+  min-height: 38px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #1c7c54;
+  outline-offset: 2px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #607064;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.form-control {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #cfd7d1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #17212b;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button {
+  min-height: 40px;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.primary-button {
+  border: 1px solid #1c7c54;
+  background: #1c7c54;
+  color: #ffffff;
+}
+
+.primary-button:hover {
+  background: #165f42;
+}
+
+.secondary-button {
+  border: 1px solid #cfd7d1;
+  background: #ffffff;
+  color: #2f3d34;
+}
+
+.secondary-button:hover {
+  border-color: #8da598;
+  background: #f3f7f4;
+}
+
+.danger-button {
+  border: 1px solid #c94b4b;
+  background: #c94b4b;
+  color: #ffffff;
+}
+
+.danger-button:hover {
+  background: #a83f3f;
+}
+
+.compact-button {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.status-pill {
+  min-height: 28px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #f7f9f7;
+  padding: 5px 8px;
+  color: #4a5a50;
+  font-size: 12px;
+}
+
+.flow-step {
+  min-height: 34px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #f7f9f7;
+  padding: 7px 8px;
+  color: #607064;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.flow-step.active {
+  border-color: #1c7c54;
+  background: #e7f4ec;
+  color: #12462f;
+}
+
+.source-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+  min-height: 54px;
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #4a5a50;
+  text-align: left;
+}
+
+.source-card span:nth-child(2) {
+  color: #69776e;
+  font-size: 12px;
+}
+
+.source-card strong {
+  grid-row: span 2;
+  border-radius: 8px;
+  background: #eef1ee;
+  padding: 4px 7px;
+  color: #526057;
+  font-size: 12px;
+}
+
+.source-card.selected {
+  border-color: #1c7c54;
+  background: #e7f4ec;
+  color: #12462f;
+}
+
+.source-card.disabled {
+  border-style: dashed;
+  background: #f7f7f7;
+}
+
+.media-stage {
+  display: grid;
+  min-height: 340px;
+  align-content: space-between;
+  border-radius: 8px;
+  background: #18222d;
+  padding: 24px;
+}
+
+.media-caption {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 16px;
+  color: #ffffff;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.workspace-tile,
+.transcript-row,
+.report-metric {
+  border: 1px solid #d7ddd8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.tile-label,
+.report-metric span {
+  display: block;
+  color: #607064;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tile-text {
+  margin-top: 8px;
+  color: #17212b;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.report-metric strong {
+  display: block;
+  margin-top: 8px;
+  color: #17212b;
+  font-size: 15px;
+}
+
+.floating-window {
+  position: absolute;
+  right: 32px;
+  bottom: 32px;
+  left: 32px;
+  max-width: 760px;
+  margin: 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(23, 33, 43, 0.92);
+  padding: 18px;
+  color: #ffffff;
+  box-shadow: 0 18px 45px rgba(17, 24, 39, 0.24);
+}
+
+.floating-button {
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 14px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.floating-button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.floating-button.danger {
+  border-color: rgba(255, 120, 120, 0.5);
+  background: rgba(201, 75, 75, 0.74);
 }
