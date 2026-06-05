@@ -8,7 +8,9 @@ providers:
   fun_asr:
     enabled: false
     endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    model: "fun-asr-realtime"
     api_key_env: "DASHSCOPE_API_KEY"
+    workspace_env: "DASHSCOPE_WORKSPACE_ID"
     description: "Streaming ASR provider for source-language subtitles."
 
   qwen_livetranslate:
@@ -20,12 +22,16 @@ providers:
 
   qwen_tts:
     enabled: false
-    endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-tts-flash-realtime"
     model: "qwen3-tts-flash-realtime"
     api_key_env: "DASHSCOPE_API_KEY"
+    workspace_env: "DASHSCOPE_WORKSPACE_ID"
     description: "Optional realtime TTS provider. Subtitles must not depend on it."
 
   correction_llm:
     enabled: false
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    model: "qwen3.7-plus"
     api_key_env: "DASHSCOPE_API_KEY"
+    workspace_env: "DASHSCOPE_WORKSPACE_ID"
     description: "Post-session correction provider for SessionReport generation."

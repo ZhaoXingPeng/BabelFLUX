@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     model_provider: str = "mock"
     dashscope_api_key: str | None = Field(default=None, repr=False)
     dashscope_workspace_id: str | None = None
+    dashscope_http_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    dashscope_websocket_base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1"
+    dashscope_request_timeout_seconds: float = 30.0
+    dashscope_websocket_timeout_seconds: float = 30.0
+    dashscope_tls_verify: bool = True
+    dashscope_data_inspection: str | None = None
 
     @property
     def cors_origins(self) -> list[str]:
