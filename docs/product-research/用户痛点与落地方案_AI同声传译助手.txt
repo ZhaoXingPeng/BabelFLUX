@@ -101,7 +101,7 @@ AI 同声传译助手 - 用户痛点调查与落地方案
 落地功能：会话级术语表，支持 source_term、target_term、domain、priority、note。
 
 5. 字幕错误不能修正
-落地功能：字幕片段使用 segment_id、version、status 管理，支持 temporary、final、revised 状态。
+落地功能：字幕片段使用 segment_id、version、status 管理，支持 partial、final、revised 状态。
 
 6. 低置信度不可见
 落地功能：为识别结果和翻译结果保留 confidence 字段，低置信度字幕用样式标记。
@@ -128,7 +128,7 @@ MVP 不追求完整会议插件，也不优先做中文语音播报，而是先�
 4. 展示源语言同步状态。
 5. 实时展示源语言文本。
 6. 实时展示中文字幕。
-7. 支持字幕状态：temporary、final、revised。
+7. 支持字幕状态：partial、final、revised。
 8. 支持历史字幕修正。
 9. 支持基础术语表。
 10. 支持双语记录导出。
@@ -329,7 +329,7 @@ MVP 支持预置演示音频和麦克风输入。浏览器标签页音频或系�
 字段包括 report_id、session_id、summary、final_transcript、final_translation、revision_events、glossary_summary、sync_summary、export_urls。
 
 十二、字幕状态设计
-1. temporary
+1. partial
 系统基于实时识别先输出的临时字幕，低延迟但可能变化。
 
 2. final

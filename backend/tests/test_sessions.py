@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
+from app.services.providers.mock import build_mock_events
 
 
 def test_create_session() -> None:
@@ -35,3 +37,15 @@ def test_mock_websocket_stream() -> None:
         "translation_segment",
         "revision_event",
     ]
+
+
+def test_mock_events_conform_to_event_models() -> None:
+    """mock 发出的 payload 必须能被事件模型校验——事件模型是前后端契约的单一事实源。"""
+    events = {event["type"]: event for event in build_mock_events("contract")}
+
+    sync_state = SourceSyncState.model_validate(events["source_sync_state"]["state"])
+    assert sync_state.status in {"listening", "syncing", "lagging", "missing", "recovered"}
+
+    SubtitleSegment.model_validate(events["transcript_segment"]["segment"])
+    SubtitleSegment.model_validate(events["translation_segment"]["segment"])
+    RevisionEvent.model_validate(events["revision_event"]["revision"])
