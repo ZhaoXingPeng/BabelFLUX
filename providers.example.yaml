@@ -1,0 +1,31 @@
+default_provider: mock
+
+providers:
+  mock:
+    enabled: true
+    description: "Local mock stream for stable demos and UI development."
+
+  fun_asr:
+    enabled: false
+    endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    api_key_env: "DASHSCOPE_API_KEY"
+    description: "Streaming ASR provider for source-language subtitles."
+
+  qwen_livetranslate:
+    enabled: false
+    endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    model: "qwen3.5-livetranslate-flash-realtime"
+    api_key_env: "DASHSCOPE_API_KEY"
+    description: "All-in-one realtime transcription, translation, and optional audio provider."
+
+  qwen_tts:
+    enabled: false
+    endpoint: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    model: "qwen3-tts-flash-realtime"
+    api_key_env: "DASHSCOPE_API_KEY"
+    description: "Optional realtime TTS provider. Subtitles must not depend on it."
+
+  correction_llm:
+    enabled: false
+    api_key_env: "DASHSCOPE_API_KEY"
+    description: "Post-session correction provider for SessionReport generation."
