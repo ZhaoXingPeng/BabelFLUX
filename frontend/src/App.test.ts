@@ -187,7 +187,7 @@ describe("同传工作台 mock 流程", () => {
     vi.unstubAllGlobals();
   });
 
-  it("默认加载测试视频、提取音频和字幕，并按播放时间触发本地纠错", async () => {
+  it("默认测试视频随播放进度逐句加载字幕，并在约 10 秒触发上下文纠偏", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -203,27 +203,93 @@ describe("同传工作台 mock 流程", () => {
     const audio = wrapper.find('[data-testid="fixture-audio"]');
     expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
     expect(audio.exists()).toBe(false);
-    expect(wrapper.text()).toContain("我感到很幸运");
-
     expect(mockRuntime.createSession).not.toHaveBeenCalled();
     expect(store.modeStates.quick).toBe("running");
     expect(store.sessionId).toBe("local-test-video-fixture");
 
-    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 53 });
+    // 进度为 0：只出现第一句，后续字幕尚未"听到"，不应提前全量加载
+    expect(wrapper.text()).toContain("我感到很幸运");
+    expect(wrapper.text()).not.toContain("她告诉我");
+    expect(store.activeSegmentId).toBe("fixture-seg-001");
+
+    // 推进到 14s：第 10 秒那句已出现，并在约 13s 完成上下文纠偏（near win 时段不再纠偏）
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 14 });
     await video.trigger("timeupdate");
     await nextTick();
 
-    expect(store.activeSegmentId).toBe("fixture-seg-016");
-    expect(wrapper.text()).toContain("我想，当我们开始珍视一次差一点成功的馈赠时，转变就发生了，");
+    expect(store.activeSegmentId).toBe("fixture-seg-005");
+    expect(store.revisions).toHaveLength(1);
+    expect(wrapper.text()).toContain("有几幅作品没能完全达到她自己的标准");
     expect(wrapper.text()).toContain("已修正");
-    expect(wrapper.text()).toContain("near win");
+    expect(wrapper.text()).not.toContain("杰作");
 
+    // 推进到 01:14：活动段与同步进度文案随播放更新
     Object.defineProperty(video.element, "currentTime", { configurable: true, value: 74 });
     await video.trigger("timeupdate");
     await nextTick();
 
     expect(store.activeSegmentId).toBe("fixture-seg-026");
     expect(store.sourceSyncState.message).toContain("01:14");
+  });
+
+  it("测试视频自然播放结束后自动出报告，时长为素材完整时长", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    await video.trigger("ended");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("report");
+    expect(store.report).not.toBeNull();
+    expect(store.report?.durationText).toBe("02:16");
+    expect(wrapper.text()).toContain("同传报告");
+  });
+
+  it("手动结束时报告时长等于已收听进度，而非 00:00", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 30 });
+    await video.trigger("timeupdate");
+    await nextTick();
+    expect(store.playbackMs).toBe(30_000);
+
+    await findButton(wrapper, "结束同传").trigger("click");
+    const confirmEndButton = wrapper.findAll("button").find((item) => item.text() === "结束同传");
+    expect(confirmEndButton, "confirm end button should exist").toBeTruthy();
+    await confirmEndButton!.trigger("click");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("report");
+    expect(store.report?.durationText).toBe("00:30");
+  });
+
+  it("返回主屏会重置会话，下次进入是全新的待开始任务", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    await video.trigger("ended");
+    await nextTick();
+    expect(store.modeStates.quick).toBe("report");
+
+    await findButton(wrapper, "返回主屏").trigger("click");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("setup");
+    expect(store.report).toBeNull();
+    expect(store.activeMode).toBeNull();
   });
 
   it("从快速同传配置走完开始、事件和结束报告", async () => {

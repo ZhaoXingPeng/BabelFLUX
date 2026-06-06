@@ -50,7 +50,7 @@ function swapLanguages() {
         :options="languages"
         @update:model-value="emit('updateSourceLanguage', $event)"
       />
-      <strong>{{ sourceCode }}</strong>
+      <strong class="language-code">{{ sourceCode }}</strong>
     </label>
     <button class="language-swap" type="button" :disabled="!canSwap" aria-label="交换源语言和目标语言" @click="swapLanguages">
       ⇄
@@ -65,7 +65,7 @@ function swapLanguages() {
         :options="targetLanguages"
         @update:model-value="emit('updateTargetLanguage', $event)"
       />
-      <strong>{{ targetCode }}</strong>
+      <strong class="language-code">{{ targetCode }}</strong>
     </label>
   </div>
 </template>

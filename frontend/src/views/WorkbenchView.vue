@@ -65,6 +65,14 @@ async function startQuickSession() {
   settingsOpen.value = false;
 }
 
+function returnHome() {
+  // 返回主屏即结束本次任务：清掉报告/字幕/进度并回到待开始态，
+  // 下次进入工作台就是一次全新的同传任务，而不是停留在上一次的报告界面。
+  sessionStore.resetMode("quick");
+  settingsOpen.value = false;
+  router.push("/");
+}
+
 async function setDisplayMode(mode: string) {
   if (selectedDisplayMode.value === mode) return;
   await withFlipMode(root, ".media-panel, .subtitle-column", () => {
@@ -83,7 +91,7 @@ function toggleFloatingCaptions() {
 
     <template v-if="isLive">
     <header class="workbench-topbar">
-      <button class="topbar-link" type="button" @click="router.push('/')">返回主屏</button>
+      <button class="topbar-link" type="button" @click="returnHome">返回主屏</button>
       <div>
         <p>LingoSync Web</p>
         <strong>沉浸式同传工作台</strong>
@@ -117,6 +125,7 @@ function toggleFloatingCaptions() {
         @open-desktop="sessionStore.openDesktopFloating"
         @toggle-floating-captions="toggleFloatingCaptions"
         @sync-playback="sessionStore.syncFixturePlayback"
+        @ended="sessionStore.handleFixtureEnded"
       />
       <SubtitleColumn
         v-if="selectedDisplayMode !== '悬浮字幕'"
