@@ -59,6 +59,8 @@ const captureKindBySource: Record<string, CaptureSourceKind> = {
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
+// 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1.5s，右侧才产出该句字幕，贴近真实同传节奏。
+const SUBTITLE_LATENCY_MS = 1500;
 
 const defaultSourceSyncState: SourceSyncState = {
   status: "listening",
@@ -475,7 +477,11 @@ export const useSessionStore = defineStore("session", {
     quickSources: (): SourceOption[] => quickSourceOptions,
     floatingSources: (): SourceOption[] => floatingSourceOptions,
     transcriptPairs: (state): TranscriptPair[] => {
-      if (state.sourceSegments.length === 0 && state.translationSegments.length === 0) return samplePairs;
+      if (state.sourceSegments.length === 0 && state.translationSegments.length === 0) {
+        // 会话已开始但字幕尚未「延迟产出」时显示空白等待，而非示例占位字幕；
+        // 仅在没有任何会话（首屏预览态）时才回退到 samplePairs。
+        return state.sessionId ? [] : samplePairs;
+      }
 
       const maxLength = Math.max(state.sourceSegments.length, state.translationSegments.length);
       return Array.from({ length: maxLength }, (_, index) => {
@@ -1078,17 +1084,23 @@ export const useSessionStore = defineStore("session", {
 
     /**
      * 按播放进度幂等重算本地测试视频应显示的字幕：
-     * 只显示 startMs ≤ playbackMs 的句子，模拟"听到一句、出一句"；
-     * 当前正在播放且刚出现的一句标记 partial（流式光标）；atMs 已到的纠偏即时套用。
+     * 同传有 1~2s 产出延迟——音频说到 startMs 的句子，约 SUBTITLE_LATENCY_MS 后才在右侧产出。
+     * 故以「有效进度 effectiveMs = 播放进度 - 延迟」决定显示/活动句：视频未播放(进度0)时右侧为空，
+     * 播放后字幕滞后约 1.5s 逐句滚出。刚产出的一句标记 partial（流式光标）；atMs 已到的纠偏即时套用。
      * 幂等设计保证拖动进度条前后都能正确显示/回退，不残留旧状态。
      */
     revealFixtureSegmentsUpTo(playbackMs: number) {
       const PARTIAL_WINDOW_MS = 900;
-      const revealed = testVideoFixture.segments.filter((segment) => playbackMs >= segment.startMs);
-      const activeSegment = findActiveSegment(testVideoFixture.segments, playbackMs);
+      const effectiveMs = playbackMs - SUBTITLE_LATENCY_MS;
+      const revealed = testVideoFixture.segments.filter((segment) => effectiveMs >= segment.startMs);
+      const activeSegment = findActiveSegment(testVideoFixture.segments, effectiveMs);
       const activeId = activeSegment?.segmentId ?? revealed[revealed.length - 1]?.segmentId ?? null;
 
-      const dueRevisions = testVideoFixture.revisions.filter((revision) => playbackMs >= revision.atMs);
+      const revealedIds = new Set(revealed.map((segment) => segment.segmentId));
+      // 纠偏是显示层事件：按播放进度 atMs 触发，但只套用到已经产出的句子上。
+      const dueRevisions = testVideoFixture.revisions.filter(
+        (revision) => playbackMs >= revision.atMs && revealedIds.has(revision.segmentId)
+      );
       const revisionBySegment = new Map(dueRevisions.map((revision) => [revision.segmentId, revision] as const));
 
       this.sourceSegments = revealed.map((segment) => ({
@@ -1115,7 +1127,7 @@ export const useSessionStore = defineStore("session", {
           };
         }
         const isFreshActive =
-          segment.segmentId === activeId && playbackMs - segment.startMs < PARTIAL_WINDOW_MS;
+          segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS;
         return {
           segmentId: segment.segmentId,
           text: segment.zh,

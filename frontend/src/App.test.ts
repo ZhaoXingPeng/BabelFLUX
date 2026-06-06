@@ -187,7 +187,7 @@ describe("同传工作台 mock 流程", () => {
     vi.unstubAllGlobals();
   });
 
-  it("默认测试视频随播放进度逐句加载字幕，并在约 10 秒触发上下文纠偏", async () => {
+  it("默认测试视频字幕滞后音频约 1.5s 逐句产出，并在约 13s 触发上下文纠偏", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -207,28 +207,37 @@ describe("同传工作台 mock 流程", () => {
     expect(store.modeStates.quick).toBe("running");
     expect(store.sessionId).toBe("local-test-video-fixture");
 
-    // 进度为 0：只出现第一句，后续字幕尚未"听到"，不应提前全量加载
+    // 视频尚未播放（进度 0）：因产出延迟，右侧不应有任何字幕，也不应回退到示例占位字幕
+    expect(store.activeSegmentId).toBeNull();
+    expect(wrapper.text()).not.toContain("我感到很幸运");
+    expect(wrapper.text()).not.toContain("Today we are going to talk about");
+
+    // 播放到 2s：约 1.5s 延迟后，第一句此时才产出
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 2 });
+    await video.trigger("timeupdate");
+    await nextTick();
+
+    expect(store.activeSegmentId).toBe("fixture-seg-001");
     expect(wrapper.text()).toContain("我感到很幸运");
     expect(wrapper.text()).not.toContain("她告诉我");
-    expect(store.activeSegmentId).toBe("fixture-seg-001");
 
-    // 推进到 14s：第 10 秒那句已出现，并在约 13s 完成上下文纠偏（near win 时段不再纠偏）
+    // 播放到 14s：第 10 秒那句滞后产出后，在约 13s 完成上下文纠偏（near win 时段不再纠偏）
     Object.defineProperty(video.element, "currentTime", { configurable: true, value: 14 });
     await video.trigger("timeupdate");
     await nextTick();
 
-    expect(store.activeSegmentId).toBe("fixture-seg-005");
+    expect(store.activeSegmentId).toBe("fixture-seg-004");
     expect(store.revisions).toHaveLength(1);
     expect(wrapper.text()).toContain("有几幅作品没能完全达到她自己的标准");
     expect(wrapper.text()).toContain("已修正");
     expect(wrapper.text()).not.toContain("杰作");
 
-    // 推进到 01:14：活动段与同步进度文案随播放更新
+    // 播放到 01:14：字幕滞后约 1.5s，活动段为有效进度(约 72.5s)所在句；同步文案仍按真实进度显示
     Object.defineProperty(video.element, "currentTime", { configurable: true, value: 74 });
     await video.trigger("timeupdate");
     await nextTick();
 
-    expect(store.activeSegmentId).toBe("fixture-seg-026");
+    expect(store.activeSegmentId).toBe("fixture-seg-025");
     expect(store.sourceSyncState.message).toContain("01:14");
   });
 
