@@ -43,6 +43,7 @@ const emit = defineEmits<{
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
+let suppressPauseEvent = false;
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -76,9 +77,12 @@ async function tryAutoPlay() {
   }
 }
 
-function pauseMedia() {
+function pauseMedia(silent = false) {
   const element = currentMediaElement();
-  if (element && !element.paused) element.pause();
+  if (element && !element.paused) {
+    suppressPauseEvent = silent;
+    element.pause();
+  }
 }
 
 function emitPlaybackTime(event: Event) {
@@ -86,6 +90,10 @@ function emitPlaybackTime(event: Event) {
 }
 
 function handlePause(event: Event) {
+  if (suppressPauseEvent) {
+    suppressPauseEvent = false;
+    return;
+  }
   const element = event.target as HTMLMediaElement;
   if (!element.ended) emit("playbackPause");
 }
@@ -100,7 +108,14 @@ function handleLoadedMetadata() {
 }
 
 watch(
-  () => [props.state, props.mediaUrl, props.audioUrl, props.mediaKind, props.sourceSyncState.status],
+  () => [
+    props.state,
+    props.mediaUrl,
+    props.audioUrl,
+    props.mediaKind,
+    props.sourceSyncState.status,
+    props.sourceSyncState.message
+  ],
   () => {
     void emitMediaElement();
     if (canAutoPlay()) {

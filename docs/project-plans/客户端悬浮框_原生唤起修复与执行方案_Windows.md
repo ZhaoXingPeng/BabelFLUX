@@ -50,7 +50,7 @@ createSession ✅  → issueSessionHandoff ✅（后端返回 lingosync://floati
 ```jsonc
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LingoSync Floating Caption",
+  "productName": "BabelFlux Floating Caption",
   // ... 现有 app / security / bundle 保持不变 ...
   "plugins": {
     "deep-link": {
@@ -99,7 +99,7 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running LingoSync desktop overlay");
+        .expect("error while running BabelFlux desktop overlay");
 }
 ```
 
@@ -216,7 +216,7 @@ const DESKTOP_LAUNCH_TIMEOUT_MS = 2500; // 1500 → 2500：冷启动 Tauri / 系
 
 并在 `HomeView.vue` 的 `<DesktopLaunchPrompt @reopen="sessionStore.reopenDesktop" ... />` 接上。
 
-> 可选：把 `window.location.assign` 不必改 —— scheme 注册后 Windows 会弹"打开 LingoSync Floating Caption?"，点允许即唤起；F1 的更长超时已能覆盖弹窗停留时间。
+> 可选：把 `window.location.assign` 不必改 —— scheme 注册后 Windows 会弹"打开 BabelFlux Floating Caption?"，点允许即唤起；F1 的更长超时已能覆盖弹窗停留时间。
 
 ---
 
@@ -274,7 +274,7 @@ npm run tauri dev    # 弹出透明 overlay 窗，并把 lingosync:// 注册到�
 ### 主路径（成功唤起）
 1. 三个服务都在跑，浏览器开 `http://localhost:5173`。
 2. 点「客户端悬浮框 → 激活客户端」。
-3. Windows 可能弹「是否打开 LingoSync Floating Caption?」→ 允许。（`tauri dev` 已在运行 → 单实例把 URL 转发给现有窗口。）
+3. Windows 可能弹「是否打开 BabelFlux Floating Caption?」→ 允许。（`tauri dev` 已在运行 → 单实例把 URL 转发给现有窗口。）
 4. **预期**：overlay 窗里的字幕从 *"Waiting for desktop handoff"* 变成 mock 字幕流并持续滚动；主页提示变 *"已投送到桌面悬浮窗"*（`desktopLaunchState='launched'`），**不再出现 fallback 提示框**。
 5. DevTools → Network：`POST /api/sessions/handoff/claim` 返回 **200**（不是 CORS 报错）。
 
@@ -296,7 +296,7 @@ npm run tauri dev    # 弹出透明 overlay 窗，并把 lingosync:// 注册到�
 | 现象 | 根因 | 对应改动 |
 |------|------|------|
 | 点了浏览器毫无反应 / 仍 ~1.5s 后 fallback | scheme 没注册 | 确认 `tauri dev` 在跑；`regedit` 查 `HKCU\Software\Classes\lingosync`；应用 A |
-| 弹"打开 LingoSync?"但 overlay 不显示字幕，停在"未携带 handoff token" | token 没传进去（冷启动读了 window.location；或单实例没转发） | C/D + B |
+| 弹"打开 BabelFlux?"但 overlay 不显示字幕，停在"未携带 handoff token" | token 没传进去（冷启动读了 window.location；或单实例没转发） | C/D + B |
 | overlay 报 *"桌面接管失败"*，Network 见 CORS / blocked | 后端没放行 `:5175` | E |
 | overlay 报 claim **404/410** | token 过期（TTL 60s）或已用过 | 唤起要快；或重试。这是预期保护，不是 bug |
 | `tauri dev` 编译报 `link.exe not found` / 缺 MSVC | 没装 C++ 生成工具 | 第 3 节 |

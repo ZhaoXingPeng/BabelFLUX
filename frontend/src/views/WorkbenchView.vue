@@ -93,7 +93,7 @@ function toggleFloatingCaptions() {
     <header class="workbench-topbar">
       <button class="topbar-link" type="button" @click="returnHome">返回主屏</button>
       <div>
-        <p>LingoSync Web</p>
+        <p>BabelFlux Web</p>
         <strong>沉浸式同传工作台</strong>
       </div>
       <button class="topbar-link icon-link" type="button" @click="settingsOpen = true">

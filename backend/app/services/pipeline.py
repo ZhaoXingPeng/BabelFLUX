@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
@@ -34,10 +35,13 @@ from app.services.session_store import RevisionRecord, SegmentRecord, SessionRec
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
 PARTIAL_THROTTLE_S = 0.18
+MEDIA_PROGRESS_SYNC_S = 0.5
 DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.8
 SYNC_LAG_WARN_MS = 600
+SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 24
+TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 46
 
 
 class InterpretationPipeline:
@@ -65,13 +69,21 @@ class InterpretationPipeline:
         self.elapsed_ms = 0
         self._seg_index = 0
         self._current: SegmentRecord | None = None
+        self._roots: list[SegmentRecord] = []
         self._by_item: dict[str, SegmentRecord] = {}
         self._by_response: dict[str, SegmentRecord] = {}
+        self._children_by_root: dict[str, list[SegmentRecord]] = {}
+        self._raw_source_by_root: dict[str, str] = {}
+        self._raw_translation_by_root: dict[str, str] = {}
+        self._source_final_roots: set[str] = set()
+        self._translation_final_roots: set[str] = set()
         self._last_partial_emit: dict[str, float] = {}
+        self._last_emitted_segment: dict[str, tuple[str, str, int, int]] = {}
         self._last_event_at = time.monotonic()
         self._last_sync_emit_at = 0.0
         self._client_playback_ms: int | None = None
         self._client_sent_audio_ms: int | None = None
+        self._last_media_progress_sync_at = 0.0
         self._review_tasks: set[asyncio.Task[Any]] = set()
         self._glossary_phrases = {
             str(t.get("sourceTerm")): str(t.get("targetTerm"))
@@ -112,6 +124,7 @@ class InterpretationPipeline:
                     if self._stopped:
                         break
                     await session.feed(frame)
+                    await self._maybe_emit_media_progress()
             await session.feed_silence(2.5)
             await self._drain(consumer)
         finally:
@@ -181,6 +194,13 @@ class InterpretationPipeline:
     def _on_progress(self, produced_ms: int) -> None:
         self.elapsed_ms = produced_ms
 
+    async def _maybe_emit_media_progress(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_media_progress_sync_at < MEDIA_PROGRESS_SYNC_S:
+            return
+        self._last_media_progress_sync_at = now
+        await self._emit_sync("syncing", 0, "同传进行中", source_ms=self.elapsed_ms)
+
     async def _consume(self, session: LiveTranslateSession) -> None:
         try:
             async for ev in session.events():
@@ -228,6 +248,8 @@ class InterpretationPipeline:
         seg = self.record.get_or_create_segment(seg_id, self._seg_index)
         seg.start_ms = self.elapsed_ms
         seg.item_id = item_id
+        self._roots.append(seg)
+        self._children_by_root[seg.segment_id] = [seg]
         if item_id:
             self._by_item[item_id] = seg
         self._current = seg
@@ -244,18 +266,24 @@ class InterpretationPipeline:
     def _bind_response(self, response_id: str | None) -> SegmentRecord:
         if response_id and response_id in self._by_response:
             return self._by_response[response_id]
-        # 绑定到最早一个尚未分配 response 的段（FIFO，与生成顺序一致）
-        for seg in self.record.segments:
+        # 绑定到最早一个尚未分配 response 的模型根段（FIFO，与生成顺序一致）。
+        for seg in self._roots:
             if seg.response_id is None:
                 seg.response_id = response_id
                 if response_id:
                     self._by_response[response_id] = seg
+                self._sync_child_response_ids(seg)
                 return seg
         seg = self._begin_segment(None)
         seg.response_id = response_id
         if response_id:
             self._by_response[response_id] = seg
+        self._sync_child_response_ids(seg)
         return seg
+
+    def _sync_child_response_ids(self, root: SegmentRecord) -> None:
+        for child in self._children_by_root.get(root.segment_id, [root]):
+            child.response_id = root.response_id
 
     def _merge_source_partial(self, previous: str, text: str) -> str:
         current = text.strip()
@@ -299,10 +327,25 @@ class InterpretationPipeline:
             return None
         prior_norm = self._normalize_source_words(prior_words)
         current_norm = self._normalize_source_words(current_words)
-        for size in range(min(len(prior_words), len(current_words)), 1, -1):
-            if prior_norm[-size:] == current_norm[:size]:
-                return " ".join([*prior_words[:-size], *current_words])
+        for dropped_tail in range(min(3, len(prior_words) - 1) + 1):
+            if dropped_tail and not all(
+                self._looks_unstable_source_word(word) for word in prior_words[-dropped_tail:]
+            ):
+                continue
+            base_words = (
+                prior_words[: len(prior_words) - dropped_tail]
+                if dropped_tail
+                else prior_words
+            )
+            base_norm = prior_norm[: len(base_words)]
+            for size in range(min(len(base_words), len(current_words)), 1, -1):
+                if base_norm[-size:] == current_norm[:size]:
+                    return " ".join([*base_words[:-size], *current_words])
         return None
+
+    def _looks_unstable_source_word(self, word: str) -> bool:
+        value = word.strip(".,;:!?，。；：！？")
+        return len(value) <= 5 and not word.endswith((".", "!", "?", ",", ";", ":"))
 
     def _prefer_source_snapshot(self, prior: str, current: str) -> str:
         collapsed_current = self._collapse_source_repetition(current)
@@ -361,18 +404,17 @@ class InterpretationPipeline:
         if not text:
             return
         seg = self._source_segment(item_id)
+        previous = self._raw_source_by_root.get(seg.segment_id, "")
         display_text = (
             self._collapse_source_repetition(text.strip())
             if final
-            else self._merge_source_partial(seg.source_text, text)
+            else self._merge_source_partial(previous, text)
         )
-        seg.source_text = display_text
+        self._raw_source_by_root[seg.segment_id] = display_text
         if final:
             seg.end_ms = max(self.elapsed_ms, seg.start_ms)
-        await self._emit_segment(
-            "transcript_segment", seg, language=self.record.source_language,
-            text=display_text, status="final" if final else "partial", throttle=not final,
-        )
+            self._source_final_roots.add(seg.segment_id)
+        await self._emit_display_segments(seg)
 
     async def _on_translation(
         self, text: str, response_id: str | None, *, final: bool
@@ -380,17 +422,223 @@ class InterpretationPipeline:
         if not text:
             return None
         seg = self._bind_response(response_id)
-        seg.translation_text = text
-        if not seg.original_translation:
-            seg.original_translation = text
+        display_text = text.strip()
+        self._raw_translation_by_root[seg.segment_id] = display_text
         if final and seg.status != "revised":
-            seg.status = "final"
             seg.end_ms = max(self.elapsed_ms, seg.start_ms)
-        await self._emit_segment(
-            "translation_segment", seg, language=self.record.target_language,
-            text=text, status="final" if final else "partial", throttle=not final,
-        )
+            self._translation_final_roots.add(seg.segment_id)
+        await self._emit_display_segments(seg)
         return seg
+
+    async def _emit_display_segments(self, root: SegmentRecord) -> None:
+        source_parts = self._split_source_display(
+            self._raw_source_by_root.get(root.segment_id, "")
+        )
+        translation_parts = self._split_target_display(
+            self._raw_translation_by_root.get(root.segment_id, "")
+        )
+        if not source_parts and not translation_parts:
+            return
+
+        if source_parts and translation_parts:
+            count = min(len(source_parts), len(translation_parts))
+        else:
+            count = len(source_parts) or len(translation_parts)
+        count = max(1, count)
+
+        source_display = self._rebalance_parts(source_parts, count, separator=" ")
+        translation_display = self._rebalance_parts(translation_parts, count, separator="")
+        children = self._display_children(root, count)
+        bounds = self._estimate_display_bounds(root, source_display, translation_display)
+        source_final = root.segment_id in self._source_final_roots
+        translation_final = root.segment_id in self._translation_final_roots
+
+        for index, child in enumerate(children):
+            source_text = source_display[index]
+            translation_text = translation_display[index]
+            start_ms, end_ms = bounds[index]
+            child.item_id = root.item_id
+            child.response_id = root.response_id
+
+            is_last = index == count - 1
+            source_status = "final" if source_final or not is_last else "partial"
+            translation_status = "final" if translation_final or not is_last else "partial"
+            next_status = translation_status if translation_text else source_status
+            time_close = (
+                abs(child.start_ms - start_ms) <= 1000
+                and abs(child.end_ms - end_ms) <= 1000
+            )
+            stable_unchanged = (
+                child.status == "final"
+                and next_status == "final"
+                and child.source_text == source_text
+                and child.translation_text == translation_text
+                and child.end_ms > child.start_ms
+                and time_close
+            )
+            if not stable_unchanged:
+                child.start_ms = start_ms
+                child.end_ms = end_ms
+            child.status = next_status
+
+            if source_text:
+                child.source_text = source_text
+                await self._emit_segment(
+                    "transcript_segment",
+                    child,
+                    language=self.record.source_language,
+                    text=source_text,
+                    status=source_status,
+                    throttle=source_status == "partial",
+                )
+            if translation_text:
+                child.translation_text = translation_text
+                if not child.original_translation:
+                    child.original_translation = translation_text
+                await self._emit_segment(
+                    "translation_segment",
+                    child,
+                    language=self.record.target_language,
+                    text=translation_text,
+                    status=translation_status,
+                    throttle=translation_status == "partial",
+                )
+
+    def _display_children(self, root: SegmentRecord, count: int) -> list[SegmentRecord]:
+        children = self._children_by_root.setdefault(root.segment_id, [root])
+        while len(children) < count:
+            self._seg_index += 1
+            child = self.record.get_or_create_segment(
+                f"{self.record.session_id}-seg-{self._seg_index}",
+                self._seg_index,
+            )
+            child.start_ms = root.start_ms
+            child.item_id = root.item_id
+            child.response_id = root.response_id
+            children.append(child)
+        return children[:count]
+
+    def _split_source_display(self, text: str) -> list[str]:
+        value = re.sub(r"\s+", " ", text.strip())
+        if not value:
+            return []
+
+        sentence_parts = self._split_by_regex(value, r"(?<=[.!?])\s+")
+        parts: list[str] = []
+        for sentence in sentence_parts:
+            for part in self._split_source_clauses(sentence):
+                parts.extend(self._split_long_source_part(part))
+        return parts
+
+    def _split_source_clauses(self, text: str) -> list[str]:
+        clauses = self._split_by_regex(text, r"(?<=[,;:])\s+")
+        groups: list[str] = []
+        current = ""
+        for clause in clauses:
+            candidate = f"{current} {clause}".strip() if current else clause
+            if current and self._word_count(candidate) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
+                groups.append(current)
+                current = clause
+            else:
+                current = candidate
+        if current:
+            groups.append(current)
+        return groups
+
+    def _split_long_source_part(self, text: str) -> list[str]:
+        words = text.split()
+        if len(words) <= SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
+            return [text]
+        return [
+            " ".join(words[index : index + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT])
+            for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
+        ]
+
+    def _split_target_display(self, text: str) -> list[str]:
+        value = re.sub(r"\s+", "", text.strip())
+        if not value:
+            return []
+
+        raw_parts = re.findall(r"[^。！？]+[。！？]?", value)
+        groups: list[str] = []
+        for raw in raw_parts:
+            groups.extend(self._split_long_target_part(raw))
+        return [part for part in groups if part]
+
+    def _split_long_target_part(self, text: str) -> list[str]:
+        if len(text) <= TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+            return [text]
+
+        parts: list[str] = []
+        current = ""
+        clauses = re.findall(r"[^，,；;：:]+[，,；;：:]?", text)
+        for clause in clauses:
+            candidate = f"{current}{clause}" if current else clause
+            if current and len(candidate) > TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+                parts.append(current)
+                current = clause
+            else:
+                current = candidate
+        if current:
+            parts.append(current)
+        if len(parts) == 1 and len(parts[0]) > TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+            value = parts[0]
+            return [
+                value[index : index + TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT]
+                for index in range(0, len(value), TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
+            ]
+        return parts
+
+    def _split_by_regex(self, text: str, pattern: str) -> list[str]:
+        return [part.strip() for part in re.split(pattern, text) if part.strip()]
+
+    def _word_count(self, text: str) -> int:
+        return len([word for word in text.split() if word])
+
+    def _rebalance_parts(self, parts: list[str], count: int, *, separator: str) -> list[str]:
+        if count <= 0:
+            return []
+        if not parts:
+            return [""] * count
+        if len(parts) == count:
+            return parts
+
+        groups: list[str] = []
+        for index in range(count):
+            start = (len(parts) * index) // count
+            end = (len(parts) * (index + 1)) // count
+            if end <= start:
+                end = start + 1
+            groups.append(separator.join(parts[start:end]).strip())
+        return groups
+
+    def _estimate_display_bounds(
+        self,
+        root: SegmentRecord,
+        source_parts: list[str],
+        translation_parts: list[str],
+    ) -> list[tuple[int, int]]:
+        count = max(len(source_parts), len(translation_parts), 1)
+        end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * 2000)
+        span = max(1, end_ms - root.start_ms)
+        weights = [
+            max(self._word_count(source_parts[index]), len(translation_parts[index]) // 3, 1)
+            for index in range(count)
+        ]
+        total = sum(weights) or count
+        bounds: list[tuple[int, int]] = []
+        cursor = root.start_ms
+        consumed = 0
+        for index, weight in enumerate(weights):
+            consumed += weight
+            next_cursor = (
+                end_ms
+                if index == count - 1
+                else root.start_ms + int(span * consumed / total)
+            )
+            bounds.append((cursor, max(next_cursor, cursor)))
+            cursor = next_cursor
+        return bounds
 
     async def _on_segment_complete(self, seg: SegmentRecord) -> None:
         if not seg.translation_text:
@@ -467,12 +715,17 @@ class InterpretationPipeline:
             if now - self._last_partial_emit.get(key, 0.0) < PARTIAL_THROTTLE_S:
                 return
             self._last_partial_emit[key] = now
+        emit_key = f"{event_type}:{seg.segment_id}"
+        end_ms = seg.end_ms or seg.start_ms
+        signature = (text, status, seg.start_ms, end_ms)
+        if self._last_emitted_segment.get(emit_key) == signature:
+            return
         segment = SubtitleSegment(
             segmentId=seg.segment_id,
             text=text,
             language=language,
             startMs=seg.start_ms,
-            endMs=seg.end_ms or seg.start_ms,
+            endMs=end_ms,
             status=status,  # type: ignore[arg-type]
         )
         payload = segment.model_dump(by_alias=True)
@@ -480,9 +733,12 @@ class InterpretationPipeline:
             payload["originalText"] = seg.original_translation
             payload["revisionReason"] = seg.revision_reason
         await self.emit({"type": event_type, "segment": payload})
+        self._last_emitted_segment[emit_key] = signature
 
-    async def _emit_sync(self, status: str, lag_ms: int, message: str) -> None:
-        state = SourceSyncState(status=status, lagMs=lag_ms, message=message)  # type: ignore[arg-type]
+    async def _emit_sync(
+        self, status: str, lag_ms: int, message: str, source_ms: int | None = None
+    ) -> None:
+        state = SourceSyncState(status=status, lagMs=lag_ms, message=message, sourceMs=source_ms)  # type: ignore[arg-type]
         await self.emit({"type": "source_sync_state", "state": state.model_dump(by_alias=True)})
 
     async def _emit_client_clock_sync_if_due(self) -> None:

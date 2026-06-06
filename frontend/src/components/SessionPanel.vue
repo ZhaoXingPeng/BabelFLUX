@@ -9,7 +9,7 @@ const { status, sessionId, sourceSyncState, wsConnected, errorMessage } = storeT
 <template>
   <aside class="rounded-[2rem] border border-white/60 bg-white/75 p-6 shadow-2xl shadow-ink/10 backdrop-blur">
     <p class="text-sm font-semibold uppercase tracking-[0.35em] text-tide">Realtime Console</p>
-    <h1 class="mt-3 font-display text-3xl font-black text-ink">LingoSync / 灵犀同传</h1>
+    <h1 class="mt-3 font-display text-3xl font-black text-ink">BabelFlux / 巴别流 同传</h1>
     <p class="mt-3 text-sm leading-6 text-ink/65">
       当前骨架使用后端 mock provider，先验证源语言字幕、翻译字幕、同步状态和纠偏事件的前后端通道。
     </p>

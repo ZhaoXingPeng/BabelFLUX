@@ -33,8 +33,8 @@ function continueWithWebFloating() {
   <main ref="root" class="home-shell">
     <header class="home-nav" data-reveal>
       <div>
-        <p>LingoSync</p>
-        <strong>灵犀同传</strong>
+        <p>BabelFlux</p>
+        <strong>巴别流 同传</strong>
       </div>
       <nav aria-label="主导航">
         <a href="/docs/design/前端布局重构设计方案_v1.md">设计方案</a>
@@ -77,7 +77,7 @@ function continueWithWebFloating() {
           badge="Desktop"
           title="客户端悬浮框"
           subtitle="全局置顶字幕窗"
-          :features="['系统 / 应用音频采集', '置顶与托盘能力', 'lingosync:// 唤起']"
+          :features="['系统 / 应用音频采集', '置顶与托盘能力', '客户端协议唤起']"
           cta="激活客户端"
           @activate="activateDesktop"
         >

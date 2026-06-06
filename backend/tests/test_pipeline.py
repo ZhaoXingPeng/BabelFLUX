@@ -196,6 +196,26 @@ async def test_source_sliding_window_partials_are_overlap_merged() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_source_partials_drop_unstable_tail_before_overlap_merge() -> None:
+    record = SessionRecord(
+        session_id="partial-unstable-tail", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source("She told me that a few didn", "itemA", final=False)
+    await pipeline._on_source("that a few didn't quite meet her", "itemA", final=False)
+    await pipeline._on_source("meet her own mark", "itemA", final=False)
+
+    assert record.segments[0].source_text == (
+        "She told me that a few didn't quite meet her own mark"
+    )
+
+
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
     reviser = RealtimeReviser(
         client=None, model="m", source_language="en", target_language="zh", domain="通用"

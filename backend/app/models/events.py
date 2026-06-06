@@ -7,6 +7,7 @@ class SourceSyncState(BaseModel):
     status: Literal["listening", "syncing", "ready", "lagging", "missing", "recovered"]
     lag_ms: int = Field(alias="lagMs")
     message: str
+    source_ms: int | None = Field(default=None, alias="sourceMs")
 
 
 class SubtitleSegment(BaseModel):

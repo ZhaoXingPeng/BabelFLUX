@@ -8,7 +8,7 @@ gsap.registerPlugin(ScrollToPlugin);
 export function useStickyFollow(
   container: Ref<HTMLElement | null>,
   signature: () => string,
-  options: { block?: "center" | "start" } = {}
+  options: { block?: "center" | "start"; force?: boolean } = {}
 ) {
   const following = ref(true);
   let removeListener: (() => void) | null = null;
@@ -49,6 +49,10 @@ export function useStickyFollow(
       userInteracted = true;
     };
     const onScroll = () => {
+      if (options.force) {
+        following.value = true;
+        return;
+      }
       if (!userInteracted) return;
       following.value = isNearBottom(element);
     };
@@ -73,7 +77,7 @@ export function useStickyFollow(
     signature,
     async () => {
       await nextTick();
-      if (following.value) followLatest();
+      if (options.force || following.value) followLatest();
     },
     { flush: "post" }
   );

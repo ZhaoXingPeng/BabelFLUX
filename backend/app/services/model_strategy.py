@@ -102,7 +102,7 @@ def build_final_correction_prompt(request: StrategyPlanRequest) -> str:
     glossary_block = "\n".join(glossary_lines) if glossary_lines else "无"
     return "\n".join(
         [
-            "你是 LingoSync / 灵犀同传的最终全文纠偏模块。",
+            "你是 BabelFlux / 巴别流 同传的最终全文纠偏模块。",
             f"领域：{request.domain}",
             f"源语言：{request.source_language}",
             f"目标语言：{request.target_language}",

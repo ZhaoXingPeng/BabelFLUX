@@ -55,8 +55,6 @@ let pendingMediaElementCapture = false;
 let pendingMediaReadyState: SourceSyncState | null = null;
 let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
-let playbackStartPending = false;
-let mediaPlaybackActive = false;
 let estimatedOutputLatencyMs = 1500;
 const recentOutputLatencies: number[] = [];
 
@@ -142,7 +140,6 @@ const defaultSourceInputState: SourceInputState = {
 };
 
 const fileSourceKeys = new Set(["video-file", "audio-file"]);
-const playbackControlledSourceKeys = new Set(["video-file", "audio-file"]);
 const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
@@ -958,28 +955,15 @@ export const useSessionStore = defineStore("session", {
     },
 
     handleMediaPlaybackPaused() {
-      mediaPlaybackActive = false;
-      if (this.activeMode !== "quick" || playbackStartPending) return;
+      if (this.activeMode !== "quick") return;
       if (this.modeStates.quick === "running") this.pauseMode("quick");
     },
 
     handleMediaPlaybackPlayed() {
-      mediaPlaybackActive = true;
       if (this.activeMode !== "quick") return;
 
       if (this.isMediaElementCaptureSource() && !captureStarted) {
-        mediaPlaybackActive = false;
         mediaElement?.pause();
-        return;
-      }
-
-      if (playbackStartPending) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "start_session" }));
-          playbackStartPending = false;
-          this.status = "running";
-          this.modeStates.quick = "running";
-        }
         return;
       }
 
@@ -1146,8 +1130,6 @@ export const useSessionStore = defineStore("session", {
 
     stopSession(nextStatus: SessionStatus = "stopped") {
       void this.stopCapture();
-      playbackStartPending = false;
-      mediaPlaybackActive = false;
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1176,8 +1158,6 @@ export const useSessionStore = defineStore("session", {
     },
 
     resetSessionData() {
-      playbackStartPending = false;
-      mediaPlaybackActive = false;
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       mediaElement = null;
@@ -1378,11 +1358,6 @@ export const useSessionStore = defineStore("session", {
       pendingMediaElementCapture = mode === "quick" && fileSourceKeys.has(sourceKey);
       pendingMediaReadyState = null;
       captureStarted = false;
-      playbackStartPending =
-        mode === "quick" &&
-        playbackControlledSourceKeys.has(sourceKey) &&
-        !pendingMediaElementCapture;
-      mediaPlaybackActive = false;
       let connection: WebSocket;
       connection = createSessionSocket(
         sessionId,
@@ -1394,11 +1369,6 @@ export const useSessionStore = defineStore("session", {
             }
             this.wsConnected = true;
             this.status = "running";
-            if (playbackStartPending && mediaPlaybackActive) {
-              connection.send(JSON.stringify({ type: "start_session" }));
-              playbackStartPending = false;
-              this.modeStates.quick = "running";
-            }
           },
           onClose: () => {
             if (!this.isCurrentStart(mode, requestId, sessionId)) return;
@@ -1414,7 +1384,7 @@ export const useSessionStore = defineStore("session", {
             if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
           }
         },
-        { autoStart: !playbackStartPending }
+        { autoStart: true }
       );
       socket = connection;
     },
@@ -1436,6 +1406,9 @@ export const useSessionStore = defineStore("session", {
           return;
         }
         this.sourceSyncState = event.state;
+        if (typeof event.state.sourceMs === "number") {
+          this.playbackMs = event.state.sourceMs;
+        }
         // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
         if (pendingCaptureKind && !captureStarted && event.state.status === "ready") {
           captureStarted = true;
