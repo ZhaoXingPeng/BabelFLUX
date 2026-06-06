@@ -1,8 +1,12 @@
-# AI 同声传译助手 · AI Product Lab
+# LingoSync / 灵犀同传
 
-> 把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
+![LingoSync / 灵犀同传仓库主图](docs/design/lingosync-repo-cover.png)
+
+> LingoSync / 灵犀同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
 >
-> 黑客松选题二的完整实现：Web 工作台 + 桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
+> 黑客松选题二的完整实现：LingoSync Web 工作台 + 灵犀同传桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
+
+![LingoSync / 灵犀同传产品界面](docs/design/main.png)
 
 ---
 
@@ -149,10 +153,16 @@ scripts/    dev-backend.sh / dev-frontend.sh / check.sh
 
 ## 技术栈
 
-- 前端：Vue 3 · Vite · TypeScript · Pinia · Tailwind · GSAP（字幕入场与纠偏高亮动效）· @vueuse/core · @floating-ui/vue · video.js
-- 桌面：Tauri v2 · @tauri-apps/plugin-deep-link / global-shortcut / store · Vue 3
-- 后端：FastAPI · uvicorn · pydantic / pydantic-settings · httpx · websockets · aiofiles · sqlmodel · ffmpeg（音频解码）
-- 模型：阿里云百炼 DashScope（LiveTranslate 实时音视频翻译 / qwen-flash / qwen-plus / qwen-tts）
+| 层级 | 技术 | 为什么选择 |
+| --- | --- | --- |
+| Web 工作台 | Vue 3、Vite、TypeScript、Pinia | 实时同传界面状态多、更新频繁，Vue 组合式 API + Pinia 适合把会话、字幕、报告、输入源拆成清晰状态；Vite 保证开发调试快，TypeScript 降低 WebSocket 事件和报告结构的维护成本。 |
+| 字幕交互 | GSAP、CSS、@vueuse/core、@floating-ui/vue、video.js | 字幕流需要平滑入场、纠偏高亮、悬浮定位和媒体预览控制；这些库覆盖动画、浏览器能力封装、浮层定位与播放器能力，不需要为常见交互重新造轮子。 |
+| 后端服务 | FastAPI、uvicorn、asyncio、pydantic、httpx、websockets、aiofiles、sqlmodel | 同传链路核心是长连接事件流和异步媒体处理，FastAPI + asyncio 能同时处理 WebSocket、模型流、文件解码和报告生成；pydantic 让前后端事件契约保持稳定。 |
+| 媒体解码 | ffmpeg | 上传视频、音频和在线直链格式不可控，ffmpeg 是跨格式解码最稳妥的基础设施，可统一转为 16k 单声道 PCM 喂给实时模型。 |
+| 桌面悬浮窗 | Tauri v2、Vue 3、deep-link、global-shortcut、store 插件 | 桌面端需要轻量、透明置顶、快捷键和 Web 会话接管；Tauri 复用前端技术栈，同时比传统 Electron 包体更小，适合演示和后续分发。 |
+| 模型链路 | 阿里云百炼 DashScope、LiveTranslate、qwen-flash、qwen-plus、qwen-tts | LiveTranslate 提供实时 ASR + 翻译低延迟链路；qwen-flash 用于在线跨句纠偏，qwen-plus 负责会后全局校正，按任务强度拆模型可以兼顾速度、成本和最终质量。 |
+
+这套技术栈的核心取舍是：前端优先保证字幕阅读体验和媒体控制一致性，后端优先保证异步流式链路稳定，模型层则把“实时可用”和“会后更准”拆成两级能力，避免用单一模型承担所有延迟与质量目标。
 
 ---
 
@@ -183,4 +193,4 @@ cd desktop && npx vue-tsc --noEmit     # 桌面类型检查
 
 ## 当前状态
 
-最终选题 AI 同声传译助手已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端与 deep-link 使用产品代号 `lingosync://`（品牌命名待最终确认）。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。
+LingoSync / 灵犀同传已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端与 deep-link 统一使用 `lingosync://`。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。

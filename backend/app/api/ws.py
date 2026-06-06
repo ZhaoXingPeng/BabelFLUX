@@ -122,6 +122,8 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     await finalize()
                 break
             elif mtype == "pause_session":
+                if state["pipeline"] is not None:
+                    state["pipeline"].pause()
                 await emit(
                     {
                         "type": "source_sync_state",
@@ -129,6 +131,8 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     }
                 )
             elif mtype == "resume_session":
+                if state["pipeline"] is not None:
+                    state["pipeline"].resume()
                 await emit(
                     {
                         "type": "source_sync_state",

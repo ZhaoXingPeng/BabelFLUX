@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 DEFAULT_SAMPLE_RATE = 16000
@@ -85,6 +85,7 @@ async def iter_pcm_frames(
     realtime: bool = True,
     speed: float = 1.0,
     on_progress: Callable[[int], None] | None = None,
+    pause_wait: Callable[[], Awaitable[float]] | None = None,
 ) -> AsyncIterator[bytes]:
     """逐帧产出 PCM。
 
@@ -117,6 +118,8 @@ async def iter_pcm_frames(
     produced_ms = 0
     try:
         while True:
+            if pause_wait is not None:
+                start += await pause_wait()
             try:
                 data = await proc.stdout.readexactly(chunk)
             except asyncio.IncompleteReadError as exc:

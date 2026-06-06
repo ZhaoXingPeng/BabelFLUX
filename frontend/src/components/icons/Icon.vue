@@ -12,6 +12,7 @@ type IconName =
   | "sliders-horizontal"
   | "square"
   | "type"
+  | "upload"
   | "x";
 
 const props = withDefaults(
@@ -76,6 +77,7 @@ const ICON_PATHS: Record<IconName, string[]> = {
   ],
   square: ["M5 5h14v14H5z"],
   type: ["M4 7V4h16v3", "M9 20h6", "M12 4v16"],
+  upload: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"],
   x: ["M18 6 6 18", "m6 6 12 12"]
 };
 </script>

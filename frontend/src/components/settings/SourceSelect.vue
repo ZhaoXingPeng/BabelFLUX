@@ -31,8 +31,6 @@ const groups = computed(() => [
   }
 ]);
 
-const selectedSource = computed(() => props.sources.find((source) => source.key === props.selectedKey) ?? props.sources[0]);
-
 function sourcesFor(keys: string[]) {
   return keys.map((key) => props.sources.find((source) => source.key === key)).filter((source): source is SourceOption => Boolean(source));
 }
@@ -65,6 +63,5 @@ function handleSelect(value: string) {
       :options="sourceOptions"
       @update:model-value="handleSelect"
     />
-    <small>{{ selectedSource.availability === "desktop" ? "需客户端能力" : selectedSource.channel }}</small>
   </label>
 </template>

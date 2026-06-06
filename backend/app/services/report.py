@@ -26,7 +26,7 @@ def build_final_correction_prompt(
 ) -> str:
     return "\n".join(
         [
-            "你是 AI 同声传译助手的「会后完整纠偏」模块，对整场传译做最终全局校正。",
+            "你是 LingoSync / 灵犀同传的「会后完整纠偏」模块，对整场传译做最终全局校正。",
             f"领域：{domain}；源语言：{source_language}；目标语言：{target_language}。",
             f"领域策略：{domain_focus(domain)}",
             "输入是整场按时间排序的句子（含 id、原文、实时译文）。请：",

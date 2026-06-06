@@ -23,7 +23,10 @@ interface MockSocket {
 
 const mockRuntime = vi.hoisted(() => ({
   createSession: vi.fn(),
+  getSessionReport: vi.fn(),
   issueSessionHandoff: vi.fn(),
+  reportDownloadUrl: vi.fn(),
+  uploadSessionMedia: vi.fn(),
   createSessionSocket: vi.fn(),
   handlersBySession: new Map<string, SocketHandlers>(),
   sockets: [] as Array<{ sessionId: string; socket: MockSocket }>
@@ -31,7 +34,10 @@ const mockRuntime = vi.hoisted(() => ({
 
 vi.mock("./api/client", () => ({
   createSession: mockRuntime.createSession,
-  issueSessionHandoff: mockRuntime.issueSessionHandoff
+  getSessionReport: mockRuntime.getSessionReport,
+  issueSessionHandoff: mockRuntime.issueSessionHandoff,
+  reportDownloadUrl: mockRuntime.reportDownloadUrl,
+  uploadSessionMedia: mockRuntime.uploadSessionMedia
 }));
 
 vi.mock("./api/ws", () => ({
@@ -174,11 +180,22 @@ describe("同传工作台 mock 流程", () => {
       }
     });
     mockRuntime.createSession.mockReset();
+    mockRuntime.getSessionReport.mockReset();
     mockRuntime.issueSessionHandoff.mockReset();
+    mockRuntime.reportDownloadUrl.mockReset();
+    mockRuntime.uploadSessionMedia.mockReset();
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.handlersBySession.clear();
     mockRuntime.sockets = [];
     mockRuntime.createSessionSocket.mockImplementation(buildSocket);
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn((file: File) => `blob:preview-${file.name}`)
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn()
+    });
   });
 
   afterEach(() => {
@@ -395,6 +412,167 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.quickInput.permissionState).toBe("idle");
     expect(store.quickCanStart).toBe(false);
+  });
+
+  it("upload video source keeps a local playback preview after the session starts", async () => {
+    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "upload-video-session", status: "created" });
+    mockRuntime.uploadSessionMedia.mockResolvedValueOnce({
+      mediaId: "upload-video-session.mp4",
+      fileName: "demo.mp4",
+      sizeBytes: 9
+    });
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await setSource(wrapper, "video-file");
+    const file = new File(["fake mp4"], "demo.mp4", { type: "video/mp4" });
+    const input = wrapper.find('input[type="file"]');
+    Object.defineProperty(input.element, "files", { configurable: true, value: [file] });
+    await input.trigger("change");
+    await nextTick();
+
+    expect(store.quickCanStart).toBe(true);
+    expect(store.mediaUrl).toBe("blob:preview-demo.mp4");
+
+    await wrapper.find(".settings-footer .primary-button").trigger("click");
+    await flushPromises();
+
+    expect(mockRuntime.uploadSessionMedia).toHaveBeenCalledWith("upload-video-session", file);
+    expect(store.mediaUrl).toBe("blob:preview-demo.mp4");
+    expect(store.audioUrl).toBeNull();
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    expect(video.exists()).toBe(true);
+    expect(video.attributes("src")).toBe("blob:preview-demo.mp4");
+
+    mockRuntime.handlersBySession.get("upload-video-session")?.onOpen?.();
+    await nextTick();
+
+    expect(mockRuntime.createSessionSocket).toHaveBeenCalledWith(
+      "upload-video-session",
+      expect.any(Object),
+      { autoStart: false }
+    );
+
+    if (!mockRuntime.sockets[0].socket.sent.includes(JSON.stringify({ type: "start_session" }))) {
+      await video.trigger("play");
+    }
+    expect(
+      mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
+    ).toHaveLength(1);
+
+    await video.trigger("pause");
+    expect(store.modeStates.quick).toBe("paused");
+    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "pause_session" }));
+
+    await video.trigger("play");
+    expect(store.modeStates.quick).toBe("running");
+    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "resume_session" }));
+  });
+
+  it("splits long backend paragraphs into sentence-level transcript cards", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "long-backend-session";
+    store.activeSegmentId = "seg-long";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-long",
+        text:
+          "I feel so fortunate that my first job was working at the Museum of Modern Art on a retrospective of painter Elizabeth Murray. I learned so much from her. She told me that a few did not quite meet her own mark for what she wanted them to be.",
+        language: "en",
+        startMs: 0,
+        endMs: 12000,
+        status: "final"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-long",
+        text:
+          "我感到非常幸运，我的第一份工作是在现代艺术博物馆参与画家伊丽莎白默里的回顾展。我从她身上学到了很多。她告诉我，有少数作品并没有完全达到她预期的标准。",
+        language: "zh",
+        startMs: 0,
+        endMs: 12000,
+        status: "final"
+      }
+    ];
+
+    expect(store.transcriptPairs).toHaveLength(3);
+    expect(store.transcriptPairs.map((pair) => pair.time)).toEqual(["00:00", "00:04", "00:08"]);
+    expect(store.transcriptPairs[0].source).toContain("Museum of Modern Art");
+    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
+    expect(store.transcriptPairs[2].isActive).toBe(true);
+  });
+
+  it("does not cross-pair unfinished streaming source and translation chunks", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "partial-backend-session";
+    store.activeSegmentId = "seg-partial";
+    store.playbackMs = 6000;
+    store.sourceSegments = [
+      {
+        segmentId: "seg-partial",
+        text:
+          "I feel so fortunate that my first job was working at the Museum of Modern Art. I learned so much from her.",
+        language: "en",
+        startMs: 0,
+        endMs: 0,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-partial",
+        text: "我感到非常幸运，我的第一份工作是在现代艺术博物馆工作。",
+        language: "zh",
+        startMs: 0,
+        endMs: 0,
+        status: "partial"
+      }
+    ];
+
+    expect(store.transcriptPairs).toHaveLength(1);
+    expect(store.transcriptPairs[0].source).toContain("Museum of Modern Art");
+    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
+    expect(store.transcriptPairs[0].translation).not.toContain("等待");
+  });
+
+  it("keeps a final translation paired with only the stable part of a partial source", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "partial-source-final-translation";
+    store.activeSegmentId = "seg-mixed";
+    store.playbackMs = 6000;
+    store.sourceSegments = [
+      {
+        segmentId: "seg-mixed",
+        text:
+          "I feel so fortunate that my first job was working at the Museum of Modern Art. I learned so much from her.",
+        language: "en",
+        startMs: 0,
+        endMs: 0,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-mixed",
+        text: "我感到非常幸运，我的第一份工作是在现代艺术博物馆参与画家伊丽莎白默里的回顾展。",
+        language: "zh",
+        startMs: 0,
+        endMs: 6000,
+        status: "final"
+      }
+    ];
+
+    expect(store.transcriptPairs).toHaveLength(1);
+    expect(store.transcriptPairs[0].state).toBe("partial");
+    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
+    expect(store.transcriptPairs[0].translation).toContain("现代艺术博物馆");
   });
 
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {

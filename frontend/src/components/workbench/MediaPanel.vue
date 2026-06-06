@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from "vue";
 import type { SourceSyncState } from "../../types/events";
 import Icon from "../icons/Icon.vue";
 import type {
@@ -11,7 +12,7 @@ import type {
 } from "../workflow/types";
 import FloatingCaption from "./FloatingCaption.vue";
 
-defineProps<{
+const props = defineProps<{
   form: QuickFormState;
   floatingForm: FloatingFormState;
   state: RuntimeState;
@@ -34,12 +35,49 @@ const emit = defineEmits<{
   openDesktop: [];
   toggleFloatingCaptions: [];
   syncPlayback: [currentTimeSeconds: number];
+  playbackPause: [];
+  playbackPlay: [];
   ended: [];
 }>();
+
+const videoEl = ref<HTMLVideoElement | null>(null);
+const audioEl = ref<HTMLAudioElement | null>(null);
+
+function currentMediaElement() {
+  return props.mediaKind === "video" ? videoEl.value : audioEl.value;
+}
+
+async function tryAutoPlay() {
+  await nextTick();
+  const element = currentMediaElement();
+  if (!element || props.state !== "running" || !element.paused) return;
+  try {
+    await element.play();
+  } catch {
+    // Browsers may block autoplay with sound. Controls remain available for a manual start.
+  }
+}
 
 function emitPlaybackTime(event: Event) {
   emit("syncPlayback", (event.target as HTMLMediaElement).currentTime);
 }
+
+function handlePause(event: Event) {
+  const element = event.target as HTMLMediaElement;
+  if (!element.ended) emit("playbackPause");
+}
+
+function handlePlay() {
+  emit("playbackPlay");
+}
+
+watch(
+  () => [props.state, props.mediaUrl, props.audioUrl, props.mediaKind],
+  () => {
+    void tryAutoPlay();
+  },
+  { flush: "post", immediate: true }
+);
 </script>
 
 <template>
@@ -59,12 +97,17 @@ function emitPlaybackTime(event: Event) {
     <div class="media-screen">
       <div v-if="mediaKind === 'video' && mediaUrl" class="media-player-stack">
         <video
+          ref="videoEl"
           class="fixture-video"
           :src="mediaUrl"
           controls
           playsinline
+          autoplay
           preload="metadata"
           data-testid="fixture-video"
+          @loadedmetadata="tryAutoPlay"
+          @play="handlePlay"
+          @pause="handlePause"
           @timeupdate="emitPlaybackTime"
           @seeked="emitPlaybackTime"
           @ended="emit('ended')"
@@ -77,11 +120,16 @@ function emitPlaybackTime(event: Event) {
           <span>{{ currentPair.source }}</span>
         </div>
         <audio
+          ref="audioEl"
           class="fixture-audio"
           :src="audioUrl"
           controls
+          autoplay
           preload="metadata"
           data-testid="fixture-audio"
+          @loadedmetadata="tryAutoPlay"
+          @play="handlePlay"
+          @pause="handlePause"
           @timeupdate="emitPlaybackTime"
           @seeked="emitPlaybackTime"
           @ended="emit('ended')"
