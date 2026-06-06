@@ -877,11 +877,12 @@ export const useSessionStore = defineStore("session", {
 
     resetMode(mode: ProductMode) {
       if (this.activeMode === mode) {
-        this.startRequestId += 1;
         this.activeMode = null;
         this.stopSession("idle");
-        this.resetSessionData();
       }
+      // 无论该模式此前是否在跑，都清掉上一段的报告/字幕/进度，确保是"干净的下一次任务"。
+      this.startRequestId += 1;
+      this.resetSessionData();
       this.modeStates[mode] = "setup";
       if (mode === "quick" && shouldRefreshDefaultSessionName(this.quickForm.name)) {
         this.quickForm.name = defaultSessionName();
@@ -889,6 +890,17 @@ export const useSessionStore = defineStore("session", {
       if (mode === "quick" && this.quickForm.source === testVideoFixture.key && !this.activeMode) {
         this.loadTestVideoFixturePreview();
       }
+    },
+
+    /** 本地测试视频自然播放结束 → 自动收尾出报告，贴近"音频播放完自动结束"的真实路径。 */
+    handleFixtureEnded() {
+      if (this.sessionId !== "local-test-video-fixture" || this.modeStates.quick !== "running") return;
+      this.revealFixtureSegmentsUpTo(testVideoFixture.durationMs);
+      this.modeStates.quick = "report";
+      this.startRequestId += 1;
+      this.activeMode = null;
+      this.buildLocalReport();
+      this.stopSession("stopped");
     },
 
     buildSessionPayload(mode: ProductMode): CreateSessionPayload {
@@ -1041,50 +1053,83 @@ export const useSessionStore = defineStore("session", {
       this.sessionId = "local-test-video-fixture";
       this.wsConnected = true;
       this.status = "running";
-      this.loadTestVideoFixturePreview();
+      // 媒体就绪，但字幕不再一次性灌入：跟随左侧播放进度逐句"听到一句、出一句"。
+      this.mediaUrl = testVideoFixture.videoUrl;
+      this.audioUrl = testVideoFixture.audioUrl;
+      this.revealFixtureSegmentsUpTo(0);
       this.sourceSyncState = {
         status: "syncing",
         lagMs: 0,
-        message: "本地视频、音频和字幕已加载"
+        message: "本地素材已就绪，播放即开始实时同传"
       };
     },
 
     syncFixturePlayback(currentTimeSeconds: number) {
-      if (this.mediaUrl !== testVideoFixture.videoUrl && this.audioUrl !== testVideoFixture.audioUrl) return;
+      if (this.sessionId !== "local-test-video-fixture" || this.status !== "running") return;
 
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
-      const activeSegment = findActiveSegment(testVideoFixture.segments, playbackMs);
-
-      this.playbackMs = playbackMs;
-      this.activeSegmentId = activeSegment?.segmentId ?? null;
+      this.revealFixtureSegmentsUpTo(playbackMs);
       this.sourceSyncState = {
         status: "syncing",
         lagMs: 0,
         message: `本地素材同步 ${formatPlaybackTime(playbackMs)}`
       };
-
-      testVideoFixture.revisions
-        .filter(
-          (revision) =>
-            playbackMs >= revision.atMs && !this.fixtureAppliedRevisionIds.includes(revision.revisionId)
-        )
-        .forEach((revision) => this.applyTestVideoRevision(revision));
     },
 
-    applyTestVideoRevision(revision: TestVideoRevision) {
-      this.fixtureAppliedRevisionIds = [...this.fixtureAppliedRevisionIds, revision.revisionId];
-      this.revisions = [createFixtureRevisionEvent(revision), ...this.revisions].slice(0, 20);
-      this.translationSegments = this.translationSegments.map((segment) =>
-        segment.segmentId === revision.segmentId
-          ? {
-              ...segment,
-              text: revision.afterText,
-              status: "revised" as SegmentStatus,
-              originalText: revision.beforeText,
-              revisionReason: revision.reason
-            }
-          : segment
-      );
+    /**
+     * 按播放进度幂等重算本地测试视频应显示的字幕：
+     * 只显示 startMs ≤ playbackMs 的句子，模拟"听到一句、出一句"；
+     * 当前正在播放且刚出现的一句标记 partial（流式光标）；atMs 已到的纠偏即时套用。
+     * 幂等设计保证拖动进度条前后都能正确显示/回退，不残留旧状态。
+     */
+    revealFixtureSegmentsUpTo(playbackMs: number) {
+      const PARTIAL_WINDOW_MS = 900;
+      const revealed = testVideoFixture.segments.filter((segment) => playbackMs >= segment.startMs);
+      const activeSegment = findActiveSegment(testVideoFixture.segments, playbackMs);
+      const activeId = activeSegment?.segmentId ?? revealed[revealed.length - 1]?.segmentId ?? null;
+
+      const dueRevisions = testVideoFixture.revisions.filter((revision) => playbackMs >= revision.atMs);
+      const revisionBySegment = new Map(dueRevisions.map((revision) => [revision.segmentId, revision] as const));
+
+      this.sourceSegments = revealed.map((segment) => ({
+        segmentId: segment.segmentId,
+        text: segment.en,
+        language: "en",
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        status: "final" as SegmentStatus
+      }));
+
+      this.translationSegments = revealed.map((segment) => {
+        const revision = revisionBySegment.get(segment.segmentId);
+        if (revision) {
+          return {
+            segmentId: segment.segmentId,
+            text: revision.afterText,
+            language: "zh",
+            startMs: segment.startMs,
+            endMs: segment.endMs,
+            status: "revised" as SegmentStatus,
+            originalText: revision.beforeText,
+            revisionReason: revision.reason
+          };
+        }
+        const isFreshActive =
+          segment.segmentId === activeId && playbackMs - segment.startMs < PARTIAL_WINDOW_MS;
+        return {
+          segmentId: segment.segmentId,
+          text: segment.zh,
+          language: "zh",
+          startMs: segment.startMs,
+          endMs: segment.endMs,
+          status: (isFreshActive ? "partial" : "final") as SegmentStatus
+        };
+      });
+
+      this.revisions = dueRevisions.map((revision) => createFixtureRevisionEvent(revision)).reverse();
+      this.fixtureAppliedRevisionIds = dueRevisions.map((revision) => revision.revisionId);
+      this.activeSegmentId = activeId;
+      this.playbackMs = playbackMs;
     },
 
     connectSocket(sessionId: string, mode: ProductMode, requestId: number) {

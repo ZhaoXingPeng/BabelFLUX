@@ -5,6 +5,13 @@ import StreamLine from "./StreamLine.vue";
 defineProps<{
   pair: TranscriptPair;
 }>();
+
+// 把内部字幕状态映射成可读中文，贴近真实"识别中 → 定稿 → 校正"的同传节奏。
+const STATE_LABELS: Record<string, string> = {
+  partial: "识别中",
+  final: "已定稿",
+  revised: "已修正"
+};
 </script>
 
 <template>
@@ -17,7 +24,7 @@ defineProps<{
   >
     <header>
       <time>{{ pair.time }}</time>
-      <span>{{ pair.state === "revised" ? "已修正" : pair.state }}</span>
+      <span>{{ STATE_LABELS[pair.state] ?? pair.state }}</span>
     </header>
     <span v-if="pair.state === 'revised'" class="revision-float" aria-hidden="true">↺ 已校正</span>
     <p class="source-line"><StreamLine :text="pair.source" :state="pair.state" /></p>

@@ -14,18 +14,20 @@ export interface TestVideoRevision {
 
 const durationMs = 136_301;
 const segments = buildBilingualTimeline(englishSubtitleText, chineseSubtitleText, durationMs);
-const nearWinSegment = segments.find((segment) => segment.startMs === 46_000);
+// 纠偏演示段：约 10 秒处的「a few ... her own mark」。译文先按字面出，
+// 待上下文（博物馆 / 画家回顾展）到位后于约 13 秒自动校正，贴近真实的实时纠偏节奏。
+const revisionSegment = segments.find((segment) => segment.startMs === 10_000);
 
-export const testVideoRevisions: TestVideoRevision[] = nearWinSegment
+export const testVideoRevisions: TestVideoRevision[] = revisionSegment
   ? [
       {
-        revisionId: "fixture-rev-near-win",
-        segmentId: nearWinSegment.segmentId,
-        atMs: 52_000,
-        beforeText: nearWinSegment.zh,
-        afterText: "我想，当我们开始珍视一次差一点成功的馈赠时，转变就发生了，",
-        reason: "语义纠偏：near win 不是“险胜”",
-        confidence: 0.94
+        revisionId: "fixture-rev-context",
+        segmentId: revisionSegment.segmentId,
+        atMs: 13_000,
+        beforeText: revisionSegment.zh,
+        afterText: "她告诉我，有几幅作品没能完全达到她自己的标准，",
+        reason: "结合上下文：a few 指几幅画作，own mark 应译作「自己的标准」",
+        confidence: 0.95
       }
     ]
   : [];

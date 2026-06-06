@@ -34,6 +34,7 @@ const emit = defineEmits<{
   openDesktop: [];
   toggleFloatingCaptions: [];
   syncPlayback: [currentTimeSeconds: number];
+  ended: [];
 }>();
 
 function emitPlaybackTime(event: Event) {
@@ -66,6 +67,7 @@ function emitPlaybackTime(event: Event) {
           data-testid="fixture-video"
           @timeupdate="emitPlaybackTime"
           @seeked="emitPlaybackTime"
+          @ended="emit('ended')"
         />
       </div>
       <div v-else-if="mediaKind === 'audio' && audioUrl" class="audio-stage">
@@ -82,6 +84,7 @@ function emitPlaybackTime(event: Event) {
           data-testid="fixture-audio"
           @timeupdate="emitPlaybackTime"
           @seeked="emitPlaybackTime"
+          @ended="emit('ended')"
         />
       </div>
       <div v-else class="empty-media">

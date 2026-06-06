@@ -1334,7 +1334,7 @@ a:focus-visible {
 }
 
 .field-hint,
-.source-select small {
+.source-select > small {
   display: block;
   margin-top: 6px;
   color: var(--ink-soft);
@@ -1389,7 +1389,7 @@ a:focus-visible {
   left: -8px;
 }
 
-.language-pair-field strong {
+.language-pair-field .language-code {
   position: absolute;
   right: 12px;
   bottom: 14px;
