@@ -711,9 +711,11 @@ a:focus-visible {
   position: relative;
   inset: auto;
   width: 100%;
+  min-width: 0;
   max-width: none;
   backdrop-filter: blur(12px);
   transform: none;
+  box-shadow: none;
   cursor: move;
 }
 

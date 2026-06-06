@@ -829,33 +829,13 @@ export const useSessionStore = defineStore("session", {
       this.desktopDownloadPromptOpen = false;
 
       if (!this.sessionId) {
-        try {
-          const session = await createSession({
-            inputMode: "system_audio",
-            sourceLanguage: "auto",
-            targetLanguage,
-            productMode: "floating",
-            sessionName: "客户端悬浮字幕",
-            domain: this.floatingForm.domain,
-            modelProfile: this.floatingForm.modelProfile,
-            sourceKey: "system-audio",
-            sourceFileName: undefined,
-            sourceUrl: undefined,
-            sourcePermission: "idle"
-          });
-          const handoff = await issueSessionHandoff(session.sessionId, {
-            source: "system-audio",
-            sourceLanguage: "auto",
-            targetLanguage,
-            displayMode
-          });
-          this.launchDesktopUrl(handoff.deepLinkUrl);
-        } catch (error) {
-          this.desktopLaunchState = "error";
-          this.desktopLaunchMessage =
-            error instanceof Error ? error.message : "无法创建桌面悬浮窗会话";
-          this.desktopDownloadPromptOpen = true;
-        }
+        const params = new URLSearchParams({
+          source: "system-audio",
+          sourceLanguage: "auto",
+          targetLanguage,
+          displayMode
+        });
+        this.launchDesktopUrl(`lingosync://floating/start?${params.toString()}`);
         return;
       }
 

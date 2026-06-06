@@ -629,46 +629,19 @@ describe("同传工作台 mock 流程", () => {
     );
   });
 
-  it("主屏激活客户端时创建桌面会话并签发 handoff token", async () => {
+  it("主屏激活客户端时直接唤起 standalone 桌面悬浮窗", async () => {
     vi.useFakeTimers();
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
-    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "desktop-home-session", status: "created" });
-    mockRuntime.issueSessionHandoff.mockResolvedValueOnce({
-      handoffToken: "h_home",
-      expiresAt: "2026-06-06T00:00:30Z",
-      deepLinkUrl:
-        "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
-    });
 
     const wrapper = mountHome();
 
     await findButton(wrapper, "激活客户端").trigger("click");
     await flushPromises();
 
-    expect(mockRuntime.createSession).toHaveBeenCalledWith({
-      inputMode: "system_audio",
-      sourceLanguage: "auto",
-      targetLanguage: "zh",
-      productMode: "floating",
-      sessionName: "客户端悬浮字幕",
-      domain: "通用",
-      modelProfile: "快速低延迟",
-      sourceKey: "system-audio",
-      sourceFileName: undefined,
-      sourceUrl: undefined,
-      sourcePermission: "idle"
-    });
-    expect(mockRuntime.issueSessionHandoff).toHaveBeenCalledWith(
-      "desktop-home-session",
-      expect.objectContaining({
-        source: "system-audio",
-        sourceLanguage: "auto",
-        targetLanguage: "zh",
-        displayMode: "bilingual"
-      })
-    );
+    expect(mockRuntime.createSession).not.toHaveBeenCalled();
+    expect(mockRuntime.issueSessionHandoff).not.toHaveBeenCalled();
     expect(assign).toHaveBeenCalledWith(
-      "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
+      "lingosync://floating/start?source=system-audio&sourceLanguage=auto&targetLanguage=zh&displayMode=bilingual"
     );
     expect(wrapper.text()).toContain("正在唤起桌面悬浮窗");
 

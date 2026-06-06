@@ -52,6 +52,15 @@ const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "microphone", label: "麦克风" }
 ];
 const selectedSource = ref<CaptureSourceKind>("system_audio");
+const launchSourceMap: Record<string, CaptureSourceKind> = {
+  "system-audio": "system_audio",
+  system_audio: "system_audio",
+  "screen-window": "screen_window",
+  screen_window: "screen_window",
+  "browser-tab": "browser_audio",
+  browser_audio: "browser_audio",
+  microphone: "microphone"
+};
 
 let socket: WebSocket | null = null;
 let capture: AudioCaptureSession | null = null;
@@ -84,6 +93,18 @@ const languageCodeByLabel: Record<string, string> = {
   德语: "de"
 };
 const toCode = (label: string) => languageCodeByLabel[label] ?? label;
+
+function applyStandaloneLaunchParams(params: LaunchParams) {
+  mode.value = "standalone";
+  displayMode.value = params.displayMode ?? displayMode.value;
+  starting.value = false;
+  capturing.value = false;
+  captureStarted = false;
+  status.value = { status: "listening", lagMs: 0, message: "等待音源" };
+  if (params.source && launchSourceMap[params.source]) {
+    selectedSource.value = launchSourceMap[params.source];
+  }
+}
 
 function formatTime(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -146,15 +167,21 @@ function applyEvent(event: ServerEvent) {
 // ---- handoff 模式（由 Web 工作台投送，仅显示）----
 async function startFromLaunchParams(params: LaunchParams) {
   errorMessage.value = "";
-  if (!params.token) return; // 无 token：保持 standalone 模式
-  mode.value = "handoff";
+  if (!params.token) {
+    if (capture || socket || capturing.value || mode.value === "handoff") await stopStandalone();
+    applyStandaloneLaunchParams(params);
+    return;
+  }
   displayMode.value = params.displayMode ?? "bilingual";
   try {
+    if (capture || socket || capturing.value) await stopStandalone();
     const claim = await claimHandoffToken(params.token);
+    mode.value = "handoff";
     displayMode.value = claim.displayMode;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent);
   } catch (error) {
+    applyStandaloneLaunchParams(params);
     errorMessage.value = error instanceof Error ? error.message : "桌面接管失败";
     status.value = { status: "missing", lagMs: 0, message: errorMessage.value };
   }
@@ -251,6 +278,20 @@ async function stopStandalone() {
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
+async function closeOverlayWindow() {
+  await stopStandalone();
+  mode.value = "standalone";
+  errorMessage.value = "";
+  try {
+    if (currentWindow) {
+      await currentWindow.close();
+      return;
+    }
+  } catch {
+  }
+  window.close();
+}
+
 function startWindowDrag(event: PointerEvent) {
   if (event.button !== 0) return;
   const target = event.target as HTMLElement | null;
@@ -321,8 +362,8 @@ onMounted(async () => {
     await setOverlayLocked(false);
   });
   const launched = await getLaunchDeepLink();
-  const params = launched?.token ? launched : parseLaunchParams();
-  if (params.token) await startFromLaunchParams(params);
+  const params = launched ?? parseLaunchParams();
+  await startFromLaunchParams(params);
 });
 
 onUnmounted(() => {
@@ -367,7 +408,7 @@ onUnmounted(() => {
         :locked="settings.locked"
         :status="status"
         desktop
-        @close="stopStandalone"
+        @close="closeOverlayWindow"
       />
     </div>
 
