@@ -42,6 +42,7 @@ import type {
 
 let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
+let desktopLaunchDismissTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 // File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
 const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
@@ -74,6 +75,7 @@ const captureKindBySource: Record<string, CaptureSourceKind> = {
 };
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
+const DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS = 3500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 // 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1.5s，右侧才产出该句字幕，贴近真实同传节奏。
 const SUBTITLE_LATENCY_MS = 1500;
@@ -382,10 +384,15 @@ async function requestBrowserPermission(sourceKey: string): Promise<string> {
   }
 
   if (sourceKey === "browser-tab" || sourceKey === "screen-window") {
-    if (!mediaDevices.getDisplayMedia) throw new Error("当前浏览器不支持屏幕或标签页采集");
-    const stream = await mediaDevices.getDisplayMedia({ audio: true, video: true });
+    const stream = await acquireStream(captureKindBySource[sourceKey]);
     stopMediaStream(stream);
-    return sourceKey === "browser-tab" ? "浏览器标签页音频已授权" : "屏幕或窗口音频已授权";
+    return sourceKey === "browser-tab"
+      ? "标签页音频已授权"
+      : "屏幕或窗口音频已授权";
+  }
+
+  if (sourceKey === "system-audio") {
+    throw new Error("Windows 系统音频由桌面客户端原生采集，无需浏览器授权。");
   }
 
   throw new Error("该声源不需要浏览器授权");
@@ -771,16 +778,27 @@ export const useSessionStore = defineStore("session", {
         window.clearTimeout(desktopLaunchTimer);
         desktopLaunchTimer = null;
       }
+      if (desktopLaunchDismissTimer !== null) {
+        window.clearTimeout(desktopLaunchDismissTimer);
+        desktopLaunchDismissTimer = null;
+      }
       removeDesktopLaunchListeners?.();
       removeDesktopLaunchListeners = null;
     },
 
     markDesktopLaunchLaunched() {
       if (this.desktopLaunchState !== "launching") return;
-      this.desktopLaunchState = "launched";
-      this.desktopLaunchMessage = "已投送到桌面悬浮窗";
-      this.desktopDownloadPromptOpen = false;
       this.clearDesktopLaunchWatchers();
+      this.desktopLaunchState = "launched";
+      this.desktopLaunchMessage = "桌面悬浮窗已唤起";
+      this.desktopDownloadPromptOpen = true;
+      desktopLaunchDismissTimer = window.setTimeout(() => {
+        if (this.desktopLaunchState !== "launched") return;
+        this.desktopDownloadPromptOpen = false;
+        this.desktopLaunchState = "idle";
+        this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
+        desktopLaunchDismissTimer = null;
+      }, DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS);
       try {
         window.localStorage.setItem("lingosync.clientSeen", "1");
       } catch {
@@ -829,33 +847,13 @@ export const useSessionStore = defineStore("session", {
       this.desktopDownloadPromptOpen = false;
 
       if (!this.sessionId) {
-        try {
-          const session = await createSession({
-            inputMode: "system_audio",
-            sourceLanguage: "auto",
-            targetLanguage,
-            productMode: "floating",
-            sessionName: "客户端悬浮字幕",
-            domain: this.floatingForm.domain,
-            modelProfile: this.floatingForm.modelProfile,
-            sourceKey: "system-audio",
-            sourceFileName: undefined,
-            sourceUrl: undefined,
-            sourcePermission: "idle"
-          });
-          const handoff = await issueSessionHandoff(session.sessionId, {
-            source: "system-audio",
-            sourceLanguage: "auto",
-            targetLanguage,
-            displayMode
-          });
-          this.launchDesktopUrl(handoff.deepLinkUrl);
-        } catch (error) {
-          this.desktopLaunchState = "error";
-          this.desktopLaunchMessage =
-            error instanceof Error ? error.message : "无法创建桌面悬浮窗会话";
-          this.desktopDownloadPromptOpen = true;
-        }
+        const params = new URLSearchParams({
+          source: "system-audio",
+          sourceLanguage: "auto",
+          targetLanguage,
+          displayMode
+        });
+        this.launchDesktopUrl(`lingosync://floating/start?${params.toString()}`);
         return;
       }
 
@@ -875,8 +873,13 @@ export const useSessionStore = defineStore("session", {
     },
 
     dismissDesktopDownloadPrompt() {
+      this.clearDesktopLaunchWatchers();
       this.desktopDownloadPromptOpen = false;
-      if (this.desktopLaunchState === "fallback") {
+      if (
+        this.desktopLaunchState === "fallback" ||
+        this.desktopLaunchState === "launched" ||
+        this.desktopLaunchState === "error"
+      ) {
         this.desktopLaunchState = "idle";
         this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
       }

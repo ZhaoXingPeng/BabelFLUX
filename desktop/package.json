@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "client:build": "tauri build --no-bundle",
+    "client:bundle": "tauri build",
+    "client:register": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/register-release-deep-link.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",

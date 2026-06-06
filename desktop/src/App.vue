@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
@@ -14,9 +16,16 @@ import {
 import { claimHandoffToken, connectDesktopSession } from "./api/sessionBridge";
 import { getLaunchDeepLink, listenForDeepLinks, parseLaunchParams, type LaunchParams } from "./launcherBridge";
 import { loadOverlaySettings, saveOverlaySettings, type OverlaySettings } from "./localSettings";
+import { startNativeSystemAudioCapture } from "./nativeAudioCapture";
 import { registerUnlockShortcut, setOverlayLocked } from "./overlayWindow";
 
 const settings = ref<OverlaySettings>(loadOverlaySettings());
+let currentWindow: ReturnType<typeof getCurrentWindow> | null = null;
+try {
+  currentWindow = getCurrentWindow();
+} catch {
+  currentWindow = null;
+}
 const pair = ref<TranscriptPair>({
   time: "00:00",
   source: "Waiting for audio…",
@@ -38,19 +47,43 @@ const capturing = ref(false);
 const starting = ref(false);
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
-  { value: "system_audio", label: "系统音频" },
+  { value: "system_audio", label: "Windows 系统音频" },
   { value: "screen_window", label: "屏幕 / 窗口" },
   { value: "browser_audio", label: "标签页音频" },
   { value: "microphone", label: "麦克风" }
 ];
 const selectedSource = ref<CaptureSourceKind>("system_audio");
+const launchSourceMap: Record<string, CaptureSourceKind> = {
+  "system-audio": "system_audio",
+  system_audio: "system_audio",
+  "screen-window": "screen_window",
+  screen_window: "screen_window",
+  "browser-tab": "browser_audio",
+  browser_audio: "browser_audio",
+  microphone: "microphone"
+};
 
 let socket: WebSocket | null = null;
 let capture: AudioCaptureSession | null = null;
 let captureStarted = false;
+let dragState:
+  | {
+      pointerId: number;
+      startScreenX: number;
+      startScreenY: number;
+      windowX: number;
+      windowY: number;
+      scaleFactor: number;
+    }
+  | null = null;
+let pendingDragPosition: PhysicalPosition | null = null;
+let dragFrame = 0;
 let cleanupDeepLink: (() => void) | null = null;
 let cleanupForwardedDeepLink: (() => void) | null = null;
 let cleanupShortcut: (() => void) | null = null;
+let nativeAudioWatchdog: number | null = null;
+let nativeAudioChunks = 0;
+let nativeAudioSignalChunks = 0;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
 
@@ -64,6 +97,18 @@ const languageCodeByLabel: Record<string, string> = {
   德语: "de"
 };
 const toCode = (label: string) => languageCodeByLabel[label] ?? label;
+
+function applyStandaloneLaunchParams(params: LaunchParams) {
+  mode.value = "standalone";
+  displayMode.value = params.displayMode ?? displayMode.value;
+  starting.value = false;
+  capturing.value = false;
+  captureStarted = false;
+  status.value = { status: "listening", lagMs: 0, message: "等待音源" };
+  if (params.source && launchSourceMap[params.source]) {
+    selectedSource.value = launchSourceMap[params.source];
+  }
+}
 
 function formatTime(ms: number): string {
   const total = Math.floor(ms / 1000);
@@ -126,17 +171,74 @@ function applyEvent(event: ServerEvent) {
 // ---- handoff 模式（由 Web 工作台投送，仅显示）----
 async function startFromLaunchParams(params: LaunchParams) {
   errorMessage.value = "";
-  if (!params.token) return; // 无 token：保持 standalone 模式
-  mode.value = "handoff";
+  if (!params.token) {
+    if (capture || socket || capturing.value || mode.value === "handoff") await stopStandalone();
+    applyStandaloneLaunchParams(params);
+    return;
+  }
   displayMode.value = params.displayMode ?? "bilingual";
   try {
+    if (capture || socket || capturing.value) await stopStandalone();
     const claim = await claimHandoffToken(params.token);
+    mode.value = "handoff";
     displayMode.value = claim.displayMode;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent);
   } catch (error) {
+    applyStandaloneLaunchParams(params);
     errorMessage.value = error instanceof Error ? error.message : "桌面接管失败";
     status.value = { status: "missing", lagMs: 0, message: errorMessage.value };
+  }
+}
+
+function clearNativeAudioWatchdog() {
+  if (nativeAudioWatchdog !== null) {
+    window.clearTimeout(nativeAudioWatchdog);
+    nativeAudioWatchdog = null;
+  }
+}
+
+function resetNativeAudioStats() {
+  clearNativeAudioWatchdog();
+  nativeAudioChunks = 0;
+  nativeAudioSignalChunks = 0;
+}
+
+function hasPcmSignal(chunk: ArrayBuffer) {
+  const pcm = new Int16Array(chunk);
+  for (let index = 0; index < pcm.length; index += 1) {
+    if (Math.abs(pcm[index]) > 64) return true;
+  }
+  return false;
+}
+
+function trackNativeAudioChunk(chunk: ArrayBuffer) {
+  if (selectedSource.value !== "system_audio") return;
+  nativeAudioChunks += 1;
+  const hasSignal = hasPcmSignal(chunk);
+  if (hasSignal) nativeAudioSignalChunks += 1;
+
+  if (nativeAudioChunks === 1) {
+    clearNativeAudioWatchdog();
+    status.value = {
+      status: "syncing",
+      lagMs: 0,
+      message: hasSignal ? "已捕获 Windows 系统音频" : "已连接 Windows 系统音频，等待声音"
+    };
+    return;
+  }
+
+  if (hasSignal && nativeAudioSignalChunks === 1) {
+    status.value = { status: "syncing", lagMs: 0, message: "已捕获 Windows 系统音频" };
+    return;
+  }
+
+  if (nativeAudioChunks === 30 && nativeAudioSignalChunks === 0) {
+    status.value = {
+      status: "lagging",
+      lagMs: 0,
+      message: "正在监听 Windows 系统音频，尚未检测到声音"
+    };
   }
 }
 
@@ -160,7 +262,11 @@ async function startStandalone() {
       sourcePermission: "granted"
     });
     capturing.value = true;
-    status.value = { status: "syncing", lagMs: 0, message: "正在连接同传引擎…" };
+    status.value = {
+      status: "syncing",
+      lagMs: 0,
+      message: kind === "system_audio" ? "正在读取 Windows 系统音频" : "正在连接同传引擎…"
+    };
     socket?.close();
     socket = connectDesktopSession(`/api/ws/sessions/${session.sessionId}`, applyEvent);
   } catch (error) {
@@ -174,22 +280,46 @@ async function startStandalone() {
 
 async function beginCapture() {
   try {
+    resetNativeAudioStats();
+    const sendChunk = (chunk: ArrayBuffer) => {
+      trackNativeAudioChunk(chunk);
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+    };
+    const handleEnded = () => {
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio_end" }));
+      void stopStandalone();
+    };
+    const handleError = (message: string) => {
+      errorMessage.value = message;
+      status.value = { status: "missing", lagMs: 0, message };
+    };
+
+    if (selectedSource.value === "system_audio") {
+      nativeAudioWatchdog = window.setTimeout(() => {
+        if (selectedSource.value !== "system_audio" || !capturing.value || nativeAudioChunks > 0) return;
+        status.value = {
+          status: "lagging",
+          lagMs: 0,
+          message: "未收到 Windows 音频帧，请确认默认输出设备正在播放声音"
+        };
+      }, 3000);
+      capture = await startNativeSystemAudioCapture({
+        onChunk: sendChunk,
+        onEnded: handleEnded,
+        onError: handleError
+      });
+      return;
+    }
+
     const stream = await acquireStream(selectedSource.value);
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
     capture = await startAudioCapture(stream, {
-      onChunk: (chunk) => {
-        if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
-      },
-      onEnded: () => {
-        if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio_end" }));
-        void stopStandalone();
-      },
-      onError: (message) => {
-        errorMessage.value = message;
-      }
+      onChunk: sendChunk,
+      onEnded: handleEnded,
+      onError: handleError
     });
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "音频采集启动失败";
@@ -201,6 +331,7 @@ async function beginCapture() {
 async function stopStandalone() {
   capturing.value = false;
   captureStarted = false;
+  resetNativeAudioStats();
   if (capture) {
     const current = capture;
     capture = null;
@@ -212,6 +343,69 @@ async function stopStandalone() {
   socket?.close();
   socket = null;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
+}
+
+async function closeOverlayWindow() {
+  await stopStandalone();
+  mode.value = "standalone";
+  errorMessage.value = "";
+  try {
+    await invoke("exit_overlay_app");
+    return;
+  } catch {
+  }
+  try {
+    if (currentWindow) {
+      await currentWindow.close();
+      return;
+    }
+  } catch {
+  }
+  window.close();
+}
+
+function startWindowDrag(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("button, input, select, textarea, a")) return;
+  if (!currentWindow) return;
+  event.preventDefault();
+  (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+  void Promise.all([currentWindow.outerPosition(), currentWindow.scaleFactor()])
+    .then(([position, scaleFactor]) => {
+      dragState = {
+        pointerId: event.pointerId,
+        startScreenX: event.screenX,
+        startScreenY: event.screenY,
+        windowX: position.x,
+        windowY: position.y,
+        scaleFactor
+      };
+    })
+    .catch(() => {
+      void currentWindow?.startDragging().catch(() => undefined);
+    });
+}
+
+function moveWindowDrag(event: PointerEvent) {
+  if (!currentWindow || !dragState || event.pointerId !== dragState.pointerId) return;
+  event.preventDefault();
+  const nextX = Math.round(dragState.windowX + (event.screenX - dragState.startScreenX) * dragState.scaleFactor);
+  const nextY = Math.round(dragState.windowY + (event.screenY - dragState.startScreenY) * dragState.scaleFactor);
+  pendingDragPosition = new PhysicalPosition(nextX, nextY);
+  if (dragFrame) return;
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    const position = pendingDragPosition;
+    pendingDragPosition = null;
+    if (position) void currentWindow?.setPosition(position).catch(() => undefined);
+  });
+}
+
+function endWindowDrag(event: PointerEvent) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return;
+  (event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId);
+  dragState = null;
 }
 
 async function listenForForwardedDeepLinks(handler: (params: LaunchParams) => void) {
@@ -240,8 +434,8 @@ onMounted(async () => {
     await setOverlayLocked(false);
   });
   const launched = await getLaunchDeepLink();
-  const params = launched?.token ? launched : parseLaunchParams();
-  if (params.token) await startFromLaunchParams(params);
+  const params = launched ?? parseLaunchParams();
+  await startFromLaunchParams(params);
 });
 
 onUnmounted(() => {
@@ -253,32 +447,45 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="desktop-overlay-shell" :style="shellStyle">
+  <main
+    class="desktop-overlay-shell"
+    :style="shellStyle"
+    @pointerdown="startWindowDrag"
+    @pointermove="moveWindowDrag"
+    @pointerup="endWindowDrag"
+    @pointercancel="endWindowDrag"
+  >
     <!-- standalone 启动条：透明框自带音源下拉，选源后开始（默认系统音频）。整条可拖动。 -->
     <div
       v-if="mode === 'standalone' && !capturing && !settings.locked"
       class="overlay-launcher"
-      data-tauri-drag-region
     >
-      <span class="overlay-launcher-title" data-tauri-drag-region>悬浮同传</span>
+      <span class="overlay-launcher-title">悬浮同传</span>
       <select v-model="selectedSource" class="overlay-source-select" aria-label="选择音源">
         <option v-for="opt in SOURCE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
       <button class="overlay-start" type="button" :disabled="starting" @click="startStandalone">
         {{ starting ? "连接中…" : "开始" }}
       </button>
+      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="closeOverlayWindow">
+        ×
+      </button>
     </div>
 
-    <FloatingCaption
+    <div
       v-if="capturing || mode === 'handoff'"
-      :pair="pair"
-      :form="settings.form"
-      :display-mode="displayMode"
-      :locked="settings.locked"
-      :status="status"
-      desktop
-      @close="stopStandalone"
-    />
+      class="desktop-caption-drag-layer"
+    >
+      <FloatingCaption
+        :pair="pair"
+        :form="settings.form"
+        :display-mode="displayMode"
+        :locked="settings.locked"
+        :status="status"
+        desktop
+        @close="closeOverlayWindow"
+      />
+    </div>
 
     <p v-if="errorMessage" class="desktop-overlay-error">{{ errorMessage }}</p>
   </main>

@@ -117,8 +117,12 @@ function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
 }
 
 function buildStream() {
+  const audioTrack = { addEventListener: vi.fn(), removeEventListener: vi.fn(), stop: vi.fn() };
+  const videoTrack = { getSettings: () => ({ displaySurface: "browser" }), stop: vi.fn() };
   return {
-    getTracks: () => [{ stop: vi.fn() }]
+    getTracks: () => [audioTrack, videoTrack],
+    getAudioTracks: () => [audioTrack],
+    getVideoTracks: () => [videoTrack]
   };
 }
 
@@ -427,6 +431,12 @@ describe("同传工作台 mock 流程", () => {
     await setSource(wrapper, "browser-tab");
     await findButton(wrapper, "申请权限").trigger("click");
     await flushPromises();
+    expect(navigator.mediaDevices.getDisplayMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        systemAudio: "exclude",
+        windowAudio: "exclude"
+      })
+    );
     expect(store.quickInput.permissionState).toBe("granted");
     expect(store.quickCanStart).toBe(true);
 
@@ -435,6 +445,21 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.quickInput.permissionState).toBe("idle");
     expect(store.quickCanStart).toBe(false);
+  });
+
+  it("屏幕窗口音频权限会提示共享窗口音频", async () => {
+    const wrapper = mountApp();
+
+    await setSource(wrapper, "screen-window");
+    await findButton(wrapper, "申请权限").trigger("click");
+    await flushPromises();
+
+    expect(navigator.mediaDevices.getDisplayMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        systemAudio: "include",
+        windowAudio: "window"
+      })
+    );
   });
 
   it("upload video source keeps a local playback preview after the session starts", async () => {
@@ -629,46 +654,19 @@ describe("同传工作台 mock 流程", () => {
     );
   });
 
-  it("主屏激活客户端时创建桌面会话并签发 handoff token", async () => {
+  it("主屏激活客户端时直接唤起 standalone 桌面悬浮窗", async () => {
     vi.useFakeTimers();
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
-    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "desktop-home-session", status: "created" });
-    mockRuntime.issueSessionHandoff.mockResolvedValueOnce({
-      handoffToken: "h_home",
-      expiresAt: "2026-06-06T00:00:30Z",
-      deepLinkUrl:
-        "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
-    });
 
     const wrapper = mountHome();
 
     await findButton(wrapper, "激活客户端").trigger("click");
     await flushPromises();
 
-    expect(mockRuntime.createSession).toHaveBeenCalledWith({
-      inputMode: "system_audio",
-      sourceLanguage: "auto",
-      targetLanguage: "zh",
-      productMode: "floating",
-      sessionName: "客户端悬浮字幕",
-      domain: "通用",
-      modelProfile: "快速低延迟",
-      sourceKey: "system-audio",
-      sourceFileName: undefined,
-      sourceUrl: undefined,
-      sourcePermission: "idle"
-    });
-    expect(mockRuntime.issueSessionHandoff).toHaveBeenCalledWith(
-      "desktop-home-session",
-      expect.objectContaining({
-        source: "system-audio",
-        sourceLanguage: "auto",
-        targetLanguage: "zh",
-        displayMode: "bilingual"
-      })
-    );
+    expect(mockRuntime.createSession).not.toHaveBeenCalled();
+    expect(mockRuntime.issueSessionHandoff).not.toHaveBeenCalled();
     expect(assign).toHaveBeenCalledWith(
-      "lingosync://floating/start?sessionId=desktop-home-session&displayMode=bilingual&token=h_home"
+      "lingosync://floating/start?source=system-audio&sourceLanguage=auto&targetLanguage=zh&displayMode=bilingual"
     );
     expect(wrapper.text()).toContain("正在唤起桌面悬浮窗");
 
@@ -678,6 +676,31 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.text()).toContain("未检测到桌面客户端");
     await findButton(wrapper, "我已安装，直接打开").trigger("click");
     expect(assign).toHaveBeenCalledTimes(2);
+  });
+
+  it("桌面客户端唤起成功后保留提示再自动收起", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+
+    const wrapper = mountHome();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "激活客户端").trigger("click");
+    await flushPromises();
+    window.dispatchEvent(new Event("blur"));
+    await nextTick();
+
+    expect(store.desktopLaunchState).toBe("launched");
+    expect(wrapper.text()).toContain("桌面悬浮窗已唤起");
+
+    await vi.advanceTimersByTimeAsync(3400);
+    await nextTick();
+    expect(wrapper.text()).toContain("桌面悬浮窗已唤起");
+
+    await vi.advanceTimersByTimeAsync(100);
+    await nextTick();
+    expect(store.desktopLaunchState).toBe("idle");
+    expect(wrapper.text()).not.toContain("桌面悬浮窗已唤起");
   });
 
   it("投送桌面悬浮窗时签发 handoff token，并在未唤起时提供网页悬浮回退", async () => {
