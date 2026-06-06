@@ -117,8 +117,12 @@ function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
 }
 
 function buildStream() {
+  const audioTrack = { addEventListener: vi.fn(), removeEventListener: vi.fn(), stop: vi.fn() };
+  const videoTrack = { getSettings: () => ({ displaySurface: "browser" }), stop: vi.fn() };
   return {
-    getTracks: () => [{ stop: vi.fn() }]
+    getTracks: () => [audioTrack, videoTrack],
+    getAudioTracks: () => [audioTrack],
+    getVideoTracks: () => [videoTrack]
   };
 }
 
@@ -427,6 +431,12 @@ describe("同传工作台 mock 流程", () => {
     await setSource(wrapper, "browser-tab");
     await findButton(wrapper, "申请权限").trigger("click");
     await flushPromises();
+    expect(navigator.mediaDevices.getDisplayMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        systemAudio: "exclude",
+        windowAudio: "exclude"
+      })
+    );
     expect(store.quickInput.permissionState).toBe("granted");
     expect(store.quickCanStart).toBe(true);
 
@@ -435,6 +445,21 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.quickInput.permissionState).toBe("idle");
     expect(store.quickCanStart).toBe(false);
+  });
+
+  it("屏幕窗口音频权限会提示共享窗口音频", async () => {
+    const wrapper = mountApp();
+
+    await setSource(wrapper, "screen-window");
+    await findButton(wrapper, "申请权限").trigger("click");
+    await flushPromises();
+
+    expect(navigator.mediaDevices.getDisplayMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        systemAudio: "include",
+        windowAudio: "window"
+      })
+    );
   });
 
   it("upload video source keeps a local playback preview after the session starts", async () => {

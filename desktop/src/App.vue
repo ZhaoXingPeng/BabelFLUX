@@ -81,6 +81,9 @@ let dragFrame = 0;
 let cleanupDeepLink: (() => void) | null = null;
 let cleanupForwardedDeepLink: (() => void) | null = null;
 let cleanupShortcut: (() => void) | null = null;
+let nativeAudioWatchdog: number | null = null;
+let nativeAudioChunks = 0;
+let nativeAudioSignalChunks = 0;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
 
@@ -188,6 +191,57 @@ async function startFromLaunchParams(params: LaunchParams) {
   }
 }
 
+function clearNativeAudioWatchdog() {
+  if (nativeAudioWatchdog !== null) {
+    window.clearTimeout(nativeAudioWatchdog);
+    nativeAudioWatchdog = null;
+  }
+}
+
+function resetNativeAudioStats() {
+  clearNativeAudioWatchdog();
+  nativeAudioChunks = 0;
+  nativeAudioSignalChunks = 0;
+}
+
+function hasPcmSignal(chunk: ArrayBuffer) {
+  const pcm = new Int16Array(chunk);
+  for (let index = 0; index < pcm.length; index += 1) {
+    if (Math.abs(pcm[index]) > 64) return true;
+  }
+  return false;
+}
+
+function trackNativeAudioChunk(chunk: ArrayBuffer) {
+  if (selectedSource.value !== "system_audio") return;
+  nativeAudioChunks += 1;
+  const hasSignal = hasPcmSignal(chunk);
+  if (hasSignal) nativeAudioSignalChunks += 1;
+
+  if (nativeAudioChunks === 1) {
+    clearNativeAudioWatchdog();
+    status.value = {
+      status: "syncing",
+      lagMs: 0,
+      message: hasSignal ? "已捕获 Windows 系统音频" : "已连接 Windows 系统音频，等待声音"
+    };
+    return;
+  }
+
+  if (hasSignal && nativeAudioSignalChunks === 1) {
+    status.value = { status: "syncing", lagMs: 0, message: "已捕获 Windows 系统音频" };
+    return;
+  }
+
+  if (nativeAudioChunks === 30 && nativeAudioSignalChunks === 0) {
+    status.value = {
+      status: "lagging",
+      lagMs: 0,
+      message: "正在监听 Windows 系统音频，尚未检测到声音"
+    };
+  }
+}
+
 // ---- standalone 模式（悬浮窗自选音源、自采集同传）----
 async function startStandalone() {
   if (starting.value || capturing.value) return;
@@ -226,7 +280,9 @@ async function startStandalone() {
 
 async function beginCapture() {
   try {
+    resetNativeAudioStats();
     const sendChunk = (chunk: ArrayBuffer) => {
+      trackNativeAudioChunk(chunk);
       if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
     };
     const handleEnded = () => {
@@ -235,9 +291,18 @@ async function beginCapture() {
     };
     const handleError = (message: string) => {
       errorMessage.value = message;
+      status.value = { status: "missing", lagMs: 0, message };
     };
 
     if (selectedSource.value === "system_audio") {
+      nativeAudioWatchdog = window.setTimeout(() => {
+        if (selectedSource.value !== "system_audio" || !capturing.value || nativeAudioChunks > 0) return;
+        status.value = {
+          status: "lagging",
+          lagMs: 0,
+          message: "未收到 Windows 音频帧，请确认默认输出设备正在播放声音"
+        };
+      }, 3000);
       capture = await startNativeSystemAudioCapture({
         onChunk: sendChunk,
         onEnded: handleEnded,
@@ -266,6 +331,7 @@ async function beginCapture() {
 async function stopStandalone() {
   capturing.value = false;
   captureStarted = false;
+  resetNativeAudioStats();
   if (capture) {
     const current = capture;
     capture = null;

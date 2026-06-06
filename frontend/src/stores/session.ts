@@ -384,10 +384,15 @@ async function requestBrowserPermission(sourceKey: string): Promise<string> {
   }
 
   if (sourceKey === "browser-tab" || sourceKey === "screen-window") {
-    if (!mediaDevices.getDisplayMedia) throw new Error("当前浏览器不支持屏幕或标签页采集");
-    const stream = await mediaDevices.getDisplayMedia({ audio: true, video: true });
+    const stream = await acquireStream(captureKindBySource[sourceKey]);
     stopMediaStream(stream);
-    return sourceKey === "browser-tab" ? "浏览器标签页音频已授权" : "屏幕或窗口音频已授权";
+    return sourceKey === "browser-tab"
+      ? "标签页音频已授权"
+      : "屏幕或窗口音频已授权";
+  }
+
+  if (sourceKey === "system-audio") {
+    throw new Error("Windows 系统音频由桌面客户端原生采集，无需浏览器授权。");
   }
 
   throw new Error("该声源不需要浏览器授权");

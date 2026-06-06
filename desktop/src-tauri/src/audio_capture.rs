@@ -163,11 +163,14 @@ mod platform {
                 break;
             }
 
-            let next_frames = capture_client
-                .get_next_packet_size()
-                .map_err(|error| format!("读取 Windows 音频包大小失败：{error}"))?
-                .unwrap_or(0);
-            if next_frames > 0 {
+            loop {
+                let next_frames = capture_client
+                    .get_next_packet_size()
+                    .map_err(|error| format!("读取 Windows 音频包大小失败：{error}"))?
+                    .unwrap_or(0);
+                if next_frames == 0 {
+                    break;
+                }
                 capture_client
                     .read_from_device_to_deque(&mut sample_queue)
                     .map_err(|error| format!("读取 Windows 系统音频失败：{error}"))?;
@@ -184,7 +187,7 @@ mod platform {
             if stop_rx.try_recv().is_ok() {
                 break;
             }
-            let _ = event_handle.wait_for_event(200);
+            let _ = event_handle.wait_for_event(500);
         }
 
         let _ = audio_client.stop_stream();

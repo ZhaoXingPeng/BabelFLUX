@@ -53,6 +53,82 @@ export interface AudioCaptureSession {
 
 const TARGET_SAMPLE_RATE = 16000;
 
+type ExtendedDisplayMediaOptions = DisplayMediaStreamOptions & {
+  monitorTypeSurfaces?: "include" | "exclude";
+  preferCurrentTab?: boolean;
+  selfBrowserSurface?: "include" | "exclude";
+  surfaceSwitching?: "include" | "exclude";
+  systemAudio?: "include" | "exclude";
+  windowAudio?: "exclude" | "window" | "system";
+};
+
+function buildDisplayMediaOptions(kind: CaptureSourceKind): ExtendedDisplayMediaOptions {
+  const audio: MediaTrackConstraints = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 1
+  };
+  const common: ExtendedDisplayMediaOptions = {
+    audio,
+    video: true,
+    selfBrowserSurface: "exclude",
+    surfaceSwitching: "include"
+  };
+
+  if (kind === "browser_audio") {
+    return {
+      ...common,
+      monitorTypeSurfaces: "exclude",
+      preferCurrentTab: false,
+      systemAudio: "exclude",
+      windowAudio: "exclude"
+    };
+  }
+
+  if (kind === "screen_window") {
+    return {
+      ...common,
+      monitorTypeSurfaces: "include",
+      systemAudio: "include",
+      windowAudio: "window"
+    };
+  }
+
+  return {
+    ...common,
+    monitorTypeSurfaces: "include",
+    systemAudio: "include",
+    windowAudio: "system"
+  };
+}
+
+function stopStream(stream: MediaStream) {
+  stream.getTracks().forEach((track) => track.stop());
+}
+
+function validateDisplayStream(kind: CaptureSourceKind, stream: MediaStream) {
+  const audioTracks = stream.getAudioTracks();
+  const videoTrack = stream.getVideoTracks()[0];
+  const displaySurface = (videoTrack?.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface;
+
+  if (kind === "browser_audio" && displaySurface && displaySurface !== "browser") {
+    stopStream(stream);
+    throw new Error("标签页音频需要在共享窗口中选择“标签页”，并勾选“分享标签页音频”。");
+  }
+
+  if (audioTracks.length === 0) {
+    stopStream(stream);
+    if (kind === "browser_audio") {
+      throw new Error("未捕获到标签页音频，请选择“标签页”并勾选“分享标签页音频”。");
+    }
+    if (kind === "screen_window") {
+      throw new Error("未捕获到屏幕/窗口音频，请选择可分享音频的屏幕或窗口，并勾选共享音频。");
+    }
+    throw new Error("未捕获到系统音频轨道，请选择整个屏幕并勾选共享系统音频。");
+  }
+}
+
 /** 按音源种类获取浏览器 MediaStream（音频轨道）。 */
 export async function acquireStream(kind: CaptureSourceKind): Promise<MediaStream> {
   const media = navigator.mediaDevices;
@@ -68,16 +144,8 @@ export async function acquireStream(kind: CaptureSourceKind): Promise<MediaStrea
   if (!media.getDisplayMedia) {
     throw new Error("当前环境不支持屏幕/标签页音频采集（getDisplayMedia 缺失）");
   }
-  const displayOptions = {
-    audio: { echoCancellation: false, noiseSuppression: false } as MediaTrackConstraints,
-    video: true,
-    systemAudio: kind === "system_audio" ? "include" : undefined
-  } as DisplayMediaStreamOptions & { systemAudio?: "include" };
-  const stream = await media.getDisplayMedia(displayOptions);
-  if (stream.getAudioTracks().length === 0) {
-    stream.getTracks().forEach((track) => track.stop());
-    throw new Error("未捕获到音频轨道，请在共享时勾选“分享音频/系统音频”");
-  }
+  const stream = await media.getDisplayMedia(buildDisplayMediaOptions(kind));
+  validateDisplayStream(kind, stream);
   return stream;
 }
 
