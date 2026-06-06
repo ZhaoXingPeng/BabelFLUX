@@ -12,7 +12,7 @@ import pytest
 from app.core.config import settings
 from app.services.pipeline import InterpretationPipeline
 from app.services.providers.dashscope import DashScopeConfig, LiveTranslateSession
-from app.services.report import render_md, render_srt, render_txt
+from app.services.report import generate_session_report, render_md, render_srt, render_txt
 from app.services.revision import RealtimeReviser
 from app.services.session_store import SegmentRecord, SessionRecord
 
@@ -172,6 +172,30 @@ async def test_source_snapshot_partials_do_not_duplicate_prefixes() -> None:
     assert record.segments[1].source_text == "I feel so fortunate that my first."
 
 
+@pytest.mark.asyncio
+async def test_source_sliding_window_partials_are_overlap_merged() -> None:
+    record = SessionRecord(session_id="partial-overlap", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    for text in [
+        "the Museum of Modern Art",
+        "Museum of Modern Art on",
+        "of Modern Art on a",
+        "Modern Art on a retrospective",
+        "Art on a retrospective of",
+        "on a retrospective of painter Elizabeth Murray.",
+    ]:
+        await pipeline._on_source(text, "itemA", final=False)
+
+    assert record.segments[0].source_text == (
+        "the Museum of Modern Art on a retrospective of painter Elizabeth Murray."
+    )
+
+
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
     reviser = RealtimeReviser(
         client=None, model="m", source_language="en", target_language="zh", domain="通用"
@@ -244,3 +268,20 @@ def test_report_renderers_produce_expected_formats() -> None:
     md = render_md(report)
     assert md.startswith("# 测试报告")
     assert "| 时间 | 原文 | 终稿译文 |" in md
+
+
+@pytest.mark.asyncio
+async def test_report_counts_partial_segments_created_before_stop() -> None:
+    record = SessionRecord(session_id="report-partial", source_language="en", target_language="zh")
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 2000
+    seg.end_ms = 5000
+    seg.source_text = "I feel so fortunate."
+    seg.translation_text = "我感到非常幸运。"
+    seg.status = "partial"
+
+    report = await generate_session_report(record, settings=settings, client=None)
+
+    assert report["metrics"]["segments"] == 1
+    assert report["durationText"] == "00:05"
+    assert report["segments"][0]["sourceText"] == "I feel so fortunate."

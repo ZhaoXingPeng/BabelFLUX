@@ -668,9 +668,14 @@ export const useSessionStore = defineStore("session", {
     reportMetrics(): ReportMetric[] {
       const report = this.report;
       if (report) {
+        const segmentCount = report.metrics.segments || report.segments.length || this.transcriptPairs.length;
+        const durationText =
+          report.durationText ||
+          report.metrics.durationText ||
+          formatPlaybackTime(report.durationMs || this.playbackMs);
         return [
-          { label: "时长", value: report.durationText || report.metrics.durationText || "--" },
-          { label: "句数", value: `${report.metrics.segments} 句` },
+          { label: "时长", value: durationText },
+          { label: "句数", value: `${segmentCount} 句` },
           {
             label: "修正",
             value: `实时 ${report.metrics.realtimeRevisions} · 会后 ${report.metrics.finalRevisions}`
@@ -1227,9 +1232,10 @@ export const useSessionStore = defineStore("session", {
     },
 
     syncFixturePlayback(currentTimeSeconds: number) {
+      if (this.status !== "running" || this.modeStates.quick !== "running") return;
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
       this.playbackMs = playbackMs;
-      if (this.sessionId !== "local-test-video-fixture" || this.status !== "running") return;
+      if (this.sessionId !== "local-test-video-fixture") return;
 
       this.revealFixtureSegmentsUpTo(playbackMs);
       this.sourceSyncState = {
@@ -1357,7 +1363,11 @@ export const useSessionStore = defineStore("session", {
         return;
       }
 
+      const liveEventsLocked =
+        this.reportLoading || Boolean(this.activeMode && this.modeStates[this.activeMode] === "report");
+
       if (event.type === "source_sync_state") {
+        if (liveEventsLocked) return;
         this.sourceSyncState = event.state;
         // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
         if (pendingCaptureKind && !captureStarted) {
@@ -1368,16 +1378,19 @@ export const useSessionStore = defineStore("session", {
       }
 
       if (event.type === "transcript_segment") {
+        if (liveEventsLocked) return;
         this.sourceSegments = upsertSegment(this.sourceSegments, event.segment);
         return;
       }
 
       if (event.type === "translation_segment") {
+        if (liveEventsLocked) return;
         this.translationSegments = upsertSegment(this.translationSegments, event.segment);
         return;
       }
 
       if (event.type === "revision_event") {
+        if (liveEventsLocked) return;
         this.revisions = [event.revision, ...this.revisions].slice(0, 20);
         this.markRevised(event.revision);
         return;

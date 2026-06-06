@@ -1,5 +1,3 @@
-# LingoSync / 灵犀同传
-
 ![LingoSync / 灵犀同传仓库主图](docs/design/lingosync-repo-cover.png)
 
 > LingoSync / 灵犀同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
@@ -27,29 +25,9 @@
 
 ## 系统架构
 
-三端 + 一条真实模型链路，所有服务可同机部署（演示环境为 Windows 单机）：
+三端 + 一条真实模型链路，所有服务可同机部署（演示环境为 Windows 单机）。
 
-```text
-+--------------+   lingosync:// handoff    +------------------+
-|  Web 工作台   | <-----------------------> |  桌面悬浮窗       |
-| Vue3 + Pinia |                           | Tauri v2(WebView)|
-| Vite + GSAP  |                           | standalone / 接管 |
-+------+-------+                           +--------+---------+
-       |   WebSocket(事件) + REST(会话/报告)         |
-       +------------------+--------------------------+
-                          |
-                          v
-                +---------------------+
-                |   FastAPI 后端       |  会话管理 / 音频入口 / 管线编排
-                |   asyncio + ffmpeg   |  双层纠偏 / 报告生成与下载
-                +---------+-----------+
-                          |
-                          v   阿里云百炼（标准端点）
-   音源 -> 16k PCM -> qwen3.5-livetranslate (ASR + 翻译, 服务端 VAD)
-        -> transcript / translation 事件 -> 前端字幕流
-        -> qwen-flash 跨句实时纠偏 -> revision 事件 -> 琥珀高亮
-   结束 -> qwen-plus 会后完整纠偏 -> session_report -> 四格式下载
-```
+![LingoSync / 灵犀同传系统架构](docs/design/lingosync-architecture.png)
 
 ### 模型链路与选型
 

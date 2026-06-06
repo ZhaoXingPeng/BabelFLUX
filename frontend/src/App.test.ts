@@ -288,6 +288,10 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
     expect(store.playbackMs).toBe(30_000);
 
+    const pause = vi.fn();
+    Object.defineProperty(video.element, "paused", { configurable: true, value: false });
+    Object.defineProperty(video.element, "pause", { configurable: true, value: pause });
+
     await findButton(wrapper, "结束同传").trigger("click");
     const confirmEndButton = wrapper.findAll("button").find((item) => item.text() === "结束同传");
     expect(confirmEndButton, "confirm end button should exist").toBeTruthy();
@@ -296,6 +300,11 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.modeStates.quick).toBe("report");
     expect(store.report?.durationText).toBe("00:30");
+    expect(pause).toHaveBeenCalled();
+
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 45 });
+    await video.trigger("timeupdate");
+    expect(store.playbackMs).toBe(30_000);
   });
 
   it("返回主屏会重置会话，下次进入是全新的待开始任务", async () => {
@@ -375,6 +384,20 @@ describe("同传工作台 mock 流程", () => {
     expect(store.modeStates.quick).toBe("report");
     expect(wrapper.text()).toContain("同传报告");
     expect(wrapper.text()).toContain("1 条");
+
+    mockRuntime.handlersBySession.get("ui-session-1")?.onEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "late-after-stop",
+        text: "Late transcript should be ignored.",
+        language: "en",
+        startMs: 5000,
+        endMs: 6000,
+        status: "final"
+      }
+    });
+    await nextTick();
+    expect(wrapper.text()).not.toContain("Late transcript should be ignored.");
   });
 
   it("启动中重置时旧的创建请求不会连接旧 WebSocket", async () => {

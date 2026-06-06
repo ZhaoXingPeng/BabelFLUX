@@ -71,7 +71,7 @@ def _fmt_srt_ts(ms: int) -> str:
 async def generate_session_report(
     record: SessionRecord, *, settings: Settings, client: DashScopeClient | None
 ) -> dict[str, Any]:
-    segments = record.finalized_segments()
+    segments = record.reportable_segments()
     report_id = f"{record.session_id}-report-{uuid4().hex[:8]}"
 
     llm_out: dict[str, Any] = {}
@@ -91,6 +91,10 @@ async def generate_session_report(
         if isinstance(r, dict) and r.get("id")
     }
 
+    duration_ms = max(
+        record.duration_ms,
+        max((seg.end_ms or seg.start_ms for seg in segments), default=0),
+    )
     report_segments: list[dict[str, Any]] = []
     final_revisions: list[dict[str, Any]] = []
     for seg in segments:
@@ -138,8 +142,8 @@ async def generate_session_report(
         "domain": record.domain,
         "sourceLanguage": record.source_language,
         "targetLanguage": record.target_language,
-        "durationMs": record.duration_ms,
-        "durationText": _fmt_ts(record.duration_ms),
+        "durationMs": duration_ms,
+        "durationText": _fmt_ts(duration_ms),
         "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "summary": llm_out.get("summary", "") or _fallback_summary(segments),
         "qualityNotes": llm_out.get("qualityNotes", ""),
@@ -148,7 +152,7 @@ async def generate_session_report(
             "segments": len(report_segments),
             "realtimeRevisions": len(record.revisions),
             "finalRevisions": len(final_revisions),
-            "durationText": _fmt_ts(record.duration_ms),
+            "durationText": _fmt_ts(duration_ms),
         },
         "segments": report_segments,
         "finalRevisions": final_revisions,
