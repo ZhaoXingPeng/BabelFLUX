@@ -25,9 +25,14 @@ body {
   width: min(100vw - 20px, 860px);
   padding: 10px;
   background: transparent;
+  cursor: move;
 }
 
-/* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。整条 data-tauri-drag-region 可拖动。 */
+.desktop-caption-drag-layer {
+  cursor: move;
+}
+
+/* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。外层 main 负责拖动。 */
 .overlay-launcher {
   display: flex;
   align-items: center;
@@ -79,6 +84,7 @@ body {
   color: #1b1205;
   font-weight: 850;
   font-size: 13px;
+  cursor: pointer;
 }
 
 .overlay-start:hover:not(:disabled) {

@@ -68,10 +68,12 @@ export async function acquireStream(kind: CaptureSourceKind): Promise<MediaStrea
   if (!media.getDisplayMedia) {
     throw new Error("当前环境不支持屏幕/标签页音频采集（getDisplayMedia 缺失）");
   }
-  const stream = await media.getDisplayMedia({
+  const displayOptions = {
     audio: { echoCancellation: false, noiseSuppression: false } as MediaTrackConstraints,
-    video: true
-  });
+    video: true,
+    systemAudio: kind === "system_audio" ? "include" : undefined
+  } as DisplayMediaStreamOptions & { systemAudio?: "include" };
+  const stream = await media.getDisplayMedia(displayOptions);
   if (stream.getAudioTracks().length === 0) {
     stream.getTracks().forEach((track) => track.stop());
     throw new Error("未捕获到音频轨道，请在共享时勾选“分享音频/系统音频”");
