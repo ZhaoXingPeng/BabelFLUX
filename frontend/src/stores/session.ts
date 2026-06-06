@@ -42,6 +42,7 @@ import type {
 
 let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
+let desktopLaunchDismissTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 // File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
 const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
@@ -74,6 +75,7 @@ const captureKindBySource: Record<string, CaptureSourceKind> = {
 };
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
+const DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS = 3500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 // 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1.5s，右侧才产出该句字幕，贴近真实同传节奏。
 const SUBTITLE_LATENCY_MS = 1500;
@@ -771,16 +773,27 @@ export const useSessionStore = defineStore("session", {
         window.clearTimeout(desktopLaunchTimer);
         desktopLaunchTimer = null;
       }
+      if (desktopLaunchDismissTimer !== null) {
+        window.clearTimeout(desktopLaunchDismissTimer);
+        desktopLaunchDismissTimer = null;
+      }
       removeDesktopLaunchListeners?.();
       removeDesktopLaunchListeners = null;
     },
 
     markDesktopLaunchLaunched() {
       if (this.desktopLaunchState !== "launching") return;
-      this.desktopLaunchState = "launched";
-      this.desktopLaunchMessage = "已投送到桌面悬浮窗";
-      this.desktopDownloadPromptOpen = false;
       this.clearDesktopLaunchWatchers();
+      this.desktopLaunchState = "launched";
+      this.desktopLaunchMessage = "桌面悬浮窗已唤起";
+      this.desktopDownloadPromptOpen = true;
+      desktopLaunchDismissTimer = window.setTimeout(() => {
+        if (this.desktopLaunchState !== "launched") return;
+        this.desktopDownloadPromptOpen = false;
+        this.desktopLaunchState = "idle";
+        this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
+        desktopLaunchDismissTimer = null;
+      }, DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS);
       try {
         window.localStorage.setItem("lingosync.clientSeen", "1");
       } catch {
@@ -855,8 +868,13 @@ export const useSessionStore = defineStore("session", {
     },
 
     dismissDesktopDownloadPrompt() {
+      this.clearDesktopLaunchWatchers();
       this.desktopDownloadPromptOpen = false;
-      if (this.desktopLaunchState === "fallback") {
+      if (
+        this.desktopLaunchState === "fallback" ||
+        this.desktopLaunchState === "launched" ||
+        this.desktopLaunchState === "error"
+      ) {
         this.desktopLaunchState = "idle";
         this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
       }

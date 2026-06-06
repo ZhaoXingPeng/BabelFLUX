@@ -653,6 +653,31 @@ describe("同传工作台 mock 流程", () => {
     expect(assign).toHaveBeenCalledTimes(2);
   });
 
+  it("桌面客户端唤起成功后保留提示再自动收起", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+
+    const wrapper = mountHome();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "激活客户端").trigger("click");
+    await flushPromises();
+    window.dispatchEvent(new Event("blur"));
+    await nextTick();
+
+    expect(store.desktopLaunchState).toBe("launched");
+    expect(wrapper.text()).toContain("桌面悬浮窗已唤起");
+
+    await vi.advanceTimersByTimeAsync(3400);
+    await nextTick();
+    expect(wrapper.text()).toContain("桌面悬浮窗已唤起");
+
+    await vi.advanceTimersByTimeAsync(100);
+    await nextTick();
+    expect(store.desktopLaunchState).toBe("idle");
+    expect(wrapper.text()).not.toContain("桌面悬浮窗已唤起");
+  });
+
   it("投送桌面悬浮窗时签发 handoff token，并在未唤起时提供网页悬浮回退", async () => {
     vi.useFakeTimers();
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);

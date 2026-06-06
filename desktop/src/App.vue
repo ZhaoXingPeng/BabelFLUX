@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
@@ -283,6 +284,11 @@ async function closeOverlayWindow() {
   mode.value = "standalone";
   errorMessage.value = "";
   try {
+    await invoke("exit_overlay_app");
+    return;
+  } catch {
+  }
+  try {
     if (currentWindow) {
       await currentWindow.close();
       return;
@@ -394,6 +400,9 @@ onUnmounted(() => {
       </select>
       <button class="overlay-start" type="button" :disabled="starting" @click="startStandalone">
         {{ starting ? "连接中…" : "开始" }}
+      </button>
+      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="closeOverlayWindow">
+        ×
       </button>
     </div>
 

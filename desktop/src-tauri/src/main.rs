@@ -19,12 +19,18 @@ fn find_deep_link(argv: &[String]) -> Option<String> {
     })
 }
 
+#[tauri::command]
+fn exit_overlay_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(audio_capture::AudioCaptureState::default())
         .invoke_handler(tauri::generate_handler![
             audio_capture::start_windows_loopback_capture,
-            audio_capture::stop_windows_loopback_capture
+            audio_capture::stop_windows_loopback_capture,
+            exit_overlay_app
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("overlay") {
