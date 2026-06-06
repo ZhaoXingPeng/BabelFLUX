@@ -58,7 +58,9 @@ fn main() {
                 let _ = window.show();
             }
 
-            #[cfg(any(target_os = "linux", all(target_os = "windows", not(debug_assertions))))]
+            // Windows 下 debug 构建同样注册 lingosync:// scheme，否则 `tauri dev` 期间
+            // 无法验证「激活客户端」的 deep-link 唤起（历史上的唤不起问题之一）。
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = app.deep_link().register_all();

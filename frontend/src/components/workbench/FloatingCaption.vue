@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { gsap } from "gsap";
 import { Draggable } from "gsap/Draggable";
+import { DUR, EASE, shouldReduceMotion } from "../../composables/motion";
 import type { SourceSyncState } from "../../types/events";
 import Icon from "../icons/Icon.vue";
 import type { FloatingFormState, TranscriptPair } from "../workflow/types";
@@ -22,6 +23,8 @@ const emit = defineEmits<{
 }>();
 
 const root = ref<HTMLElement | null>(null);
+const sourceRef = ref<HTMLElement | null>(null);
+const translationRef = ref<HTMLElement | null>(null);
 let drag: Draggable[] = [];
 let dragging = false;
 
@@ -98,6 +101,18 @@ watch(
     if (!dragging) syncCaptionPosition();
   }
 );
+
+// 切到「新的一句」时做一次轻量交叉淡入，避免悬浮字幕整句硬切；
+// 句内逐字增长（segmentId 不变）不触发，保持原地平滑更新。
+watch(
+  () => props.pair.segmentId,
+  () => {
+    if (shouldReduceMotion()) return;
+    [sourceRef.value, translationRef.value].forEach((el) => {
+      if (el) gsap.fromTo(el, { autoAlpha: 0.4, y: 4 }, { autoAlpha: 1, y: 0, duration: DUR.base, ease: EASE });
+    });
+  }
+);
 </script>
 
 <template>
@@ -156,12 +171,13 @@ watch(
     </div>
     <p
       v-if="showSource"
+      ref="sourceRef"
       class="floating-source"
       :data-tauri-drag-region="desktop ? true : undefined"
     >
       {{ pair.source }}
     </p>
-    <p class="floating-translation" :data-tauri-drag-region="desktop ? true : undefined">
+    <p ref="translationRef" class="floating-translation" :data-tauri-drag-region="desktop ? true : undefined">
       {{ pair.translation }}
     </p>
   </section>

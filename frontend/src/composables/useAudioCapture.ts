@@ -144,24 +144,64 @@ function validateDisplayStream(kind: CaptureSourceKind, stream: MediaStream) {
   }
 }
 
+/** 把浏览器/WebView 的媒体异常翻成对症的、可操作的中文提示（区分权限被拒/无设备/被占用/用户取消）。 */
+export function describeMediaError(kind: CaptureSourceKind, error: unknown): Error {
+  const name = error instanceof DOMException ? error.name : "";
+  const label =
+    kind === "microphone"
+      ? "麦克风"
+      : kind === "browser_audio"
+        ? "标签页音频"
+        : kind === "screen_window"
+          ? "屏幕 / 窗口"
+          : "系统音频";
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return new Error(
+        kind === "microphone"
+          ? "麦克风权限被拒绝。请在 Windows「设置 → 隐私和安全性 → 麦克风」中允许桌面应用访问，或在浏览器允许麦克风后重试。"
+          : `${label}共享被拒绝或取消。请在弹出的共享窗口中选择来源并勾选「共享音频」后重试。`
+      );
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return new Error(`未找到可用的${label}设备，请检查设备连接与系统输入/输出设置。`);
+    case "NotReadableError":
+    case "TrackStartError":
+      return new Error(`${label}设备被其他程序占用，请关闭占用它的程序后重试。`);
+    case "AbortError":
+      return new Error("已取消音源选择，可重新选择音源后开始。");
+    default:
+      return error instanceof Error ? error : new Error(`${label}采集启动失败，请重试或更换音源。`);
+  }
+}
+
 /** 按音源种类获取浏览器 MediaStream（音频轨道）。 */
 export async function acquireStream(kind: CaptureSourceKind): Promise<MediaStream> {
   const media = navigator.mediaDevices;
   if (!media) throw new Error("当前环境不支持媒体采集（navigator.mediaDevices 缺失）");
 
   if (kind === "microphone") {
-    return media.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: true, channelCount: 1 }
-    });
+    try {
+      return await media.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: true, channelCount: 1 }
+      });
+    } catch (error) {
+      throw describeMediaError(kind, error);
+    }
   }
 
   // browser_audio / screen_window / system_audio 均走屏幕/标签页共享并勾选音频。
   if (!media.getDisplayMedia) {
     throw new Error("当前环境不支持屏幕/标签页音频采集（getDisplayMedia 缺失）");
   }
-  const stream = await media.getDisplayMedia(buildDisplayMediaOptions(kind));
-  validateDisplayStream(kind, stream);
-  return stream;
+  try {
+    const stream = await media.getDisplayMedia(buildDisplayMediaOptions(kind));
+    validateDisplayStream(kind, stream);
+    return stream;
+  } catch (error) {
+    throw describeMediaError(kind, error);
+  }
 }
 
 /**
