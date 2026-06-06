@@ -6,43 +6,45 @@
 
 ---
 
-## ✨ 核心特性
+## 核心特性
 
 | 能力 | 说明 |
 | --- | --- |
-| 🎙️ **实时识别 + 翻译** | 单条 WebSocket 接入 `qwen3.5-livetranslate-flash-realtime`，服务端 VAD 自动断句，边说边出双语字幕 |
-| 🔁 **实时纠偏（在线）** | 传译进行中由 `qwen-flash` 跨句复核，结合后文修正前句的术语/数字/否定/一词多义错误，前端**琥珀高亮**即时展示 |
-| 📝 **完整纠偏（会后）** | 结束后 `qwen-plus` 通读全场做全局校正、统一术语、生成摘要；六大领域差异化 PROMPT |
-| 🎧 **多源输入** | 在线直链、本地视频/音频上传、麦克风、系统音频、屏幕/窗口、浏览器标签页，以及演示模式 |
-| 🪟 **桌面悬浮窗** | Tauri 透明置顶字幕；可自选音源独立采集，或接管 Web 会话；任意位置拖拽、可调透明度与字号 |
-| 📄 **会话报告导出** | 双语终稿 + 校正记录 + 摘要，支持 **TXT / SRT / Markdown / JSON** 四种格式下载 |
-| 📚 **术语表 / 热词** | 术语经引擎 corpus 注入，纠偏与报告全程优先遵循 |
-| 🔌 **可降级** | 模型不可用时优雅降级（mock 事件流 / 纯实时译文报告），保证演示链路始终可跑 |
+| 实时识别 + 翻译 | 单条 WebSocket 接入 `qwen3.5-livetranslate-flash-realtime`，服务端 VAD 自动断句，边说边出双语字幕 |
+| 实时纠偏（在线） | 传译进行中由 `qwen-flash` 跨句复核，结合后文修正前句的术语/数字/否定/一词多义错误，前端琥珀高亮即时展示 |
+| 完整纠偏（会后） | 结束后 `qwen-plus` 通读全场做全局校正、统一术语、生成摘要；六大领域差异化 PROMPT |
+| 多源输入 | 在线直链、本地视频/音频上传、麦克风、系统音频、屏幕/窗口、浏览器标签页，以及演示模式 |
+| 桌面悬浮窗 | Tauri 透明置顶字幕；可自选音源独立采集，或接管 Web 会话；任意位置拖拽、可调透明度与字号 |
+| 会话报告导出 | 双语终稿 + 校正记录 + 摘要，支持 TXT / SRT / Markdown / JSON 四种格式下载 |
+| 术语表 / 热词 | 术语经引擎 corpus 注入，纠偏与报告全程优先遵循 |
+| 可降级 | 模型不可用时优雅降级（mock 事件流 / 纯实时译文报告），保证演示链路始终可跑 |
 
 ---
 
-## 🏗️ 系统架构
+## 系统架构
 
 三端 + 一条真实模型链路，所有服务可同机部署（演示环境为 Windows 单机）：
 
-```
-┌──────────────┐   lingosync:// handoff    ┌─────────────────┐
-│  Web 工作台   │◄─────────────────────────►│  桌面悬浮窗      │
-│ Vue3+Pinia   │                            │ Tauri v2(WebView)│
-│ +Vite +GSAP  │                            │ standalone/接管   │
-└──────┬───────┘                            └────────┬─────────┘
-       │   WebSocket(事件) + REST(会话/报告)          │
-       └───────────────────┬──────────────────────────┘
-                           ▼
-                 ┌────────────────────┐
-                 │   FastAPI 后端      │  会话管理 / 音频入口 / 管线编排
-                 │   asyncio + ffmpeg  │  双层纠偏 / 报告生成与下载
-                 └─────────┬──────────┘
-                           ▼  阿里云百炼（标准端点）
-   音源→16k PCM→ qwen3.5-livetranslate (ASR+翻译, 服务端 VAD)
-        → transcript/translation 事件 → 前端字幕流
-        → qwen-flash 跨句实时纠偏 → revision 事件 → 琥珀高亮
-   结束 → qwen-plus 会后完整纠偏 → session_report → 四格式下载
+```text
++--------------+   lingosync:// handoff    +------------------+
+|  Web 工作台   | <-----------------------> |  桌面悬浮窗       |
+| Vue3 + Pinia |                           | Tauri v2(WebView)|
+| Vite + GSAP  |                           | standalone / 接管 |
++------+-------+                           +--------+---------+
+       |   WebSocket(事件) + REST(会话/报告)         |
+       +------------------+--------------------------+
+                          |
+                          v
+                +---------------------+
+                |   FastAPI 后端       |  会话管理 / 音频入口 / 管线编排
+                |   asyncio + ffmpeg   |  双层纠偏 / 报告生成与下载
+                +---------+-----------+
+                          |
+                          v   阿里云百炼（标准端点）
+   音源 -> 16k PCM -> qwen3.5-livetranslate (ASR + 翻译, 服务端 VAD)
+        -> transcript / translation 事件 -> 前端字幕流
+        -> qwen-flash 跨句实时纠偏 -> revision 事件 -> 琥珀高亮
+   结束 -> qwen-plus 会后完整纠偏 -> session_report -> 四格式下载
 ```
 
 ### 模型链路与选型
@@ -59,7 +61,7 @@
 
 ---
 
-## 🎧 输入源
+## 输入源
 
 后端按会话 `inputMode` 选择音频入口（`backend/app/api/ws.py`）：
 
@@ -70,11 +72,11 @@
 | `microphone` / `system_audio` / `screen_window` / `browser_audio` | 前端 / 桌面用 AudioWorklet 采集为 16k 单声道 PCM，经 WS 二进制帧推送 |
 | `demo` | `DEMO_MEDIA_PATH` 指向的样例媒体，或 mock 事件流 |
 
-> 采集类音源在浏览器/WebView 内用 `AudioContext({sampleRate:16000})` 原生重采样到 16k，分帧 ~100ms 推流；前端在后端管线就绪（收到首个 `source_sync_state`）后才开始推送，避免早期帧丢弃。
+> 采集类音源在浏览器/WebView 内用 `AudioContext({sampleRate:16000})` 原生重采样到 16k，分帧约 100ms 推流；前端在后端管线就绪（收到首个 `source_sync_state`）后才开始推送，避免早期帧丢弃。
 
 ---
 
-## 🚀 本地启动
+## 本地启动
 
 > 依赖：Python 3.11、Node 18+、`ffmpeg` 在 PATH 中；桌面端额外需要 Rust + WebView2（Windows）。
 
@@ -111,12 +113,12 @@ Health     http://localhost:8000/api/health
 
 ---
 
-## 🔌 WebSocket 事件协议
+## WebSocket 事件协议
 
 路由 `/api/ws/sessions/{sessionId}`，字段统一 camelCase。
 
-- **客户端 → 服务端**：`start_session`（可携带语种/领域/源覆盖项）、二进制 PCM 帧、`audio_end` / `audio_chunk_end`、`stop_session`、`pause_session` / `resume_session`
-- **服务端 → 客户端**：`session_started`、`source_sync_state`、`transcript_segment`、`translation_segment`、`revision_event`、`session_report{reportId}`、`error`
+- 客户端到服务端：`start_session`（可携带语种/领域/源覆盖项）、二进制 PCM 帧、`audio_end` / `audio_chunk_end`、`stop_session`、`pause_session` / `resume_session`
+- 服务端到客户端：`session_started`、`source_sync_state`、`transcript_segment`、`translation_segment`、`revision_event`、`session_report{reportId}`、`error`
 
 DashScope 网关也以 REST 暴露，便于单独调试：
 
@@ -128,7 +130,7 @@ POST /api/models/tts/speech
 
 ---
 
-## 📁 目录结构
+## 目录结构
 
 ```text
 frontend/   Vue 3 + Vite + Pinia 前端工作台：输入源配置、双语字幕流、实时纠偏高亮、报告下载
@@ -138,26 +140,23 @@ backend/    FastAPI 后端
                   / media / handoff / session_store / model_strategy / providers(dashscope|mock)
   scripts/        prove_realtime_revision.py(纠偏能力证明) / e2e_online_url.py(在线直链联调)
 desktop/    Tauri v2 桌面悬浮窗：standalone 自采集 + deep-link 接管
-docs/       architecture / backend / design / project-plans / requirements …
+docs/       architecture / backend / design / project-plans / requirements 等
 scripts/    dev-backend.sh / dev-frontend.sh / check.sh
 .env.example / providers.example.yaml
 ```
 
 ---
 
-## 🧰 技术栈
+## 技术栈
 
-**前端** Vue 3 · Vite · TypeScript · Pinia · Tailwind · GSAP（字幕入场与纠偏高亮动效）· @vueuse/core · @floating-ui/vue · video.js
-
-**桌面** Tauri v2 · @tauri-apps/plugin-deep-link / global-shortcut / store · Vue 3
-
-**后端** FastAPI · uvicorn · pydantic / pydantic-settings · httpx · websockets · aiofiles · sqlmodel · ffmpeg（音频解码）
-
-**模型** 阿里云百炼 DashScope（LiveTranslate 实时音视频翻译 / qwen-flash / qwen-plus / qwen-tts）
+- 前端：Vue 3 · Vite · TypeScript · Pinia · Tailwind · GSAP（字幕入场与纠偏高亮动效）· @vueuse/core · @floating-ui/vue · video.js
+- 桌面：Tauri v2 · @tauri-apps/plugin-deep-link / global-shortcut / store · Vue 3
+- 后端：FastAPI · uvicorn · pydantic / pydantic-settings · httpx · websockets · aiofiles · sqlmodel · ffmpeg（音频解码）
+- 模型：阿里云百炼 DashScope（LiveTranslate 实时音视频翻译 / qwen-flash / qwen-plus / qwen-tts）
 
 ---
 
-## ✅ 测试与验证
+## 测试与验证
 
 ```bash
 cd backend && python -m pytest        # 后端单元/契约测试
@@ -167,14 +166,14 @@ cd desktop && npx vue-tsc --noEmit     # 桌面类型检查
 
 链路联调脚本（`backend/scripts/`，需 `PYTHONPATH=. python3`）：
 
-- `prove_realtime_revision.py` — 用真实模型证明实时纠偏「该纠必纠、干净零误纠」
-- `e2e_online_url.py <直链> [秒]` — 在线直链端到端：识别/翻译/纠偏/报告 + 四格式下载
+- `prove_realtime_revision.py` —— 用真实模型证明实时纠偏「该纠必纠、干净零误纠」
+- `e2e_online_url.py <直链> [秒]` —— 在线直链端到端：识别/翻译/纠偏/报告 + 四格式下载
 
-实测要点：在线视频/音频直链全链路通过，实时纠偏在真实内容触发（如量词「几位→几件」），会后报告四格式 200 可下载。完整实现与联调结论见 [`docs/backend/实现总览与联调备份_AI同声传译.md`](docs/backend/实现总览与联调备份_AI同声传译.md)。
+实测要点：在线视频/音频直链全链路通过，实时纠偏在真实内容触发（如量词「几位」纠正为「几件」），会后报告四格式 200 可下载。完整实现与联调结论见 [`docs/backend/实现总览与联调备份_AI同声传译.md`](docs/backend/实现总览与联调备份_AI同声传译.md)。
 
 ---
 
-## 🧭 开发规范
+## 开发规范
 
 - 主分支 `main` 始终保持可运行 / 可审阅；新功能走独立分支 + PR，单个 PR 只做一件事。
 - PR 描述包含：功能描述、实现思路、测试方式。
@@ -182,6 +181,6 @@ cd desktop && npx vue-tsc --noEmit     # 桌面类型检查
 
 ---
 
-## 📌 当前状态
+## 当前状态
 
-最终选题 **AI 同声传译助手** 已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端与 deep-link 使用产品代号 `lingosync://`（品牌命名待最终确认）。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。
+最终选题 AI 同声传译助手已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端与 deep-link 使用产品代号 `lingosync://`（品牌命名待最终确认）。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。
