@@ -13,6 +13,7 @@
 import asyncio
 import json
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.services.pipeline import InterpretationPipeline
 from app.services.providers.dashscope import DashScopeClient, DashScopeConfig
 from app.services.providers.mock import build_mock_events
 from app.services.report import generate_session_report
+from app.services.session_events import session_event_hub
 from app.services.session_store import session_store
 
 router = APIRouter(tags=["websocket"])
@@ -49,6 +51,10 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4401)
         return
 
+    if ws_token:
+        await _serve_handoff_socket(websocket, session_id)
+        return
+
     record = session_store.get_or_create(session_id)
     await websocket.send_json({"type": "session_started", "sessionId": session_id})
 
@@ -61,6 +67,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             except (RuntimeError, WebSocketDisconnect):
                 # 客户端已断开/连接已关闭：报告等结果已落盘，可经 REST 拉取，忽略发送异常。
                 pass
+        session_event_hub.publish(session_id, event)
 
     state: dict[str, Any] = {
         "pipeline": None,
@@ -101,6 +108,11 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                 queue = state["pcm_queue"]
                 if queue is not None:
                     _put_pcm_frame(queue, data_bytes)
+                    # Browser media capture can deliver audio frames steadily enough that
+                    # the receive loop keeps draining socket messages before the ingest
+                    # task gets scheduled. Yield briefly so the PCM consumer can feed the
+                    # realtime model instead of letting the bounded queue stay full.
+                    await asyncio.sleep(0.001)
                 continue
 
             text = message.get("text")
@@ -170,6 +182,39 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                 await asyncio.wait_for(run_task, timeout=10)
             except (TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
                 run_task.cancel()
+
+
+async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
+    subscription = session_event_hub.subscribe(session_id)
+    await websocket.send_json({"type": "session_started", "sessionId": session_id})
+
+    for event in subscription.replay:
+        await websocket.send_json(event)
+
+    async def forward_events() -> None:
+        while True:
+            await websocket.send_json(await subscription.queue.get())
+
+    forward_task = asyncio.create_task(forward_events())
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            text = message.get("text")
+            if not text:
+                continue
+            with suppress(json.JSONDecodeError):
+                payload = json.loads(text)
+                if payload.get("type") == "stop_session":
+                    break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session_event_hub.unsubscribe(subscription)
+        forward_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await forward_task
 
 
 async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:

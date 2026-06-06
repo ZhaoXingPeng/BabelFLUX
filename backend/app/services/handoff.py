@@ -50,7 +50,7 @@ class HandoffTokenStore:
         source_language: str | None,
         target_language: str | None,
         display_mode: DisplayMode,
-        ttl_seconds: int = 60,
+        ttl_seconds: int = 300,
     ) -> HandoffTicket:
         self._cleanup()
         token = f"h_{token_urlsafe(24)}"
@@ -67,9 +67,9 @@ class HandoffTokenStore:
         return ticket
 
     def claim(self, token: str) -> ClaimedHandoff:
-        self._cleanup()
         ticket = self._tickets.get(token)
         if ticket is None:
+            self._cleanup()
             raise HandoffTokenError("not_found")
         if ticket.used:
             raise HandoffTokenError("used")
@@ -77,6 +77,7 @@ class HandoffTokenStore:
             del self._tickets[token]
             raise HandoffTokenError("expired")
 
+        self._cleanup()
         self._tickets[token] = replace(ticket, used=True)
 
         ws_token = f"w_{token_urlsafe(24)}"

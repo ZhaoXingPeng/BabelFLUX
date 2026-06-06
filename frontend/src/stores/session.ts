@@ -964,6 +964,7 @@ export const useSessionStore = defineStore("session", {
 
     handleMediaPlaybackPaused() {
       if (this.activeMode !== "quick") return;
+      if (this.isMediaElementCaptureSource() && !captureStarted) return;
       if (this.modeStates.quick === "running") this.pauseMode("quick");
     },
 
