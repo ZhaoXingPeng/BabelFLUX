@@ -58,6 +58,11 @@ async function tryAutoPlay() {
   }
 }
 
+function pauseMedia() {
+  const element = currentMediaElement();
+  if (element && !element.paused) element.pause();
+}
+
 function emitPlaybackTime(event: Event) {
   emit("syncPlayback", (event.target as HTMLMediaElement).currentTime);
 }
@@ -74,7 +79,11 @@ function handlePlay() {
 watch(
   () => [props.state, props.mediaUrl, props.audioUrl, props.mediaKind],
   () => {
-    void tryAutoPlay();
+    if (props.state === "running") {
+      void tryAutoPlay();
+    } else {
+      pauseMedia();
+    }
   },
   { flush: "post", immediate: true }
 );

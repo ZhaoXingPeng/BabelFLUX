@@ -264,6 +264,10 @@ class InterpretationPipeline:
         if current in prior or prior.endswith(current):
             return prior
 
+        overlapped = self._merge_source_overlap(prior, current)
+        if overlapped is not None:
+            return self._collapse_source_repetition(overlapped)
+
         common_len = 0
         for prior_char, current_char in zip(prior, current, strict=False):
             if prior_char.lower() != current_char.lower():
@@ -277,6 +281,18 @@ class InterpretationPipeline:
         no_space_before = current[0] in ",.;:!?，。；：！？)]}”’"
         separator = "" if prior[-1].isspace() or no_space_before else " "
         return self._collapse_source_repetition(f"{prior}{separator}{current}")
+
+    def _merge_source_overlap(self, prior: str, current: str) -> str | None:
+        prior_words = prior.split()
+        current_words = current.split()
+        if len(prior_words) < 2 or len(current_words) < 2:
+            return None
+        prior_norm = self._normalize_source_words(prior_words)
+        current_norm = self._normalize_source_words(current_words)
+        for size in range(min(len(prior_words), len(current_words)), 1, -1):
+            if prior_norm[-size:] == current_norm[:size]:
+                return " ".join([*prior_words[:-size], *current_words])
+        return None
 
     def _prefer_source_snapshot(self, prior: str, current: str) -> str:
         collapsed_current = self._collapse_source_repetition(current)
@@ -300,7 +316,27 @@ class InterpretationPipeline:
         words = text.split()
         if len(words) < 6:
             return text
-        normalized = [word.lower().strip(".,;:!?，。；：！？") for word in words]
+        normalized = self._normalize_source_words(words)
+        result_words: list[str] = []
+        index = 0
+        while index < len(words):
+            overlap = 0
+            if len(result_words) >= 2:
+                result_norm = self._normalize_source_words(result_words)
+                max_size = min(len(result_words), len(words) - index)
+                for size in range(max_size, 1, -1):
+                    if result_norm[-size:] == normalized[index : index + size]:
+                        overlap = size
+                        break
+            if overlap:
+                index += overlap
+                continue
+            result_words.append(words[index])
+            index += 1
+        collapsed = " ".join(result_words)
+        if collapsed != text:
+            return collapsed
+
         for size in range(min(10, len(words) // 2), 2, -1):
             prefix = normalized[:size]
             for index in range(1, len(words) - size + 1):
@@ -308,11 +344,18 @@ class InterpretationPipeline:
                     return " ".join(words[index:])
         return text
 
+    def _normalize_source_words(self, words: list[str]) -> list[str]:
+        return [word.lower().strip(".,;:!?，。；：！？") for word in words]
+
     async def _on_source(self, text: str, item_id: str | None, *, final: bool) -> None:
         if not text:
             return
         seg = self._source_segment(item_id)
-        display_text = text.strip() if final else self._merge_source_partial(seg.source_text, text)
+        display_text = (
+            self._collapse_source_repetition(text.strip())
+            if final
+            else self._merge_source_partial(seg.source_text, text)
+        )
         seg.source_text = display_text
         if final:
             seg.end_ms = max(self.elapsed_ms, seg.start_ms)
