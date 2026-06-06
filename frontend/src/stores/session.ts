@@ -1,11 +1,22 @@
 import { defineStore } from "pinia";
 import {
   createSession,
+  getSessionReport,
   issueSessionHandoff,
+  reportDownloadUrl,
+  uploadSessionMedia,
   type CreateSessionPayload,
-  type DesktopDisplayMode
+  type DesktopDisplayMode,
+  type ReportFormat,
+  type SessionReport
 } from "../api/client";
 import { createSessionSocket } from "../api/ws";
+import {
+  acquireStream,
+  startAudioCapture,
+  type AudioCaptureSession,
+  type CaptureSourceKind
+} from "../composables/useAudioCapture";
 import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
   RevisionEvent,
@@ -32,6 +43,19 @@ import type {
 let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
+// File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
+const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
+// 实时采集句柄与“本次会话应采集的音源种类”，同样不入响应式 state。
+let audioCapture: AudioCaptureSession | null = null;
+let pendingCaptureKind: CaptureSourceKind | null = null;
+let captureStarted = false;
+
+const captureKindBySource: Record<string, CaptureSourceKind> = {
+  microphone: "microphone",
+  "browser-tab": "browser_audio",
+  "screen-window": "screen_window",
+  "system-audio": "system_audio"
+};
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
@@ -162,6 +186,10 @@ interface SessionState {
   quickInput: SourceInputState;
   floatingInput: SourceInputState;
   startRequestId: number;
+  reportId: string | null;
+  report: SessionReport | null;
+  reportLoading: boolean;
+  reportError: string | null;
 }
 
 function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): SubtitleSegment[] {
@@ -290,6 +318,84 @@ async function requestBrowserPermission(sourceKey: string): Promise<string> {
   throw new Error("该声源不需要浏览器授权");
 }
 
+function triggerDownload(url: string, filename?: string) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  if (filename) anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function srtTimestamp(ms: number): string {
+  const clamped = Math.max(0, ms);
+  const h = Math.floor(clamped / 3_600_000);
+  const m = Math.floor((clamped % 3_600_000) / 60_000);
+  const s = Math.floor((clamped % 60_000) / 1000);
+  const millis = clamped % 1000;
+  const pad = (value: number, len = 2) => String(value).padStart(len, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(millis, 3)}`;
+}
+
+/** 客户端报告渲染（本地演示下载用，与后端 report.py 的 txt/srt/md/json 对齐）。 */
+function renderReportClient(
+  report: SessionReport,
+  format: ReportFormat
+): { body: string; mime: string; ext: string } {
+  if (format === "json") {
+    return { body: JSON.stringify(report, null, 2), mime: "application/json", ext: "json" };
+  }
+  if (format === "srt") {
+    const body = report.segments
+      .map((seg, index) => {
+        const end = seg.endMs > seg.startMs ? seg.endMs : seg.startMs + 2000;
+        return `${index + 1}\n${srtTimestamp(seg.startMs)} --> ${srtTimestamp(end)}\n${seg.sourceText}\n${seg.finalTranslation}\n`;
+      })
+      .join("\n");
+    return { body, mime: "application/x-subrip", ext: "srt" };
+  }
+  if (format === "md") {
+    const lines = [
+      `# ${report.sessionName}`,
+      "",
+      `- **领域**：${report.domain}`,
+      `- **语言**：${report.sourceLanguage} → ${report.targetLanguage}`,
+      `- **时长**：${report.durationText}`,
+      `- **句数**：${report.metrics.segments}　实时修正：${report.metrics.realtimeRevisions}　会后修正：${report.metrics.finalRevisions}`,
+      "",
+      "## 摘要",
+      report.summary,
+      "",
+      "## 双语终稿",
+      "",
+      "| 时间 | 原文 | 终稿译文 |",
+      "| --- | --- | --- |",
+      ...report.segments.map(
+        (seg) =>
+          `| ${seg.timecode} | ${seg.sourceText.replace(/\|/g, "\\|")} | ${seg.finalTranslation.replace(/\|/g, "\\|")} |`
+      )
+    ];
+    return { body: lines.join("\n"), mime: "text/markdown", ext: "md" };
+  }
+  const lines = [
+    `# ${report.sessionName}`,
+    `领域：${report.domain}  |  语言：${report.sourceLanguage} -> ${report.targetLanguage}  |  时长：${report.durationText}`,
+    `生成时间：${report.generatedAt}`,
+    "",
+    "【摘要】",
+    report.summary,
+    "",
+    "【双语终稿】",
+    ...report.segments.flatMap((seg) => [`[${seg.timecode}] ${seg.sourceText}`, `          ${seg.finalTranslation}`])
+  ];
+  if (report.finalRevisions.length) {
+    lines.push("", "【校正记录】");
+    report.finalRevisions.forEach((rev) => lines.push(`- ${rev.beforeText}  =>  ${rev.afterText}  （${rev.reason}）`));
+  }
+  return { body: lines.join("\n"), mime: "text/plain", ext: "txt" };
+}
+
 export const useSessionStore = defineStore("session", {
   state: (): SessionState => ({
     sessionId: null,
@@ -344,7 +450,11 @@ export const useSessionStore = defineStore("session", {
     },
     quickInput: { ...defaultSourceInputState },
     floatingInput: { ...defaultSourceInputState },
-    startRequestId: 0
+    startRequestId: 0,
+    reportId: null,
+    report: null,
+    reportLoading: false,
+    reportError: null
   }),
 
   getters: {
@@ -448,11 +558,23 @@ export const useSessionStore = defineStore("session", {
       ];
     },
     reportMetrics(): ReportMetric[] {
+      const report = this.report;
+      if (report) {
+        return [
+          { label: "时长", value: report.durationText || report.metrics.durationText || "--" },
+          { label: "句数", value: `${report.metrics.segments} 句` },
+          {
+            label: "修正",
+            value: `实时 ${report.metrics.realtimeRevisions} · 会后 ${report.metrics.finalRevisions}`
+          },
+          { label: "导出", value: "TXT / SRT / MD / JSON" }
+        ];
+      }
       return [
-        { label: "时长", value: "18:24" },
+        { label: "时长", value: this.report ? this.report.durationText : "--:--" },
         { label: "语言", value: `${this.quickForm.sourceLanguage} -> ${this.quickForm.targetLanguage}` },
         { label: "修正", value: `${this.revisions.length} 条` },
-        { label: "导出", value: "TXT / SRT / MD" }
+        { label: "导出", value: "TXT / SRT / MD / JSON" }
       ];
     }
   },
@@ -481,6 +603,7 @@ export const useSessionStore = defineStore("session", {
 
     setQuickSourceFile(file: File | null) {
       this.quickInput.fileName = file?.name ?? "";
+      pendingFiles.quick = file;
     },
 
     updateQuickSourceUrl(url: string) {
@@ -489,6 +612,7 @@ export const useSessionStore = defineStore("session", {
 
     setFloatingSourceFile(file: File | null) {
       this.floatingInput.fileName = file?.name ?? "";
+      pendingFiles.floating = file;
     },
 
     updateFloatingSourceUrl(url: string) {
@@ -711,12 +835,44 @@ export const useSessionStore = defineStore("session", {
 
     confirmEnd() {
       if (!this.endingMode) return;
-      this.startRequestId += 1;
-      this.modeStates[this.endingMode] = "report";
-      if (this.activeMode === this.endingMode) this.activeMode = null;
+      const mode = this.endingMode;
       this.showEndDialog = false;
       this.endingMode = null;
-      this.stopSession("stopped");
+
+      // 已经收到报告（音频自然结束路径）→ 仅关闭弹窗
+      if (this.modeStates[mode] === "report" && this.report) return;
+
+      this.modeStates[mode] = "report";
+
+      const isFixture =
+        this.sessionId === testVideoFixture.key || this.sessionId === "local-test-video-fixture";
+
+      if (socket && socket.readyState === WebSocket.OPEN && !isFixture) {
+        // 优雅结束：发 stop_session 但不立即关闭 socket，等后端完成会后完整纠偏后下发
+        // session_report（由 applyServerEvent 处理）。保持 isCurrentStart 有效以接收该事件。
+        this.reportId = null;
+        this.report = null;
+        this.reportError = null;
+        this.reportLoading = true;
+        socket.send(JSON.stringify({ type: "stop_session" }));
+        void this.stopCapture();
+        const endingRequestId = this.startRequestId;
+        // 兜底：后端长时间无报告（异常/断连）时降级，避免一直卡在“生成中”。
+        window.setTimeout(() => {
+          if (this.startRequestId === endingRequestId && this.reportLoading && !this.reportId) {
+            this.reportLoading = false;
+            this.reportError = "报告生成超时，请稍后在报告区重试下载";
+            if (this.activeMode === mode) this.activeMode = null;
+            this.stopSession("stopped");
+          }
+        }, 30000);
+      } else {
+        // 无后端会话（本地 fixture 演示）→ 客户端合成报告，保证“结束→可看”闭环。
+        this.startRequestId += 1;
+        if (this.activeMode === mode) this.activeMode = null;
+        this.buildLocalReport();
+        this.stopSession("stopped");
+      }
     },
 
     resetMode(mode: ProductMode) {
@@ -780,6 +936,20 @@ export const useSessionStore = defineStore("session", {
         if (!this.isCurrentStart(mode, requestId)) return false;
 
         this.sessionId = session.sessionId;
+
+        // 上传模式：必须在 start_session 之前把文件字节传给后端，否则后端找不到媒体。
+        const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
+        if (sourceKey === "video-file" || sourceKey === "audio-file") {
+          const file = pendingFiles[mode];
+          if (!file) {
+            this.status = "error";
+            this.errorMessage = "未找到待上传的文件，请重新选择";
+            return false;
+          }
+          await uploadSessionMedia(session.sessionId, file);
+          if (!this.isCurrentStart(mode, requestId)) return false;
+        }
+
         this.connectSocket(session.sessionId, mode, requestId);
         return true;
       } catch (error) {
@@ -793,6 +963,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     stopSession(nextStatus: SessionStatus = "stopped") {
+      void this.stopCapture();
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop_session" }));
       }
@@ -830,6 +1001,10 @@ export const useSessionStore = defineStore("session", {
       this.translationSegments = [];
       this.revisions = [];
       this.errorMessage = null;
+      this.reportId = null;
+      this.report = null;
+      this.reportLoading = false;
+      this.reportError = null;
     },
 
     loadTestVideoFixturePreview() {
@@ -914,6 +1089,10 @@ export const useSessionStore = defineStore("session", {
 
     connectSocket(sessionId: string, mode: ProductMode, requestId: number) {
       socket?.close();
+      // 判定本次会话是否需要前端实时采集音频（麦克风/标签页/屏幕/系统音频）。
+      const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
+      pendingCaptureKind = captureKindBySource[sourceKey] ?? null;
+      captureStarted = false;
       let connection: WebSocket;
       connection = createSessionSocket(sessionId, {
         onOpen: () => {
@@ -949,6 +1128,11 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "source_sync_state") {
         this.sourceSyncState = event.state;
+        // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
+        if (pendingCaptureKind && !captureStarted) {
+          captureStarted = true;
+          void this.startCaptureStreaming(pendingCaptureKind);
+        }
         return;
       }
 
@@ -965,6 +1149,18 @@ export const useSessionStore = defineStore("session", {
       if (event.type === "revision_event") {
         this.revisions = [event.revision, ...this.revisions].slice(0, 20);
         this.markRevised(event.revision);
+        return;
+      }
+
+      if (event.type === "session_report") {
+        // 会话自然结束或 stop_session 后，后端完成会后完整纠偏并下发报告 id。
+        // 适用于「音频播放完自动结束」与「用户手动结束」两条路径。
+        this.reportId = event.reportId;
+        const mode = this.activeMode ?? "quick";
+        this.modeStates[mode] = "report";
+        this.status = "stopped";
+        this.activeMode = null;
+        void this.loadReport();
         return;
       }
 
@@ -992,6 +1188,124 @@ export const useSessionStore = defineStore("session", {
             }
           : segment
       );
+    },
+
+    async loadReport() {
+      if (!this.sessionId || !this.reportId) return;
+      this.reportLoading = true;
+      this.reportError = null;
+      try {
+        this.report = await getSessionReport(this.sessionId);
+      } catch (error) {
+        this.reportError = error instanceof Error ? error.message : "报告拉取失败";
+      } finally {
+        this.reportLoading = false;
+      }
+    },
+
+    /** 实时采集类音源：取流 → 16k PCM → WS 二进制推送。后端管线就绪后调用。 */
+    async startCaptureStreaming(kind: CaptureSourceKind) {
+      try {
+        const stream = await acquireStream(kind);
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        audioCapture = await startAudioCapture(stream, {
+          onChunk: (chunk) => {
+            if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+          },
+          onEnded: () => {
+            // 用户在系统选择器中停止共享 → 通知后端收尾并出报告。
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "audio_end" }));
+            }
+          },
+          onError: (message) => {
+            this.errorMessage = message;
+          }
+        });
+      } catch (error) {
+        this.status = "error";
+        this.errorMessage = error instanceof Error ? error.message : "音频采集启动失败";
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "audio_end" }));
+        }
+      }
+    },
+
+    async stopCapture() {
+      pendingCaptureKind = null;
+      captureStarted = false;
+      if (audioCapture) {
+        const capture = audioCapture;
+        audioCapture = null;
+        await capture.stop();
+      }
+    },
+
+    /** 下载报告：真实后端会话走后端直链（含中文文件名）；本地演示走客户端渲染。 */
+    downloadReport(format: ReportFormat) {
+      if (this.sessionId && this.reportId) {
+        triggerDownload(reportDownloadUrl(this.sessionId, format));
+        return;
+      }
+      if (this.report) {
+        const { body, mime, ext } = renderReportClient(this.report, format);
+        const blob = new Blob([body], { type: mime });
+        const url = URL.createObjectURL(blob);
+        triggerDownload(url, `${this.report.sessionName || "同传报告"}.${ext}`);
+        window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }
+    },
+
+    /** 本地演示（fixture，无后端）合成一份报告，保证“结束→可看可下载”闭环。 */
+    buildLocalReport() {
+      const segs = this.transcriptPairs
+        .filter((pair) => pair.segmentId)
+        .map((pair, index) => ({
+          segmentId: pair.segmentId ?? `local-${index}`,
+          startMs: 0,
+          endMs: 0,
+          timecode: pair.time,
+          sourceText: pair.source,
+          liveTranslation: pair.originalTranslation ?? pair.translation,
+          finalTranslation: pair.translation,
+          revisedRealtime: pair.state === "revised"
+        }));
+      const finalRevisions = this.revisions.map((rev) => ({
+        segmentId: rev.targetSegmentIds[0] ?? "",
+        beforeText: rev.beforeText,
+        afterText: rev.afterText,
+        reason: rev.reason,
+        stage: "实时"
+      }));
+      this.report = {
+        reportId: "",
+        sessionId: this.sessionId ?? "",
+        sessionName: this.quickForm.name || "本地演示报告",
+        domain: this.quickForm.domain,
+        sourceLanguage: this.quickForm.sourceLanguage,
+        targetLanguage: this.quickForm.targetLanguage,
+        durationMs: this.playbackMs,
+        durationText: formatPlaybackTime(this.playbackMs),
+        generatedAt: new Date().toLocaleString(),
+        summary: `本地测试素材演示：共 ${segs.length} 句，含 ${finalRevisions.length} 处自动纠偏。`,
+        qualityNotes: "本地演示报告由前端依据测试素材合成，未经后端大模型完整纠偏。",
+        glossaryHits: [],
+        metrics: {
+          segments: segs.length,
+          realtimeRevisions: finalRevisions.length,
+          finalRevisions: 0,
+          durationText: formatPlaybackTime(this.playbackMs)
+        },
+        segments: segs,
+        finalRevisions,
+        realtimeRevisions: finalRevisions,
+        correctionModel: null
+      };
+      this.reportId = null;
+      this.reportLoading = false;
     }
   }
 });

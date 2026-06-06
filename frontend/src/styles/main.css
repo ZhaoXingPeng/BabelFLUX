@@ -1518,14 +1518,16 @@ a:focus-visible {
   top: calc(100% + 6px);
   right: 0;
   left: 0;
-  z-index: 35;
+  z-index: 50;
   display: grid;
   gap: 3px;
   max-height: min(320px, 46dvh);
   overflow: auto;
   border: 1px solid rgba(47, 93, 80, 0.2);
   border-radius: 8px;
-  background: rgba(255, 253, 248, 0.98);
+  /* 显式不透明暖白底 + 深色字，杜绝在任意上下文里出现“白底白字”的不可读下拉 */
+  background: #fffdf8;
+  color: var(--ink);
   padding: 6px;
   box-shadow: 0 18px 42px rgba(23, 33, 43, 0.18);
 }
@@ -1570,6 +1572,7 @@ a:focus-visible {
 .select-option strong {
   font-size: 13px;
   font-weight: 800;
+  color: var(--ink);
 }
 
 .select-option small {
@@ -1777,6 +1780,25 @@ a:focus-visible {
   display: flex;
   gap: 8px;
   margin-top: 14px;
+}
+
+.report-summary {
+  margin-top: 14px;
+  border-left: 2px solid var(--stage-accent);
+  padding: 4px 0 4px 12px;
+  color: var(--stage-src);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.report-summary-loading {
+  border-left-color: var(--stage-muted);
+  color: var(--stage-muted);
+}
+
+.report-summary-error {
+  border-left-color: #d98a6a;
+  color: #e6a68c;
 }
 
 @keyframes breathe {

@@ -42,6 +42,9 @@ const {
   quickStatusLabel,
   quickUrlError,
   reportMetrics,
+  report,
+  reportLoading,
+  reportError,
   selectedDisplayDescription,
   selectedDisplayMode,
   showEndDialog,
@@ -136,10 +139,44 @@ function toggleFloatingCaptions() {
           <strong>{{ metric.value }}</strong>
         </article>
       </div>
+      <p v-if="reportLoading" class="report-summary report-summary-loading">
+        正在生成会后完整纠偏报告…
+      </p>
+      <p v-else-if="reportError" class="report-summary report-summary-error">{{ reportError }}</p>
+      <p v-else-if="report?.summary" class="report-summary">{{ report.summary }}</p>
       <div class="report-actions">
-        <button class="secondary-button compact-button" type="button">TXT</button>
-        <button class="secondary-button compact-button" type="button">SRT</button>
-        <button class="secondary-button compact-button" type="button">MD</button>
+        <button
+          class="secondary-button compact-button"
+          type="button"
+          :disabled="reportLoading"
+          @click="sessionStore.downloadReport('txt')"
+        >
+          TXT
+        </button>
+        <button
+          class="secondary-button compact-button"
+          type="button"
+          :disabled="reportLoading"
+          @click="sessionStore.downloadReport('srt')"
+        >
+          SRT
+        </button>
+        <button
+          class="secondary-button compact-button"
+          type="button"
+          :disabled="reportLoading"
+          @click="sessionStore.downloadReport('md')"
+        >
+          MD
+        </button>
+        <button
+          class="secondary-button compact-button"
+          type="button"
+          :disabled="reportLoading"
+          @click="sessionStore.downloadReport('json')"
+        >
+          JSON
+        </button>
       </div>
     </section>
     </template>

@@ -1,8 +1,17 @@
+/*
+ * 桌面悬浮窗样式。
+ *
+ * 关键：main.css 里 `:root { background: var(--paper) }`（暖白）特异性为 (0,1,0)，
+ * 单用 `html {…}`（0,0,1）覆盖不掉，会导致整个 WebView2 窗口被刷成不透明白底，
+ * 即使 tauri.conf 配了 `transparent:true` 也会看起来是「白色圆角框」。
+ * 这里用同级 `:root` + `!important` 强制透明，保证只有深色半透明字幕面板可见。
+ */
+:root,
 html,
 body,
 #app {
   min-height: 100vh;
-  background: transparent;
+  background: transparent !important;
 }
 
 body {
@@ -15,9 +24,74 @@ body {
 .desktop-overlay-shell {
   width: min(100vw - 20px, 860px);
   padding: 10px;
+  background: transparent;
+}
+
+/* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。整条 data-tauri-drag-region 可拖动。 */
+.overlay-launcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(11, 12, 15, 0.82);
+  backdrop-filter: blur(12px);
+  padding: 10px 14px;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34);
+  cursor: move;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.overlay-launcher-title {
+  flex: 1 1 auto;
+  color: var(--stage-dst, #f4ede0);
+  font-weight: 850;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.overlay-source-select {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(28, 30, 36, 0.96);
+  padding: 4px 10px;
+  color: var(--stage-dst, #f4ede0);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.overlay-source-select option {
+  background: #1c1e24;
+  color: #f4ede0;
+}
+
+.overlay-start {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid rgba(224, 164, 88, 0.6);
+  border-radius: 8px;
+  background: rgba(224, 164, 88, 0.92);
+  padding: 5px 16px;
+  color: #1b1205;
+  font-weight: 850;
+  font-size: 13px;
+}
+
+.overlay-start:hover:not(:disabled) {
+  background: #e7b06a;
+}
+
+.overlay-start:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .desktop-overlay-error {
+  margin-top: 8px;
   border: 1px solid rgba(226, 118, 112, 0.35);
   border-radius: 8px;
   background: rgba(20, 22, 26, 0.94);

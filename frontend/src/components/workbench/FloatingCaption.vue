@@ -154,7 +154,15 @@ watch(
         <Icon name="x" :size="15" />
       </button>
     </div>
-    <p v-if="showSource" class="floating-source">{{ pair.source }}</p>
-    <p class="floating-translation">{{ pair.translation }}</p>
+    <p
+      v-if="showSource"
+      class="floating-source"
+      :data-tauri-drag-region="desktop ? true : undefined"
+    >
+      {{ pair.source }}
+    </p>
+    <p class="floating-translation" :data-tauri-drag-region="desktop ? true : undefined">
+      {{ pair.translation }}
+    </p>
   </section>
 </template>

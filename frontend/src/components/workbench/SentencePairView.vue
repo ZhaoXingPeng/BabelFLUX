@@ -49,6 +49,13 @@ function animateRevision(card: HTMLElement) {
 
   if (translation) {
     timeline.fromTo(translation, { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.35, ease: EASE }, 0.05);
+    // 译文文本本身做一次琥珀高亮扫过，让“这句被自动纠偏了”在文字层面即刻可见。
+    timeline.fromTo(
+      translation,
+      { backgroundColor: "rgba(224, 164, 88, 0.34)", borderRadius: "6px" },
+      { backgroundColor: "rgba(224, 164, 88, 0)", duration: 1.2, ease: "power2.out", clearProps: "backgroundColor,borderRadius" },
+      0.05
+    );
   }
 
   timeline.fromTo(
