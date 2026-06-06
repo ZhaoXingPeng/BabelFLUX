@@ -78,8 +78,18 @@ async def generate_session_report(
     if client is not None and segments and settings.use_real_pipeline:
         llm_out = await _call_correction_llm(record, segments, settings, client)
 
-    final_by_id = {s["id"]: s.get("finalTranslation", "") for s in llm_out.get("segments", [])}
-    llm_revisions = {r.get("id"): r for r in llm_out.get("revisions", [])}
+    # 防御：真实 LLM 偶尔会把 segments/revisions 返回成非 dict（如字符串列表）。
+    # 这些项必须忽略而非崩溃——否则整份报告生成失败（此处在降级 try 之外）。
+    final_by_id = {
+        s["id"]: s.get("finalTranslation", "")
+        for s in llm_out.get("segments", [])
+        if isinstance(s, dict) and s.get("id")
+    }
+    llm_revisions = {
+        r.get("id"): r
+        for r in llm_out.get("revisions", [])
+        if isinstance(r, dict) and r.get("id")
+    }
 
     report_segments: list[dict[str, Any]] = []
     final_revisions: list[dict[str, Any]] = []

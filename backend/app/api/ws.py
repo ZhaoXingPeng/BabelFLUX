@@ -47,7 +47,11 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
 
     async def emit(event: dict[str, Any]) -> None:
         async with lock:
-            await websocket.send_json(event)
+            try:
+                await websocket.send_json(event)
+            except (RuntimeError, WebSocketDisconnect):
+                # 客户端已断开/连接已关闭：报告等结果已落盘，可经 REST 拉取，忽略发送异常。
+                pass
 
     state: dict[str, Any] = {
         "pipeline": None,
