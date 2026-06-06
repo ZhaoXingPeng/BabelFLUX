@@ -84,6 +84,8 @@ let cleanupShortcut: (() => void) | null = null;
 let nativeAudioWatchdog: number | null = null;
 let nativeAudioChunks = 0;
 let nativeAudioSignalChunks = 0;
+// 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
+const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
 
@@ -123,7 +125,7 @@ function applyEvent(event: ServerEvent) {
   if (event.type === "source_sync_state") {
     status.value = event.state;
     // standalone：后端管线就绪后再开始推流，避免早期帧被丢弃。
-    if (mode.value === "standalone" && capturing.value && !captureStarted) {
+    if (mode.value === "standalone" && capturing.value && !captureStarted && event.state.status === "ready") {
       captureStarted = true;
       void beginCapture();
     }
@@ -242,6 +244,12 @@ function trackNativeAudioChunk(chunk: ArrayBuffer) {
   }
 }
 
+function sendAudioChunk(chunk: ArrayBuffer) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (socket.bufferedAmount > MAX_AUDIO_SOCKET_BUFFER_BYTES) return;
+  socket.send(chunk);
+}
+
 // ---- standalone 模式（悬浮窗自选音源、自采集同传）----
 async function startStandalone() {
   if (starting.value || capturing.value) return;
@@ -283,7 +291,7 @@ async function beginCapture() {
     resetNativeAudioStats();
     const sendChunk = (chunk: ArrayBuffer) => {
       trackNativeAudioChunk(chunk);
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+      sendAudioChunk(chunk);
     };
     const handleEnded = () => {
       if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio_end" }));
@@ -304,6 +312,7 @@ async function beginCapture() {
         };
       }, 3000);
       capture = await startNativeSystemAudioCapture({
+        frameMs: 40,
         onChunk: sendChunk,
         onEnded: handleEnded,
         onError: handleError
@@ -317,6 +326,7 @@ async function beginCapture() {
       return;
     }
     capture = await startAudioCapture(stream, {
+      frameMs: 40,
       onChunk: sendChunk,
       onEnded: handleEnded,
       onError: handleError

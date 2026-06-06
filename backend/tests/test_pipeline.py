@@ -86,15 +86,25 @@ async def test_lagged_translation_pairs_with_correct_source() -> None:
     await session.connect()
     await pipeline._consume(session)
 
-    segs = {s.item_id: s for s in record.segments}
-    assert segs["itemA"].source_text == "Hello world."
-    assert segs["itemA"].translation_text == "你好，世界。"  # A 的译文配到 A，而非 B
-    assert segs["itemB"].source_text == "Goodbye world."
-    assert segs["itemB"].translation_text == "再见，世界。"
+    assert _source_text_for_item(record, "itemA") == "Hello world."
+    # A 的译文配到 A，而非 B。
+    assert _translation_text_for_response(record, "resp1") == "你好，世界。"
+    assert _source_text_for_item(record, "itemB") == "Goodbye world."
+    assert _translation_text_for_response(record, "resp2") == "再见，世界。"
 
 
 async def _async_return(value: object) -> object:
     return value
+
+
+def _source_text_for_item(record: SessionRecord, item_id: str) -> str:
+    return " ".join(s.source_text for s in record.segments if s.item_id == item_id).strip()
+
+
+def _translation_text_for_response(record: SessionRecord, response_id: str) -> str:
+    return "".join(
+        s.translation_text for s in record.segments if s.response_id == response_id
+    ).strip()
 
 
 @pytest.mark.asyncio
@@ -129,7 +139,7 @@ async def test_source_incremental_partials_are_accumulated() -> None:
     await pipeline._on_source("I feel so fortunate", "itemA", final=False)
     await pipeline._on_source("works, in fact,", "itemA", final=False)
 
-    assert record.segments[0].source_text == "I feel so fortunate works, in fact,"
+    assert _source_text_for_item(record, "itemA") == "I feel so fortunate works, in fact,"
 
     await pipeline._on_source(
         "I feel so fortunate that one of the works, in fact, did not meet her mark.",
@@ -138,10 +148,10 @@ async def test_source_incremental_partials_are_accumulated() -> None:
     )
 
     assert (
-        record.segments[0].source_text
+        _source_text_for_item(record, "itemA")
         == "I feel so fortunate that one of the works, in fact, did not meet her mark."
     )
-    assert events[-1]["segment"]["text"] == record.segments[0].source_text
+    assert events[-1]["segment"]["text"] == "did not meet her mark."
 
 
 @pytest.mark.asyncio
@@ -160,8 +170,9 @@ async def test_source_snapshot_partials_do_not_duplicate_prefixes() -> None:
         final=False,
     )
 
-    assert record.segments[0].source_text.startswith("I feel so fortunate that my first job")
-    assert "I feel so fortunate. I feel so fortunate" not in record.segments[0].source_text
+    item_a_text = _source_text_for_item(record, "itemA")
+    assert item_a_text.startswith("I feel so fortunate that my first job")
+    assert "I feel so fortunate. I feel so fortunate" not in item_a_text
 
     await pipeline._on_source(
         "I feel so fortunate that I feel so fortunate that my I feel so fortunate that my first.",
@@ -169,7 +180,7 @@ async def test_source_snapshot_partials_do_not_duplicate_prefixes() -> None:
         final=False,
     )
 
-    assert record.segments[1].source_text == "I feel so fortunate that my first."
+    assert _source_text_for_item(record, "itemB") == "I feel so fortunate that my first."
 
 
 @pytest.mark.asyncio
@@ -214,6 +225,56 @@ async def test_source_partials_drop_unstable_tail_before_overlap_merge() -> None
     assert record.segments[0].source_text == (
         "She told me that a few didn't quite meet her own mark"
     )
+
+
+@pytest.mark.asyncio
+async def test_translation_clauses_are_split_before_length_limit() -> None:
+    record = SessionRecord(
+        session_id="target-clause-split", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        "itemA",
+        final=False,
+    )
+    await pipeline._on_translation(
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。",
+        "responseA",
+        final=False,
+    )
+
+    assert [segment.translation_text for segment in record.segments[:2]] == [
+        "我感到非常幸运，",
+        "我的第一份工作是在现代艺术博物馆。",
+    ]
+    assert max(segment.end_ms for segment in record.segments[:2]) <= 1000
+
+
+@pytest.mark.asyncio
+async def test_partial_display_bounds_stay_under_one_second_when_split() -> None:
+    record = SessionRecord(
+        session_id="partial-low-latency", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        "itemA",
+        final=False,
+    )
+
+    assert len(record.segments) == 2
+    assert max(segment.end_ms for segment in record.segments) <= 1000
 
 
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:

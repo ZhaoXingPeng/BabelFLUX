@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.ws import _put_pcm_end, _put_pcm_frame
 from app.main import app
 from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
@@ -82,6 +85,26 @@ def test_mock_websocket_pause_and_resume() -> None:
         resume_event = websocket.receive_json()
         assert resume_event["type"] == "source_sync_state"
         assert resume_event["state"]["status"] == "syncing"
+
+
+def test_pcm_queue_drops_oldest_frame_when_full() -> None:
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
+
+    _put_pcm_frame(queue, b"a")
+    _put_pcm_frame(queue, b"b")
+    _put_pcm_frame(queue, b"c")
+
+    assert [queue.get_nowait(), queue.get_nowait()] == [b"b", b"c"]
+
+
+def test_pcm_queue_end_marker_replaces_oldest_frame_when_full() -> None:
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
+
+    _put_pcm_frame(queue, b"a")
+    _put_pcm_frame(queue, b"b")
+    _put_pcm_end(queue)
+
+    assert [queue.get_nowait(), queue.get_nowait()] == [b"b", None]
 
 
 def test_issue_and_claim_session_handoff_token_once() -> None:

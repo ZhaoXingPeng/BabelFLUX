@@ -35,6 +35,9 @@ CLIENT_CAPTURE_MODES = {
     "media_element_audio",
     "system_audio",
 }
+PCM_FRAME_MS = 40
+MAX_PCM_QUEUE_AUDIO_MS = 1_000
+MAX_PCM_QUEUE_FRAMES = MAX_PCM_QUEUE_AUDIO_MS // PCM_FRAME_MS
 
 
 @router.websocket("/ws/sessions/{session_id}")
@@ -97,7 +100,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             if data_bytes is not None:
                 queue = state["pcm_queue"]
                 if queue is not None:
-                    queue.put_nowait(data_bytes)
+                    _put_pcm_frame(queue, data_bytes)
                 continue
 
             text = message.get("text")
@@ -123,12 +126,12 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     )
             elif mtype == "audio_chunk_end" or mtype == "audio_end":
                 if state["pcm_queue"] is not None:
-                    state["pcm_queue"].put_nowait(None)
+                    _put_pcm_end(state["pcm_queue"])
             elif mtype == "stop_session":
                 if state["pipeline"] is not None:
                     state["pipeline"].stop()
                 if state["pcm_queue"] is not None:
-                    state["pcm_queue"].put_nowait(None)
+                    _put_pcm_end(state["pcm_queue"])
                 if state["run_task"] is not None:
                     await state["run_task"]
                 else:
@@ -160,7 +163,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
         if state["pipeline"] is not None:
             state["pipeline"].stop()
         if state["pcm_queue"] is not None:
-            state["pcm_queue"].put_nowait(None)
+            _put_pcm_end(state["pcm_queue"])
         run_task = state["run_task"]
         if run_task is not None and not run_task.done():
             try:
@@ -189,7 +192,7 @@ async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
     state["pipeline"] = pipeline
 
     if input_mode in CLIENT_CAPTURE_MODES:
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=MAX_PCM_QUEUE_FRAMES)
         state["pcm_queue"] = queue
         await pipeline.run_pcm_stream(queue)
         return
@@ -217,6 +220,25 @@ async def _run_mock(session_id: str, emit: Any) -> None:
     for event in build_mock_events(session_id):
         await emit(event)
         await asyncio.sleep(0.25)
+
+
+def _put_pcm_frame(queue: asyncio.Queue[bytes | None], frame: bytes) -> None:
+    # 队列只在已积压约 1 秒音频时丢最旧帧，优先保证实时性而不是播放过期音频。
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(frame)
+
+
+def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(None)
 
 
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:

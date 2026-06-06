@@ -63,7 +63,7 @@ def _is_url(source: str) -> bool:
     return source.startswith(("http://", "https://", "rtmp://", "rtsp://"))
 
 
-def frame_size_bytes(sample_rate: int = DEFAULT_SAMPLE_RATE, frame_ms: int = 100) -> int:
+def frame_size_bytes(sample_rate: int = DEFAULT_SAMPLE_RATE, frame_ms: int = 40) -> int:
     return int(sample_rate * frame_ms / 1000) * BYTES_PER_SAMPLE
 
 
@@ -116,7 +116,7 @@ async def iter_pcm_frames(
     source: str,
     *,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
-    frame_ms: int = 100,
+    frame_ms: int = 40,
     realtime: bool = True,
     speed: float = 1.0,
     on_progress: Callable[[int], None] | None = None,
@@ -126,7 +126,7 @@ async def iter_pcm_frames(
 
     参数:
         source: 本地路径或 http(s) 直链。
-        frame_ms: 每帧时长（100ms = 3200 字节 @16k）。
+        frame_ms: 每帧时长（40ms = 1280 字节 @16k）。
         realtime: True 时按 frame_ms/speed 的节奏产出，模拟直播；False 尽快产出。
         speed: 实时倍速（1.0=原速，>1 更快，便于压测）。
         on_progress: 回调累计已产出毫秒数。

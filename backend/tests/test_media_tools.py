@@ -4,6 +4,10 @@ from pathlib import Path
 from app.services import media
 
 
+def test_default_pcm_frame_size_is_low_latency() -> None:
+    assert media.frame_size_bytes() == 1280
+
+
 def test_resolve_ffmpeg_from_parent_tools_when_path_is_missing(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     ffmpeg_dir = tmp_path / "tools" / "ffmpeg-test" / "bin"

@@ -73,7 +73,7 @@ mod platform {
 
     const TARGET_SAMPLE_RATE: usize = 16_000;
     const TARGET_CHANNELS: usize = 1;
-    const TARGET_FRAME_MS: usize = 100;
+    const TARGET_FRAME_MS: usize = 40;
     const TARGET_FRAME_BYTES: usize = TARGET_SAMPLE_RATE * TARGET_FRAME_MS / 1000 * 2;
 
     #[derive(Clone, Serialize)]

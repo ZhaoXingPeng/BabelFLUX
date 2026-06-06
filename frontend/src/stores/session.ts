@@ -55,7 +55,7 @@ let pendingMediaElementCapture = false;
 let pendingMediaReadyState: SourceSyncState | null = null;
 let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
-let estimatedOutputLatencyMs = 1500;
+let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
 
 function revokeLocalPreview(mode: ProductMode) {
@@ -81,11 +81,13 @@ const captureKindBySource: Record<string, CaptureSourceKind> = {
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
 const DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS = 3500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
-// 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1.5s，右侧才产出该句字幕，贴近真实同传节奏。
-const SUBTITLE_LATENCY_MS = 1500;
-const MIN_OUTPUT_LATENCY_MS = 500;
+// 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1s，右侧才产出该句字幕，贴近低延迟同传节奏。
+const SUBTITLE_LATENCY_MS = 1000;
+const MIN_OUTPUT_LATENCY_MS = 250;
 const MAX_OUTPUT_LATENCY_MS = 6000;
 const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
+// 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
+const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
 
 const defaultSourceSyncState: SourceSyncState = {
   status: "listening",
@@ -370,6 +372,12 @@ function triggerDownload(url: string, filename?: string) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
+}
+
+function sendAudioChunk(chunk: ArrayBuffer) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (socket.bufferedAmount > MAX_AUDIO_SOCKET_BUFFER_BYTES) return;
+  socket.send(chunk);
 }
 
 function srtTimestamp(ms: number): string {
@@ -1500,8 +1508,9 @@ export const useSessionStore = defineStore("session", {
           return;
         }
         audioCapture = await startAudioCapture(stream, {
+          frameMs: 40,
           onChunk: (chunk) => {
-            if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+            sendAudioChunk(chunk);
           },
           onEnded: () => {
             // 用户在系统选择器中停止共享 → 通知后端收尾并出报告。
@@ -1538,9 +1547,9 @@ export const useSessionStore = defineStore("session", {
         if (!captureStarted) {
           captureStarted = true;
           audioCapture = await startMediaElementAudioCapture(mediaElement, {
-            frameMs: 80,
+            frameMs: 40,
             onChunk: (chunk) => {
-              if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+              sendAudioChunk(chunk);
             },
             onClock: (clock) => {
               if (socket && socket.readyState === WebSocket.OPEN) {

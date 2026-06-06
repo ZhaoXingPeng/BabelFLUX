@@ -34,14 +34,16 @@ from app.services.session_store import RevisionRecord, SegmentRecord, SessionRec
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
-PARTIAL_THROTTLE_S = 0.18
+PARTIAL_THROTTLE_S = 0.08
 MEDIA_PROGRESS_SYNC_S = 0.5
 DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
-SYNC_EMIT_INTERVAL_S = 0.8
+SYNC_EMIT_INTERVAL_S = 0.25
 SYNC_LAG_WARN_MS = 600
-SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 24
-TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 46
+SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 14
+TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
+PARTIAL_DISPLAY_SEGMENT_MS = 500
+FINAL_DISPLAY_SEGMENT_MS = 2000
 
 
 class InterpretationPipeline:
@@ -73,6 +75,7 @@ class InterpretationPipeline:
         self._by_item: dict[str, SegmentRecord] = {}
         self._by_response: dict[str, SegmentRecord] = {}
         self._children_by_root: dict[str, list[SegmentRecord]] = {}
+        self._display_count_by_root: dict[str, int] = {}
         self._raw_source_by_root: dict[str, str] = {}
         self._raw_translation_by_root: dict[str, str] = {}
         self._source_final_roots: set[str] = set()
@@ -440,18 +443,24 @@ class InterpretationPipeline:
         if not source_parts and not translation_parts:
             return
 
-        if source_parts and translation_parts:
-            count = min(len(source_parts), len(translation_parts))
-        else:
-            count = len(source_parts) or len(translation_parts)
-        count = max(1, count)
+        current_count = max(len(source_parts), len(translation_parts), 1)
+        count = max(self._display_count_by_root.get(root.segment_id, 1), current_count)
+        self._display_count_by_root[root.segment_id] = count
 
-        source_display = self._rebalance_parts(source_parts, count, separator=" ")
-        translation_display = self._rebalance_parts(translation_parts, count, separator="")
-        children = self._display_children(root, count)
-        bounds = self._estimate_display_bounds(root, source_display, translation_display)
+        source_display = self._align_parts(source_parts, count, separator=" ")
+        translation_display = self._align_parts(translation_parts, count, separator="")
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
+        display_final = (not source_parts or source_final) and (
+            not translation_parts or translation_final
+        )
+        children = self._display_children(root, count)
+        bounds = self._estimate_display_bounds(
+            root,
+            source_display,
+            translation_display,
+            final=display_final,
+        )
 
         for index, child in enumerate(children):
             source_text = source_display[index]
@@ -481,7 +490,7 @@ class InterpretationPipeline:
                 child.end_ms = end_ms
             child.status = next_status
 
-            if source_text:
+            if source_text or child.source_text:
                 child.source_text = source_text
                 await self._emit_segment(
                     "transcript_segment",
@@ -491,7 +500,7 @@ class InterpretationPipeline:
                     status=source_status,
                     throttle=source_status == "partial",
                 )
-            if translation_text:
+            if translation_text or child.translation_text:
                 child.translation_text = translation_text
                 if not child.original_translation:
                     child.original_translation = translation_text
@@ -559,7 +568,7 @@ class InterpretationPipeline:
         if not value:
             return []
 
-        raw_parts = re.findall(r"[^。！？]+[。！？]?", value)
+        raw_parts = re.findall(r"[^，,；;：:。！？]+[，,；;：:。！？]?", value)
         groups: list[str] = []
         for raw in raw_parts:
             groups.extend(self._split_long_target_part(raw))
@@ -595,13 +604,15 @@ class InterpretationPipeline:
     def _word_count(self, text: str) -> int:
         return len([word for word in text.split() if word])
 
-    def _rebalance_parts(self, parts: list[str], count: int, *, separator: str) -> list[str]:
+    def _align_parts(self, parts: list[str], count: int, *, separator: str) -> list[str]:
         if count <= 0:
             return []
         if not parts:
             return [""] * count
         if len(parts) == count:
             return parts
+        if len(parts) < count:
+            return [*parts, *([""] * (count - len(parts)))]
 
         groups: list[str] = []
         for index in range(count):
@@ -617,9 +628,12 @@ class InterpretationPipeline:
         root: SegmentRecord,
         source_parts: list[str],
         translation_parts: list[str],
+        *,
+        final: bool,
     ) -> list[tuple[int, int]]:
         count = max(len(source_parts), len(translation_parts), 1)
-        end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * 2000)
+        estimated_segment_ms = FINAL_DISPLAY_SEGMENT_MS if final else PARTIAL_DISPLAY_SEGMENT_MS
+        end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * estimated_segment_ms)
         span = max(1, end_ms - root.start_ms)
         weights = [
             max(self._word_count(source_parts[index]), len(translation_parts[index]) // 3, 1)

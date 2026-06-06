@@ -2,7 +2,7 @@
  * 浏览器/WebView 音频采集 → 16kHz 单声道 s16le PCM 帧流。
  *
  * 用于「实时采集」类音源（麦克风 / 浏览器标签页 / 屏幕或窗口 / 系统音频），
- * 把采集到的音频降采样为后端 LiveTranslate 所需的 16k 单声道 PCM，按 ~100ms
+ * 把采集到的音频降采样为后端 LiveTranslate 所需的 16k 单声道 PCM，按 ~40ms
  * 分帧通过 WebSocket 二进制推送。Web 工作台与桌面悬浮窗共用同一实现。
  *
  * 关键点：
@@ -35,7 +35,7 @@ registerProcessor('pcm-capture-processor', PcmCaptureProcessor);
 export type CaptureSourceKind = "microphone" | "browser_audio" | "screen_window" | "system_audio";
 
 export interface AudioCaptureOptions {
-  /** 收到一帧 16k 单声道 s16le PCM（ArrayBuffer，约 100ms）时回调。 */
+  /** 收到一帧 16k 单声道 s16le PCM（ArrayBuffer，约 40ms）时回调。 */
   onChunk: (chunk: ArrayBuffer) => void;
   /** 采集异常（设备被拔出 / 轨道结束 / 权限撤销）。 */
   onError?: (message: string) => void;
@@ -43,7 +43,7 @@ export interface AudioCaptureOptions {
   onEnded?: () => void;
   /** 目标采样率，默认 16000。 */
   sampleRate?: number;
-  /** 分帧时长（ms），默认 100ms。 */
+  /** 分帧时长（ms），默认 40ms。 */
   frameMs?: number;
 }
 
@@ -52,6 +52,7 @@ export interface AudioCaptureSession {
 }
 
 const TARGET_SAMPLE_RATE = 16000;
+const LOW_LATENCY_FRAME_MS = 40;
 
 export interface MediaElementClock {
   playbackMs: number;
@@ -172,7 +173,7 @@ export async function startAudioCapture(
   options: AudioCaptureOptions
 ): Promise<AudioCaptureSession> {
   const sampleRate = options.sampleRate ?? TARGET_SAMPLE_RATE;
-  const frameSamples = Math.round((sampleRate * (options.frameMs ?? 100)) / 1000);
+  const frameSamples = Math.round((sampleRate * (options.frameMs ?? LOW_LATENCY_FRAME_MS)) / 1000);
 
   const AudioCtx = audioContextCtor();
   const context = new AudioCtx({ sampleRate });
@@ -253,7 +254,7 @@ export async function startMediaElementAudioCapture(
   options: MediaElementAudioCaptureOptions
 ): Promise<AudioCaptureSession> {
   const sampleRate = options.sampleRate ?? TARGET_SAMPLE_RATE;
-  const frameSamples = Math.round((sampleRate * (options.frameMs ?? 80)) / 1000);
+  const frameSamples = Math.round((sampleRate * (options.frameMs ?? LOW_LATENCY_FRAME_MS)) / 1000);
   const AudioCtx = audioContextCtor();
   const context = new AudioCtx({ sampleRate });
   if (context.state === "suspended") await context.resume();
@@ -267,7 +268,7 @@ export async function startMediaElementAudioCapture(
   const emitClock = (force = false) => {
     if (!options.onClock) return;
     const now = performance.now();
-    if (!force && now - lastClockAt < 500) return;
+    if (!force && now - lastClockAt < 250) return;
     lastClockAt = now;
     options.onClock({
       playbackMs: Math.max(0, Math.round(element.currentTime * 1000)),
