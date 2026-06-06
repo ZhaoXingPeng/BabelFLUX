@@ -45,10 +45,26 @@ let desktopLaunchTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 // File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
 const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
+const localPreviewUrls: Record<ProductMode, string | null> = { quick: null, floating: null };
 // 实时采集句柄与“本次会话应采集的音源种类”，同样不入响应式 state。
 let audioCapture: AudioCaptureSession | null = null;
 let pendingCaptureKind: CaptureSourceKind | null = null;
 let captureStarted = false;
+let playbackStartPending = false;
+let mediaPlaybackActive = false;
+
+function revokeLocalPreview(mode: ProductMode) {
+  const url = localPreviewUrls[mode];
+  if (url && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(url);
+  localPreviewUrls[mode] = null;
+}
+
+function setLocalPreview(mode: ProductMode, file: File | null): string | null {
+  revokeLocalPreview(mode);
+  if (!file || typeof URL.createObjectURL !== "function") return null;
+  localPreviewUrls[mode] = URL.createObjectURL(file);
+  return localPreviewUrls[mode];
+}
 
 const captureKindBySource: Record<string, CaptureSourceKind> = {
   microphone: "microphone",
@@ -115,6 +131,7 @@ const defaultSourceInputState: SourceInputState = {
 };
 
 const fileSourceKeys = new Set(["video-file", "audio-file"]);
+const playbackControlledSourceKeys = new Set(["video-file", "audio-file"]);
 const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
@@ -238,6 +255,60 @@ function formatPlaybackTime(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function streamText(text: string, progress: number): string {
+  const value = text.trim();
+  if (!value || progress >= 0.98) return value;
+  const units = /\s/.test(value) ? value.split(/(\s+)/).filter(Boolean) : Array.from(value);
+  const visible = Math.max(1, Math.ceil(units.length * (0.18 + clamp01(progress) * 0.82)));
+  return units.slice(0, visible).join("");
+}
+
+function splitLongText(text: string): string[] {
+  const clauses = text.split(/(?<=[,，;；:：])\s*/).map((part) => part.trim()).filter(Boolean);
+  if (clauses.length > 1) {
+    const groups: string[] = [];
+    let current = "";
+    clauses.forEach((clause) => {
+      if (current && `${current} ${clause}`.length > 130) {
+        groups.push(current);
+        current = clause;
+      } else {
+        current = current ? `${current} ${clause}` : clause;
+      }
+    });
+    if (current) groups.push(current);
+    return groups;
+  }
+
+  if (/\s/.test(text)) {
+    const words = text.split(/\s+/);
+    const groups: string[] = [];
+    for (let index = 0; index < words.length; index += 22) {
+      groups.push(words.slice(index, index + 22).join(" "));
+    }
+    return groups;
+  }
+
+  const chars = Array.from(text);
+  const groups: string[] = [];
+  for (let index = 0; index < chars.length; index += 54) {
+    groups.push(chars.slice(index, index + 54).join(""));
+  }
+  return groups;
+}
+
+function splitDisplayText(text: string): string[] {
+  const value = text.trim();
+  if (!value) return [];
+  const sentenceParts = value.match(/[^.!?。！？]+[.!?。！？]?["'”’）)]?/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
+  if (sentenceParts.length > 1) return sentenceParts;
+  return value.length > 150 ? splitLongText(value) : [value];
 }
 
 function defaultSessionName(): string {
@@ -483,26 +554,57 @@ export const useSessionStore = defineStore("session", {
         return state.sessionId ? [] : samplePairs;
       }
 
-      const maxLength = Math.max(state.sourceSegments.length, state.translationSegments.length);
-      return Array.from({ length: maxLength }, (_, index) => {
-        const source = state.sourceSegments[index];
-        const translation = state.translationSegments[index];
-        const segmentId = source?.segmentId ?? translation?.segmentId;
-        return {
-          segmentId,
-          time: source ? formatPlaybackTime(source.startMs) : "--",
-          source: source?.text ?? "等待源语言转写...",
-          translation: translation?.text ?? "等待译文...",
-          state: translation?.status ?? source?.status ?? "partial",
-          isActive: Boolean(segmentId && segmentId === state.activeSegmentId),
-          originalTranslation: translation?.originalText,
-          revisionReason: translation?.revisionReason
-        };
+      const ids: string[] = [];
+      [...state.sourceSegments, ...state.translationSegments].forEach((segment) => {
+        if (!ids.includes(segment.segmentId)) ids.push(segment.segmentId);
+      });
+
+      return ids.flatMap((segmentId) => {
+        const source = state.sourceSegments.find((segment) => segment.segmentId === segmentId);
+        const translation = state.translationSegments.find((segment) => segment.segmentId === segmentId);
+        const sourceParts = splitDisplayText(source?.text ?? "");
+        const translationParts = splitDisplayText(translation?.text ?? "");
+        const sourceStatus = source?.status;
+        const translationStatus = translation?.status;
+        const stateLabel =
+          translationStatus === "revised"
+            ? "revised"
+            : sourceStatus === "partial" || translationStatus === "partial"
+              ? "partial"
+              : (translationStatus ?? sourceStatus ?? "partial");
+        const hasSource = sourceParts.length > 0;
+        const hasTranslation = translationParts.length > 0;
+        const settled = stateLabel !== "partial" && sourceStatus !== "partial" && translationStatus !== "partial";
+        const count =
+          settled || !hasSource || !hasTranslation
+            ? Math.max(sourceParts.length, translationParts.length, 1)
+            : Math.max(1, Math.min(sourceParts.length, translationParts.length));
+        const startMs = source?.startMs ?? translation?.startMs ?? 0;
+        const segmentEndMs = Math.max(source?.endMs ?? 0, translation?.endMs ?? 0);
+        const activeEndMs = segmentId === state.activeSegmentId ? state.playbackMs : 0;
+        const endMs = Math.max(segmentEndMs, activeEndMs, startMs + count * 2000);
+        const spanMs = Math.max(0, endMs - startMs);
+
+        return Array.from({ length: count }, (_, index) => {
+          const chunkStartMs = startMs + Math.floor((spanMs * index) / count);
+          const sourceText = sourceParts[index] ?? "";
+          const translationText = translationParts[index] ?? "";
+          return {
+            segmentId: `${segmentId}:${index}`,
+            time: formatPlaybackTime(chunkStartMs),
+            source: sourceText,
+            translation: translationText,
+            state: index === count - 1 ? stateLabel : stateLabel === "revised" ? "revised" : "final",
+            isActive: Boolean(segmentId === state.activeSegmentId && index === count - 1),
+            originalTranslation: index === count - 1 ? translation?.originalText : undefined,
+            revisionReason: index === count - 1 ? translation?.revisionReason : undefined
+          };
+        }).filter((pair) => pair.source || pair.translation);
       });
     },
     currentPair(): TranscriptPair {
       return (
-        this.transcriptPairs.find((pair) => pair.segmentId && pair.segmentId === this.activeSegmentId) ??
+        this.transcriptPairs.find((pair) => pair.isActive) ??
         this.transcriptPairs[this.transcriptPairs.length - 1] ??
         samplePairs[0]
       );
@@ -577,8 +679,8 @@ export const useSessionStore = defineStore("session", {
         ];
       }
       return [
-        { label: "时长", value: this.report ? this.report.durationText : "--:--" },
-        { label: "语言", value: `${this.quickForm.sourceLanguage} -> ${this.quickForm.targetLanguage}` },
+        { label: "时长", value: formatPlaybackTime(this.playbackMs) },
+        { label: "句数", value: `${this.transcriptPairs.length} 句` },
         { label: "修正", value: `${this.revisions.length} 条` },
         { label: "导出", value: "TXT / SRT / MD / JSON" }
       ];
@@ -592,6 +694,8 @@ export const useSessionStore = defineStore("session", {
 
     selectQuickSource(source: SourceOption) {
       if (source.disabled || this.quickForm.source === source.key) return;
+      pendingFiles.quick = null;
+      revokeLocalPreview("quick");
       this.quickForm.source = source.key;
       this.quickInput = { ...defaultSourceInputState };
       if (source.key === testVideoFixture.key) {
@@ -610,6 +714,14 @@ export const useSessionStore = defineStore("session", {
     setQuickSourceFile(file: File | null) {
       this.quickInput.fileName = file?.name ?? "";
       pendingFiles.quick = file;
+      const previewUrl = setLocalPreview("quick", file);
+      if (this.quickForm.source === "video-file") {
+        this.mediaUrl = previewUrl;
+        this.audioUrl = null;
+      } else if (this.quickForm.source === "audio-file") {
+        this.mediaUrl = null;
+        this.audioUrl = previewUrl;
+      }
     },
 
     updateQuickSourceUrl(url: string) {
@@ -829,6 +941,29 @@ export const useSessionStore = defineStore("session", {
       this.resumeSession();
     },
 
+    handleMediaPlaybackPaused() {
+      mediaPlaybackActive = false;
+      if (this.activeMode !== "quick" || playbackStartPending) return;
+      if (this.modeStates.quick === "running") this.pauseMode("quick");
+    },
+
+    handleMediaPlaybackPlayed() {
+      mediaPlaybackActive = true;
+      if (this.activeMode !== "quick") return;
+
+      if (playbackStartPending) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "start_session" }));
+          playbackStartPending = false;
+          this.status = "running";
+          this.modeStates.quick = "running";
+        }
+        return;
+      }
+
+      if (this.modeStates.quick === "paused") this.resumeMode("quick");
+    },
+
     askEnd(mode: ProductMode) {
       this.endingMode = mode;
       this.showEndDialog = true;
@@ -900,7 +1035,12 @@ export const useSessionStore = defineStore("session", {
 
     /** 本地测试视频自然播放结束 → 自动收尾出报告，贴近"音频播放完自动结束"的真实路径。 */
     handleFixtureEnded() {
-      if (this.sessionId !== "local-test-video-fixture" || this.modeStates.quick !== "running") return;
+      if (!["running", "paused"].includes(this.modeStates.quick)) return;
+      if (this.sessionId !== "local-test-video-fixture") {
+        this.endingMode = "quick";
+        this.confirmEnd();
+        return;
+      }
       this.revealFixtureSegmentsUpTo(testVideoFixture.durationMs);
       this.modeStates.quick = "report";
       this.startRequestId += 1;
@@ -940,6 +1080,7 @@ export const useSessionStore = defineStore("session", {
     async startConfiguredSession(mode: ProductMode, requestId: number): Promise<boolean> {
       this.stopSession("idle");
       this.resetSessionData();
+      if (mode === "quick") this.applyQuickLocalFilePreview();
       this.status = "connecting";
       this.errorMessage = null;
 
@@ -982,6 +1123,8 @@ export const useSessionStore = defineStore("session", {
 
     stopSession(nextStatus: SessionStatus = "stopped") {
       void this.stopCapture();
+      playbackStartPending = false;
+      mediaPlaybackActive = false;
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop_session" }));
       }
@@ -1008,6 +1151,8 @@ export const useSessionStore = defineStore("session", {
     },
 
     resetSessionData() {
+      playbackStartPending = false;
+      mediaPlaybackActive = false;
       this.sessionId = null;
       this.sourceSyncState = { ...defaultSourceSyncState };
       this.mediaUrl = null;
@@ -1053,6 +1198,17 @@ export const useSessionStore = defineStore("session", {
       this.sourceSyncState = { ...defaultSourceSyncState };
     },
 
+    applyQuickLocalFilePreview() {
+      const previewUrl = localPreviewUrls.quick;
+      if (this.quickForm.source === "video-file") {
+        this.mediaUrl = previewUrl;
+        this.audioUrl = null;
+      } else if (this.quickForm.source === "audio-file") {
+        this.mediaUrl = null;
+        this.audioUrl = previewUrl;
+      }
+    },
+
     startTestVideoFixtureSession(requestId: number) {
       if (!this.isCurrentStart("quick", requestId)) return;
 
@@ -1071,9 +1227,10 @@ export const useSessionStore = defineStore("session", {
     },
 
     syncFixturePlayback(currentTimeSeconds: number) {
+      const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
+      this.playbackMs = playbackMs;
       if (this.sessionId !== "local-test-video-fixture" || this.status !== "running") return;
 
-      const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
       this.revealFixtureSegmentsUpTo(playbackMs);
       this.sourceSyncState = {
         status: "syncing",
@@ -1105,11 +1262,17 @@ export const useSessionStore = defineStore("session", {
 
       this.sourceSegments = revealed.map((segment) => ({
         segmentId: segment.segmentId,
-        text: segment.en,
+        text:
+          segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS
+            ? streamText(segment.en, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
+            : segment.en,
         language: "en",
         startMs: segment.startMs,
         endMs: segment.endMs,
-        status: "final" as SegmentStatus
+        status:
+          segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS
+            ? ("partial" as SegmentStatus)
+            : ("final" as SegmentStatus)
       }));
 
       this.translationSegments = revealed.map((segment) => {
@@ -1130,7 +1293,7 @@ export const useSessionStore = defineStore("session", {
           segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS;
         return {
           segmentId: segment.segmentId,
-          text: segment.zh,
+          text: isFreshActive ? streamText(segment.zh, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS) : segment.zh,
           language: "zh",
           startMs: segment.startMs,
           endMs: segment.endMs,
@@ -1150,30 +1313,41 @@ export const useSessionStore = defineStore("session", {
       const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
       pendingCaptureKind = captureKindBySource[sourceKey] ?? null;
       captureStarted = false;
+      playbackStartPending = mode === "quick" && playbackControlledSourceKeys.has(sourceKey);
+      mediaPlaybackActive = false;
       let connection: WebSocket;
-      connection = createSessionSocket(sessionId, {
-        onOpen: () => {
-          if (!this.isCurrentStart(mode, requestId, sessionId)) {
-            connection.close();
-            return;
+      connection = createSessionSocket(
+        sessionId,
+        {
+          onOpen: () => {
+            if (!this.isCurrentStart(mode, requestId, sessionId)) {
+              connection.close();
+              return;
+            }
+            this.wsConnected = true;
+            this.status = "running";
+            if (playbackStartPending && mediaPlaybackActive) {
+              connection.send(JSON.stringify({ type: "start_session" }));
+              playbackStartPending = false;
+              this.modeStates.quick = "running";
+            }
+          },
+          onClose: () => {
+            if (!this.isCurrentStart(mode, requestId, sessionId)) return;
+            this.wsConnected = false;
+            if (this.status === "running") this.status = "stopped";
+          },
+          onError: (message) => {
+            if (!this.isCurrentStart(mode, requestId, sessionId)) return;
+            this.status = "error";
+            this.errorMessage = message;
+          },
+          onEvent: (event) => {
+            if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
           }
-          this.wsConnected = true;
-          this.status = "running";
         },
-        onClose: () => {
-          if (!this.isCurrentStart(mode, requestId, sessionId)) return;
-          this.wsConnected = false;
-          if (this.status === "running") this.status = "stopped";
-        },
-        onError: (message) => {
-          if (!this.isCurrentStart(mode, requestId, sessionId)) return;
-          this.status = "error";
-          this.errorMessage = message;
-        },
-        onEvent: (event) => {
-          if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
-        }
-      });
+        { autoStart: !playbackStartPending }
+      );
       socket = connection;
     },
 

@@ -21,7 +21,7 @@ const signature = computed(() =>
     .join("|")
 );
 
-const follow = useStickyFollow(root, () => signature.value, { block: "center" });
+const follow = useStickyFollow(root, () => signature.value, { block: "start" });
 
 function pairKey(pair: TranscriptPair): string {
   return pair.segmentId ?? pair.time;

@@ -1705,9 +1705,49 @@ a:focus-visible {
   padding: 10px;
 }
 
+.file-picker {
+  cursor: pointer;
+}
+
 .file-control {
-  background: #ffffff;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.file-picker-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.file-picker-button {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.file-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
   font-size: 13px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-picker-name.empty {
+  color: var(--ink-soft);
+  font-weight: 650;
 }
 
 .source-prep-status {

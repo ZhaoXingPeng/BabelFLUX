@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import Icon from "../icons/Icon.vue";
 import type { SourceInputState, SourceOption } from "./types";
 
 const props = defineProps<{
@@ -16,6 +18,8 @@ const emit = defineEmits<{
 function isFileSource() {
   return props.source.key === "video-file" || props.source.key === "audio-file";
 }
+
+const fileActionLabel = computed(() => (props.source.key === "video-file" ? "选择视频" : "选择音频"));
 
 function isFixtureSource() {
   return props.source.key === "fixture-video";
@@ -42,15 +46,23 @@ function handleFileChange(event: Event) {
       <span class="source-prep-status ready">video.mp4 / voice.m4a / en.txt / ch.txt 已就绪</span>
     </div>
 
-    <label v-else-if="isFileSource()" class="block">
+    <label v-else-if="isFileSource()" class="block file-picker">
       <span class="form-label">{{ source.key === "video-file" ? "视频文件" : "音频文件" }}</span>
       <input
-        class="form-control file-control"
+        class="file-control"
         type="file"
         :accept="source.key === 'video-file' ? 'video/*' : 'audio/*'"
         @change="handleFileChange"
       />
-      <span class="source-prep-status">{{ input.fileName || "未选择文件" }}</span>
+      <span class="file-picker-row">
+        <span class="secondary-button file-picker-button">
+          <Icon name="upload" :size="16" />
+          <span>{{ fileActionLabel }}</span>
+        </span>
+        <span class="file-picker-name" :class="{ empty: !input.fileName }">
+          {{ input.fileName || "未选择文件" }}
+        </span>
+      </span>
     </label>
 
     <label v-else-if="isUrlSource()" class="block">

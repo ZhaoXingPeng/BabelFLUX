@@ -9,12 +9,22 @@ interface SessionSocketHandlers {
   onError?: (message: string) => void;
 }
 
-export function createSessionSocket(sessionId: string, handlers: SessionSocketHandlers): WebSocket {
+interface SessionSocketOptions {
+  autoStart?: boolean;
+}
+
+export function createSessionSocket(
+  sessionId: string,
+  handlers: SessionSocketHandlers,
+  options: SessionSocketOptions = {}
+): WebSocket {
   const socket = new WebSocket(`${WS_BASE_URL}/ws/sessions/${sessionId}`);
 
   socket.addEventListener("open", () => {
     handlers.onOpen?.();
-    socket.send(JSON.stringify({ type: "start_session" }));
+    if (options.autoStart ?? true) {
+      socket.send(JSON.stringify({ type: "start_session" }));
+    }
   });
 
   socket.addEventListener("message", (message) => {

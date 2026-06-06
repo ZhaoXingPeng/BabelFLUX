@@ -125,6 +125,8 @@ function toggleFloatingCaptions() {
         @open-desktop="sessionStore.openDesktopFloating"
         @toggle-floating-captions="toggleFloatingCaptions"
         @sync-playback="sessionStore.syncFixturePlayback"
+        @playback-pause="sessionStore.handleMediaPlaybackPaused"
+        @playback-play="sessionStore.handleMediaPlaybackPlayed"
         @ended="sessionStore.handleFixtureEnded"
       />
       <SubtitleColumn

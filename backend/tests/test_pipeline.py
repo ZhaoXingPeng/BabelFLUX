@@ -97,6 +97,81 @@ async def _async_return(value: object) -> object:
     return value
 
 
+@pytest.mark.asyncio
+async def test_pipeline_pause_resume_gate_blocks_until_resumed() -> None:
+    record = SessionRecord(session_id="pause-gate", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline.pause()
+    task = asyncio.create_task(pipeline._wait_if_paused())
+    await asyncio.sleep(0)
+
+    assert not task.done()
+
+    pipeline.resume()
+    waited = await asyncio.wait_for(task, timeout=1)
+    assert waited >= 0
+
+
+@pytest.mark.asyncio
+async def test_source_incremental_partials_are_accumulated() -> None:
+    record = SessionRecord(session_id="partial-merge", source_language="en", target_language="zh")
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source("I feel so fortunate", "itemA", final=False)
+    await pipeline._on_source("works, in fact,", "itemA", final=False)
+
+    assert record.segments[0].source_text == "I feel so fortunate works, in fact,"
+
+    await pipeline._on_source(
+        "I feel so fortunate that one of the works, in fact, did not meet her mark.",
+        "itemA",
+        final=True,
+    )
+
+    assert (
+        record.segments[0].source_text
+        == "I feel so fortunate that one of the works, in fact, did not meet her mark."
+    )
+    assert events[-1]["segment"]["text"] == record.segments[0].source_text
+
+
+@pytest.mark.asyncio
+async def test_source_snapshot_partials_do_not_duplicate_prefixes() -> None:
+    record = SessionRecord(session_id="partial-dedupe", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source("I feel so fortunate.", "itemA", final=False)
+    await pipeline._on_source(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art,",
+        "itemA",
+        final=False,
+    )
+
+    assert record.segments[0].source_text.startswith("I feel so fortunate that my first job")
+    assert "I feel so fortunate. I feel so fortunate" not in record.segments[0].source_text
+
+    await pipeline._on_source(
+        "I feel so fortunate that I feel so fortunate that my I feel so fortunate that my first.",
+        "itemB",
+        final=False,
+    )
+
+    assert record.segments[1].source_text == "I feel so fortunate that my first."
+
+
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
     reviser = RealtimeReviser(
         client=None, model="m", source_language="en", target_language="zh", domain="通用"

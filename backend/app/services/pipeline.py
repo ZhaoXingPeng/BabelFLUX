@@ -74,6 +74,8 @@ class InterpretationPipeline:
             if t.get("sourceTerm") and t.get("targetTerm")
         }
         self._stopped = False
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()
 
     # ---------- 对外入口 ----------
     async def run_media(self, source: str) -> None:
@@ -94,7 +96,12 @@ class InterpretationPipeline:
         consumer = asyncio.create_task(self._consume(session))
         try:
             await self._emit_sync("syncing", 0, "同传进行中")
-            frames = iter_pcm_frames(source, realtime=True, on_progress=self._on_progress)
+            frames = iter_pcm_frames(
+                source,
+                realtime=True,
+                on_progress=self._on_progress,
+                pause_wait=self._wait_if_paused,
+            )
             async with aclosing(frames) as stream:
                 async for frame in stream:
                     if self._stopped:
@@ -128,9 +135,11 @@ class InterpretationPipeline:
         try:
             await self._emit_sync("syncing", 0, "同传进行中")
             while not self._stopped:
+                await self._wait_if_paused()
                 frame = await queue.get()
                 if frame is None:
                     break
+                await self._wait_if_paused()
                 self._on_progress(self.elapsed_ms + int(len(frame) / 2 / 16000 * 1000))
                 await session.feed(frame)
             await session.feed_silence(2.0)
@@ -143,8 +152,22 @@ class InterpretationPipeline:
 
     def stop(self) -> None:
         self._stopped = True
+        self._pause_event.set()
+
+    def pause(self) -> None:
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        self._pause_event.set()
 
     # ---------- 内部 ----------
+    async def _wait_if_paused(self) -> float:
+        if self._pause_event.is_set():
+            return 0.0
+        started = time.monotonic()
+        await self._pause_event.wait()
+        return time.monotonic() - started
+
     def _on_progress(self, produced_ms: int) -> None:
         self.elapsed_ms = produced_ms
 
@@ -224,16 +247,78 @@ class InterpretationPipeline:
             self._by_response[response_id] = seg
         return seg
 
+    def _merge_source_partial(self, previous: str, text: str) -> str:
+        current = text.strip()
+        if not current:
+            return previous
+        prior = previous.strip()
+        if not prior:
+            return self._collapse_source_repetition(current)
+
+        # DashScope ASR partials can be either full snapshots or small incremental stashes.
+        # Keep snapshots as-is, but append true incremental fragments so the UI never
+        # regresses from a complete prefix to a trailing phrase such as "works, in fact,".
+        normalized_prior = prior.rstrip(" .!?。！？")
+        if current.startswith(normalized_prior) or len(current) > len(prior) * 1.2:
+            return self._prefer_source_snapshot(prior, current)
+        if current in prior or prior.endswith(current):
+            return prior
+
+        common_len = 0
+        for prior_char, current_char in zip(prior, current, strict=False):
+            if prior_char.lower() != current_char.lower():
+                break
+            common_len += 1
+        # If two partials share a meaningful beginning, the newer one is usually a
+        # corrected snapshot rather than a delta. Prefer it to avoid duplicated prefixes.
+        if common_len >= 12:
+            return self._prefer_source_snapshot(prior, current)
+
+        no_space_before = current[0] in ",.;:!?，。；：！？)]}”’"
+        separator = "" if prior[-1].isspace() or no_space_before else " "
+        return self._collapse_source_repetition(f"{prior}{separator}{current}")
+
+    def _prefer_source_snapshot(self, prior: str, current: str) -> str:
+        collapsed_current = self._collapse_source_repetition(current)
+        collapsed_prior = self._collapse_source_repetition(prior)
+        if collapsed_prior != prior:
+            return collapsed_current
+        if len(collapsed_current) + 16 < len(prior):
+            return prior
+        return collapsed_current
+
+    def _collapse_source_repetition(self, text: str) -> str:
+        result = text
+        for _ in range(4):
+            collapsed = self._collapse_source_repetition_once(result)
+            if collapsed == result:
+                return result
+            result = collapsed
+        return result
+
+    def _collapse_source_repetition_once(self, text: str) -> str:
+        words = text.split()
+        if len(words) < 6:
+            return text
+        normalized = [word.lower().strip(".,;:!?，。；：！？") for word in words]
+        for size in range(min(10, len(words) // 2), 2, -1):
+            prefix = normalized[:size]
+            for index in range(1, len(words) - size + 1):
+                if normalized[index : index + size] == prefix:
+                    return " ".join(words[index:])
+        return text
+
     async def _on_source(self, text: str, item_id: str | None, *, final: bool) -> None:
         if not text:
             return
         seg = self._source_segment(item_id)
-        seg.source_text = text
+        display_text = text.strip() if final else self._merge_source_partial(seg.source_text, text)
+        seg.source_text = display_text
         if final:
             seg.end_ms = max(self.elapsed_ms, seg.start_ms)
         await self._emit_segment(
             "transcript_segment", seg, language=self.record.source_language,
-            text=text, status="final" if final else "partial", throttle=not final,
+            text=display_text, status="final" if final else "partial", throttle=not final,
         )
 
     async def _on_translation(
