@@ -36,6 +36,8 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 PARTIAL_THROTTLE_S = 0.18
 DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
+SYNC_EMIT_INTERVAL_S = 0.8
+SYNC_LAG_WARN_MS = 600
 
 
 class InterpretationPipeline:
@@ -67,6 +69,9 @@ class InterpretationPipeline:
         self._by_response: dict[str, SegmentRecord] = {}
         self._last_partial_emit: dict[str, float] = {}
         self._last_event_at = time.monotonic()
+        self._last_sync_emit_at = 0.0
+        self._client_playback_ms: int | None = None
+        self._client_sent_audio_ms: int | None = None
         self._review_tasks: set[asyncio.Task[Any]] = set()
         self._glossary_phrases = {
             str(t.get("sourceTerm")): str(t.get("targetTerm"))
@@ -133,7 +138,7 @@ class InterpretationPipeline:
         await session.connect()
         consumer = asyncio.create_task(self._consume(session))
         try:
-            await self._emit_sync("syncing", 0, "同传进行中")
+            await self._emit_sync("ready", 0, "同传引擎就绪，等待音频播放")
             while not self._stopped:
                 await self._wait_if_paused()
                 frame = await queue.get()
@@ -142,6 +147,7 @@ class InterpretationPipeline:
                 await self._wait_if_paused()
                 self._on_progress(self.elapsed_ms + int(len(frame) / 2 / 16000 * 1000))
                 await session.feed(frame)
+                await self._emit_client_clock_sync_if_due()
             await session.feed_silence(2.0)
             await self._drain(consumer)
         finally:
@@ -159,6 +165,10 @@ class InterpretationPipeline:
 
     def resume(self) -> None:
         self._pause_event.set()
+
+    def update_client_clock(self, playback_ms: int, sent_audio_ms: int) -> None:
+        self._client_playback_ms = max(0, playback_ms)
+        self._client_sent_audio_ms = max(0, sent_audio_ms)
 
     # ---------- 内部 ----------
     async def _wait_if_paused(self) -> float:
@@ -474,6 +484,27 @@ class InterpretationPipeline:
     async def _emit_sync(self, status: str, lag_ms: int, message: str) -> None:
         state = SourceSyncState(status=status, lagMs=lag_ms, message=message)  # type: ignore[arg-type]
         await self.emit({"type": "source_sync_state", "state": state.model_dump(by_alias=True)})
+
+    async def _emit_client_clock_sync_if_due(self) -> None:
+        if self._client_playback_ms is None:
+            return
+        now = time.monotonic()
+        if now - self._last_sync_emit_at < SYNC_EMIT_INTERVAL_S:
+            return
+        self._last_sync_emit_at = now
+        lag_ms = int(self._client_playback_ms - self.elapsed_ms)
+        status = "syncing" if abs(lag_ms) <= SYNC_LAG_WARN_MS else "lagging"
+        sent_delta = (
+            self._client_sent_audio_ms - self.elapsed_ms
+            if self._client_sent_audio_ms is not None
+            else 0
+        )
+        await self._emit_sync(
+            status,
+            lag_ms,
+            f"媒体同步：播放 {self._client_playback_ms // 1000:02d}s，"
+            f"后端音频 {self.elapsed_ms // 1000:02d}s，发送差 {sent_delta}ms",
+        )
 
     async def _emit_error(self, message: str) -> None:
         self.record.status = "error"

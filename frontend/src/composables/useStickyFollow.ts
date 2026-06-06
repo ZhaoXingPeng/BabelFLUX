@@ -20,7 +20,8 @@ export function useStickyFollow(
 
   function followLatest() {
     const element = container.value;
-    const active = element?.querySelector<HTMLElement>("[data-active='true']");
+    const cards = Array.from(element?.querySelectorAll<HTMLElement>(".sentence-pair-card") ?? []);
+    const active = element?.querySelector<HTMLElement>("[data-active='true']") ?? cards[cards.length - 1];
     if (!element || !active) return;
     userInteracted = false;
     following.value = true;
@@ -28,9 +29,13 @@ export function useStickyFollow(
       active.scrollIntoView({ block: options.block ?? "center" });
       return;
     }
-    const target = options.block === "start" ? active.offsetTop - 12 : active.offsetTop - element.clientHeight / 2 + active.clientHeight / 2;
+    const rawTarget =
+      options.block === "start"
+        ? active.offsetTop - 12
+        : active.offsetTop - element.clientHeight / 2 + active.clientHeight / 2;
+    const target = Math.max(0, Math.min(rawTarget, element.scrollHeight - element.clientHeight));
     gsap.to(element, {
-      scrollTo: { y: Math.max(0, target) },
+      scrollTo: { y: target },
       duration: DUR.base,
       ease: EASE,
       overwrite: "auto"

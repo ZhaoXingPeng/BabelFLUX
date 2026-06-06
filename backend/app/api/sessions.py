@@ -32,6 +32,7 @@ class CreateSessionRequest(BaseModel):
         "microphone",
         "browser_audio",
         "screen_window",
+        "media_element_audio",
         "system_audio",
     ] = Field(default="demo", alias="inputMode")
     source_language: str = Field(default="en", alias="sourceLanguage")

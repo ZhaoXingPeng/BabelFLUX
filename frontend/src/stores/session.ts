@@ -14,6 +14,7 @@ import { createSessionSocket } from "../api/ws";
 import {
   acquireStream,
   startAudioCapture,
+  startMediaElementAudioCapture,
   type AudioCaptureSession,
   type CaptureSourceKind
 } from "../composables/useAudioCapture";
@@ -50,9 +51,14 @@ const localPreviewUrls: Record<ProductMode, string | null> = { quick: null, floa
 // 实时采集句柄与“本次会话应采集的音源种类”，同样不入响应式 state。
 let audioCapture: AudioCaptureSession | null = null;
 let pendingCaptureKind: CaptureSourceKind | null = null;
+let pendingMediaElementCapture = false;
+let pendingMediaReadyState: SourceSyncState | null = null;
+let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
 let playbackStartPending = false;
 let mediaPlaybackActive = false;
+let estimatedOutputLatencyMs = 1500;
+const recentOutputLatencies: number[] = [];
 
 function revokeLocalPreview(mode: ProductMode) {
   const url = localPreviewUrls[mode];
@@ -79,6 +85,9 @@ const DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS = 3500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 // 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1.5s，右侧才产出该句字幕，贴近真实同传节奏。
 const SUBTITLE_LATENCY_MS = 1500;
+const MIN_OUTPUT_LATENCY_MS = 500;
+const MAX_OUTPUT_LATENCY_MS = 6000;
+const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
 
 const defaultSourceSyncState: SourceSyncState = {
   status: "listening",
@@ -138,8 +147,8 @@ const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-windo
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
   [testVideoFixture.key]: "demo",
-  "video-file": "upload_video",
-  "audio-file": "upload_audio",
+  "video-file": "media_element_audio",
+  "audio-file": "media_element_audio",
   url: "url",
   microphone: "microphone",
   "browser-tab": "browser_audio",
@@ -271,48 +280,6 @@ function streamText(text: string, progress: number): string {
   return units.slice(0, visible).join("");
 }
 
-function splitLongText(text: string): string[] {
-  const clauses = text.split(/(?<=[,，;；:：])\s*/).map((part) => part.trim()).filter(Boolean);
-  if (clauses.length > 1) {
-    const groups: string[] = [];
-    let current = "";
-    clauses.forEach((clause) => {
-      if (current && `${current} ${clause}`.length > 130) {
-        groups.push(current);
-        current = clause;
-      } else {
-        current = current ? `${current} ${clause}` : clause;
-      }
-    });
-    if (current) groups.push(current);
-    return groups;
-  }
-
-  if (/\s/.test(text)) {
-    const words = text.split(/\s+/);
-    const groups: string[] = [];
-    for (let index = 0; index < words.length; index += 22) {
-      groups.push(words.slice(index, index + 22).join(" "));
-    }
-    return groups;
-  }
-
-  const chars = Array.from(text);
-  const groups: string[] = [];
-  for (let index = 0; index < chars.length; index += 54) {
-    groups.push(chars.slice(index, index + 54).join(""));
-  }
-  return groups;
-}
-
-function splitDisplayText(text: string): string[] {
-  const value = text.trim();
-  if (!value) return [];
-  const sentenceParts = value.match(/[^.!?。！？]+[.!?。！？]?["'”’）)]?/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
-  if (sentenceParts.length > 1) return sentenceParts;
-  return value.length > 150 ? splitLongText(value) : [value];
-}
-
 function defaultSessionName(): string {
   const date = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -416,6 +383,66 @@ function srtTimestamp(ms: number): string {
   const millis = clamped % 1000;
   const pad = (value: number, len = 2) => String(value).padStart(len, "0");
   return `${pad(h)}:${pad(m)}:${pad(s)},${pad(millis, 3)}`;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return SUBTITLE_LATENCY_MS;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function recordOutputLatency(segment: SubtitleSegment, playbackMs: number) {
+  if (playbackMs <= 0 || segment.startMs < 0) return;
+  const latency = playbackMs - segment.startMs;
+  if (latency < MIN_OUTPUT_LATENCY_MS || latency > MAX_OUTPUT_LATENCY_MS) return;
+  recentOutputLatencies.push(latency);
+  while (recentOutputLatencies.length > OUTPUT_LATENCY_SAMPLE_SIZE) recentOutputLatencies.shift();
+  estimatedOutputLatencyMs = median(recentOutputLatencies);
+}
+
+function combinedTimeline(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[]
+): Array<{ segmentId: string; startMs: number; endMs: number }> {
+  const ids: string[] = [];
+  [...sourceSegments, ...translationSegments].forEach((segment) => {
+    if (!ids.includes(segment.segmentId)) ids.push(segment.segmentId);
+  });
+
+  return ids
+    .map((segmentId) => {
+      const source = sourceSegments.find((segment) => segment.segmentId === segmentId);
+      const translation = translationSegments.find((segment) => segment.segmentId === segmentId);
+      const startMs = source?.startMs ?? translation?.startMs ?? 0;
+      const endMs = Math.max(source?.endMs ?? 0, translation?.endMs ?? 0);
+      return { segmentId, startMs, endMs };
+    })
+    .sort((a, b) => a.startMs - b.startMs);
+}
+
+function activeSegmentForPlayback(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  playbackMs: number
+): string | null {
+  const timeline = combinedTimeline(sourceSegments, translationSegments);
+  if (timeline.length === 0) return null;
+
+  const displayClockMs = Math.max(0, playbackMs - estimatedOutputLatencyMs);
+  const enriched = timeline.map((segment, index) => {
+    const next = timeline[index + 1];
+    return {
+      ...segment,
+      endMs: Math.max(segment.endMs, next?.startMs ?? 0, segment.startMs + 2000)
+    };
+  });
+  const exact = enriched.find(
+    (segment) => displayClockMs >= segment.startMs && displayClockMs < segment.endMs
+  );
+  if (exact) return exact.segmentId;
+  return [...enriched].reverse().find((segment) => segment.startMs <= displayClockMs)?.segmentId
+    ?? enriched[enriched.length - 1]?.segmentId
+    ?? null;
 }
 
 /** 客户端报告渲染（本地演示下载用，与后端 report.py 的 txt/srt/md/json 对齐）。 */
@@ -566,11 +593,9 @@ export const useSessionStore = defineStore("session", {
         if (!ids.includes(segment.segmentId)) ids.push(segment.segmentId);
       });
 
-      return ids.flatMap((segmentId) => {
+      return ids.map((segmentId) => {
         const source = state.sourceSegments.find((segment) => segment.segmentId === segmentId);
         const translation = state.translationSegments.find((segment) => segment.segmentId === segmentId);
-        const sourceParts = splitDisplayText(source?.text ?? "");
-        const translationParts = splitDisplayText(translation?.text ?? "");
         const sourceStatus = source?.status;
         const translationStatus = translation?.status;
         const stateLabel =
@@ -579,35 +604,18 @@ export const useSessionStore = defineStore("session", {
             : sourceStatus === "partial" || translationStatus === "partial"
               ? "partial"
               : (translationStatus ?? sourceStatus ?? "partial");
-        const hasSource = sourceParts.length > 0;
-        const hasTranslation = translationParts.length > 0;
-        const settled = stateLabel !== "partial" && sourceStatus !== "partial" && translationStatus !== "partial";
-        const count =
-          settled || !hasSource || !hasTranslation
-            ? Math.max(sourceParts.length, translationParts.length, 1)
-            : Math.max(1, Math.min(sourceParts.length, translationParts.length));
         const startMs = source?.startMs ?? translation?.startMs ?? 0;
-        const segmentEndMs = Math.max(source?.endMs ?? 0, translation?.endMs ?? 0);
-        const activeEndMs = segmentId === state.activeSegmentId ? state.playbackMs : 0;
-        const endMs = Math.max(segmentEndMs, activeEndMs, startMs + count * 2000);
-        const spanMs = Math.max(0, endMs - startMs);
-
-        return Array.from({ length: count }, (_, index) => {
-          const chunkStartMs = startMs + Math.floor((spanMs * index) / count);
-          const sourceText = sourceParts[index] ?? "";
-          const translationText = translationParts[index] ?? "";
-          return {
-            segmentId: `${segmentId}:${index}`,
-            time: formatPlaybackTime(chunkStartMs),
-            source: sourceText,
-            translation: translationText,
-            state: index === count - 1 ? stateLabel : stateLabel === "revised" ? "revised" : "final",
-            isActive: Boolean(segmentId === state.activeSegmentId && index === count - 1),
-            originalTranslation: index === count - 1 ? translation?.originalText : undefined,
-            revisionReason: index === count - 1 ? translation?.revisionReason : undefined
-          };
-        }).filter((pair) => pair.source || pair.translation);
-      });
+        return {
+          segmentId,
+          time: formatPlaybackTime(startMs),
+          source: source?.text ?? "",
+          translation: translation?.text ?? "",
+          state: stateLabel,
+          isActive: segmentId === state.activeSegmentId,
+          originalTranslation: translation?.originalText,
+          revisionReason: translation?.revisionReason
+        };
+      }).filter((pair) => pair.source || pair.translation);
     },
     currentPair(): TranscriptPair {
       return (
@@ -959,6 +967,12 @@ export const useSessionStore = defineStore("session", {
       mediaPlaybackActive = true;
       if (this.activeMode !== "quick") return;
 
+      if (this.isMediaElementCaptureSource() && !captureStarted) {
+        mediaPlaybackActive = false;
+        mediaElement?.pause();
+        return;
+      }
+
       if (playbackStartPending) {
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "start_session" }));
@@ -1104,9 +1118,10 @@ export const useSessionStore = defineStore("session", {
 
         this.sessionId = session.sessionId;
 
-        // 上传模式：必须在 start_session 之前把文件字节传给后端，否则后端找不到媒体。
         const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
-        if (sourceKey === "video-file" || sourceKey === "audio-file") {
+        const inputMode = inputModeBySourceKey[sourceKey] ?? "demo";
+        if (inputMode === "upload_video" || inputMode === "upload_audio") {
+          // 备用后端解码路径：必须在 start_session 前把文件字节传给后端。
           const file = pendingFiles[mode];
           if (!file) {
             this.status = "error";
@@ -1133,6 +1148,8 @@ export const useSessionStore = defineStore("session", {
       void this.stopCapture();
       playbackStartPending = false;
       mediaPlaybackActive = false;
+      pendingMediaElementCapture = false;
+      pendingMediaReadyState = null;
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop_session" }));
       }
@@ -1161,6 +1178,11 @@ export const useSessionStore = defineStore("session", {
     resetSessionData() {
       playbackStartPending = false;
       mediaPlaybackActive = false;
+      pendingMediaElementCapture = false;
+      pendingMediaReadyState = null;
+      mediaElement = null;
+      estimatedOutputLatencyMs = SUBTITLE_LATENCY_MS;
+      recentOutputLatencies.length = 0;
       this.sessionId = null;
       this.sourceSyncState = { ...defaultSourceSyncState };
       this.mediaUrl = null;
@@ -1217,6 +1239,13 @@ export const useSessionStore = defineStore("session", {
       }
     },
 
+    setMediaElement(element: HTMLMediaElement | null) {
+      mediaElement = element;
+      if (element && pendingMediaReadyState && pendingMediaElementCapture && !captureStarted) {
+        void this.startMediaElementStreaming(pendingMediaReadyState);
+      }
+    },
+
     startTestVideoFixtureSession(requestId: number) {
       if (!this.isCurrentStart("quick", requestId)) return;
 
@@ -1234,11 +1263,14 @@ export const useSessionStore = defineStore("session", {
       };
     },
 
-    syncFixturePlayback(currentTimeSeconds: number) {
+    syncPlayback(currentTimeSeconds: number) {
       if (this.status !== "running" || this.modeStates.quick !== "running") return;
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
       this.playbackMs = playbackMs;
-      if (this.sessionId !== "local-test-video-fixture") return;
+      if (this.sessionId !== "local-test-video-fixture") {
+        this.updateActiveSegmentFromPlayback(playbackMs);
+        return;
+      }
 
       this.revealFixtureSegmentsUpTo(playbackMs);
       this.sourceSyncState = {
@@ -1246,6 +1278,28 @@ export const useSessionStore = defineStore("session", {
         lagMs: 0,
         message: `本地素材同步 ${formatPlaybackTime(playbackMs)}`
       };
+    },
+
+    syncFixturePlayback(currentTimeSeconds: number) {
+      this.syncPlayback(currentTimeSeconds);
+    },
+
+    updateActiveSegmentFromPlayback(playbackMs?: number) {
+      if (this.sessionId === "local-test-video-fixture") return;
+      const currentPlaybackMs = playbackMs ?? this.playbackMs;
+      this.activeSegmentId = activeSegmentForPlayback(
+        this.sourceSegments,
+        this.translationSegments,
+        currentPlaybackMs
+      );
+    },
+
+    isMediaElementCaptureSource(): boolean {
+      return (
+        this.activeMode === "quick" &&
+        this.sessionId !== "local-test-video-fixture" &&
+        fileSourceKeys.has(this.quickForm.source)
+      );
     },
 
     /**
@@ -1321,8 +1375,13 @@ export const useSessionStore = defineStore("session", {
       // 判定本次会话是否需要前端实时采集音频（麦克风/标签页/屏幕/系统音频）。
       const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
       pendingCaptureKind = captureKindBySource[sourceKey] ?? null;
+      pendingMediaElementCapture = mode === "quick" && fileSourceKeys.has(sourceKey);
+      pendingMediaReadyState = null;
       captureStarted = false;
-      playbackStartPending = mode === "quick" && playbackControlledSourceKeys.has(sourceKey);
+      playbackStartPending =
+        mode === "quick" &&
+        playbackControlledSourceKeys.has(sourceKey) &&
+        !pendingMediaElementCapture;
       mediaPlaybackActive = false;
       let connection: WebSocket;
       connection = createSessionSocket(
@@ -1371,9 +1430,14 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "source_sync_state") {
         if (liveEventsLocked) return;
+        if (pendingMediaElementCapture && event.state.status === "ready") {
+          pendingMediaReadyState = event.state;
+          void this.startMediaElementStreaming(event.state);
+          return;
+        }
         this.sourceSyncState = event.state;
         // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
-        if (pendingCaptureKind && !captureStarted) {
+        if (pendingCaptureKind && !captureStarted && event.state.status === "ready") {
           captureStarted = true;
           void this.startCaptureStreaming(pendingCaptureKind);
         }
@@ -1382,13 +1446,17 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "transcript_segment") {
         if (liveEventsLocked) return;
+        recordOutputLatency(event.segment, this.playbackMs);
         this.sourceSegments = upsertSegment(this.sourceSegments, event.segment);
+        this.updateActiveSegmentFromPlayback();
         return;
       }
 
       if (event.type === "translation_segment") {
         if (liveEventsLocked) return;
+        recordOutputLatency(event.segment, this.playbackMs);
         this.translationSegments = upsertSegment(this.translationSegments, event.segment);
+        this.updateActiveSegmentFromPlayback();
         return;
       }
 
@@ -1481,8 +1549,66 @@ export const useSessionStore = defineStore("session", {
       }
     },
 
+    /** 上传视频/音频：从正在播放的媒体元素采集同一份音频，保证模型输入与画面同源。 */
+    async startMediaElementStreaming(readyState: SourceSyncState) {
+      if (!this.isMediaElementCaptureSource()) {
+        this.sourceSyncState = readyState;
+        return;
+      }
+      if (!mediaElement) {
+        pendingMediaReadyState = readyState;
+        return;
+      }
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+      try {
+        if (!captureStarted) {
+          captureStarted = true;
+          audioCapture = await startMediaElementAudioCapture(mediaElement, {
+            frameMs: 80,
+            onChunk: (chunk) => {
+              if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+            },
+            onClock: (clock) => {
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "media_clock", ...clock }));
+              }
+            },
+            onEnded: () => {
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "audio_end" }));
+              }
+            },
+            onError: (message) => {
+              this.errorMessage = message;
+            }
+          });
+        }
+        pendingMediaReadyState = null;
+        this.sourceSyncState = readyState;
+        this.status = "running";
+        this.modeStates.quick = "running";
+        try {
+          await mediaElement.play();
+        } catch {
+          // 浏览器可能阻止带声音自动播放；采集链路已就绪，用户手动播放即可同步推流。
+        }
+      } catch (error) {
+        captureStarted = false;
+        this.status = "error";
+        this.modeStates.quick = "error";
+        this.errorMessage =
+          error instanceof Error ? error.message : "媒体元素音频采集启动失败";
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "audio_end" }));
+        }
+      }
+    },
+
     async stopCapture() {
       pendingCaptureKind = null;
+      pendingMediaElementCapture = false;
+      pendingMediaReadyState = null;
       captureStarted = false;
       if (audioCapture) {
         const capture = audioCapture;

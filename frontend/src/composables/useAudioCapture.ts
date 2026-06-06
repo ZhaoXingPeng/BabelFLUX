@@ -53,6 +53,20 @@ export interface AudioCaptureSession {
 
 const TARGET_SAMPLE_RATE = 16000;
 
+export interface MediaElementClock {
+  playbackMs: number;
+  sentAudioMs: number;
+}
+
+export interface MediaElementAudioCaptureOptions extends AudioCaptureOptions {
+  /** 媒体元素播放时钟与已发送音频时钟，用于前后端同步观测。 */
+  onClock?: (clock: MediaElementClock) => void;
+}
+
+function audioContextCtor() {
+  return window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+}
+
 type ExtendedDisplayMediaOptions = DisplayMediaStreamOptions & {
   monitorTypeSurfaces?: "include" | "exclude";
   preferCurrentTab?: boolean;
@@ -160,7 +174,7 @@ export async function startAudioCapture(
   const sampleRate = options.sampleRate ?? TARGET_SAMPLE_RATE;
   const frameSamples = Math.round((sampleRate * (options.frameMs ?? 100)) / 1000);
 
-  const AudioCtx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const AudioCtx = audioContextCtor();
   const context = new AudioCtx({ sampleRate });
   if (context.state === "suspended") await context.resume();
 
@@ -218,6 +232,108 @@ export async function startAudioCapture(
       // 忽略断开时的竞态
     }
     stream.getTracks().forEach((track) => track.stop());
+    try {
+      await context.close();
+    } catch {
+      // 已关闭
+    }
+  };
+
+  return { stop };
+}
+
+/**
+ * 从正在播放的 <video>/<audio> 元素直接采集音频并推成 16k PCM。
+ *
+ * 上传视频实时同传使用这条路径：用户看到/听到的媒体元素就是模型输入源，
+ * 避免“前端播放 blob、后端另起 ffmpeg 解码文件”形成双时钟。
+ */
+export async function startMediaElementAudioCapture(
+  element: HTMLMediaElement,
+  options: MediaElementAudioCaptureOptions
+): Promise<AudioCaptureSession> {
+  const sampleRate = options.sampleRate ?? TARGET_SAMPLE_RATE;
+  const frameSamples = Math.round((sampleRate * (options.frameMs ?? 80)) / 1000);
+  const AudioCtx = audioContextCtor();
+  const context = new AudioCtx({ sampleRate });
+  if (context.state === "suspended") await context.resume();
+
+  const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+  let stopped = false;
+  let pending: number[] = [];
+  let sentSamples = 0;
+  let lastClockAt = 0;
+
+  const emitClock = (force = false) => {
+    if (!options.onClock) return;
+    const now = performance.now();
+    if (!force && now - lastClockAt < 500) return;
+    lastClockAt = now;
+    options.onClock({
+      playbackMs: Math.max(0, Math.round(element.currentTime * 1000)),
+      sentAudioMs: Math.round((sentSamples / sampleRate) * 1000)
+    });
+  };
+
+  const flush = (force: boolean) => {
+    while (pending.length >= frameSamples || (force && pending.length > 0)) {
+      const slice = pending.slice(0, frameSamples);
+      pending = pending.slice(frameSamples);
+      const buffer = new Int16Array(slice);
+      sentSamples += slice.length;
+      options.onChunk(buffer.buffer);
+      emitClock(force);
+      if (force && pending.length === 0) break;
+    }
+  };
+
+  try {
+    await context.audioWorklet.addModule(blobUrl);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+
+  const source = context.createMediaElementSource(element);
+  const node = new AudioWorkletNode(context, "pcm-capture-processor");
+  const sink = context.createGain();
+  sink.gain.value = 0;
+
+  node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    if (stopped || element.paused || element.ended) return;
+    const incoming = new Int16Array(event.data);
+    for (let i = 0; i < incoming.length; i += 1) pending.push(incoming[i]);
+    flush(false);
+  };
+
+  const resumeContext = () => {
+    if (context.state === "suspended") void context.resume();
+  };
+  const handleEnded = () => {
+    if (!stopped) options.onEnded?.();
+  };
+  element.addEventListener("play", resumeContext);
+  element.addEventListener("ended", handleEnded);
+
+  source.connect(context.destination);
+  source.connect(node);
+  node.connect(sink);
+  sink.connect(context.destination);
+
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true;
+    flush(true);
+    emitClock(true);
+    element.removeEventListener("play", resumeContext);
+    element.removeEventListener("ended", handleEnded);
+    try {
+      node.port.onmessage = null;
+      node.disconnect();
+      sink.disconnect();
+      source.disconnect();
+    } catch {
+      // 忽略断开时的竞态
+    }
     try {
       await context.close();
     } catch {
