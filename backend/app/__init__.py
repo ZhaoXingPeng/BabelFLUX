@@ -1,1 +1,1 @@
-"""Backend package for AI Product Lab."""
+"""Backend package for BabelFlux."""

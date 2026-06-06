@@ -1,15 +1,20 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.ws import _put_pcm_end, _put_pcm_frame
 from app.main import app
 from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
 from app.services.providers.mock import build_mock_events
+from app.services.session_events import session_event_hub
 
 
 @pytest.fixture(autouse=True)
 def reset_handoff_tokens() -> None:
     handoff_tokens.reset()
+    session_event_hub.reset()
 
 
 def test_create_session() -> None:
@@ -84,6 +89,26 @@ def test_mock_websocket_pause_and_resume() -> None:
         assert resume_event["state"]["status"] == "syncing"
 
 
+def test_pcm_queue_drops_oldest_frame_when_full() -> None:
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
+
+    _put_pcm_frame(queue, b"a")
+    _put_pcm_frame(queue, b"b")
+    _put_pcm_frame(queue, b"c")
+
+    assert [queue.get_nowait(), queue.get_nowait()] == [b"b", b"c"]
+
+
+def test_pcm_queue_end_marker_replaces_oldest_frame_when_full() -> None:
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
+
+    _put_pcm_frame(queue, b"a")
+    _put_pcm_frame(queue, b"b")
+    _put_pcm_end(queue)
+
+    assert [queue.get_nowait(), queue.get_nowait()] == [b"b", None]
+
+
 def test_issue_and_claim_session_handoff_token_once() -> None:
     client = TestClient(app)
     response = client.post(
@@ -137,6 +162,30 @@ def test_handoff_websocket_token_is_validated_when_present() -> None:
             "type": "error",
             "message": "Invalid handoff WebSocket token",
         }
+
+
+def test_handoff_websocket_receives_primary_session_events() -> None:
+    client = TestClient(app)
+    issued = client.post("/api/sessions/mirror-session/handoff", json={}).json()
+    claim = client.post(
+        "/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}
+    ).json()
+
+    with client.websocket_connect(claim["wsUrl"]) as handoff:
+        assert handoff.receive_json() == {
+            "type": "session_started",
+            "sessionId": "mirror-session",
+        }
+
+        with client.websocket_connect("/api/ws/sessions/mirror-session") as primary:
+            primary.receive_json()
+            primary.send_json({"type": "start_session"})
+
+            primary_event = primary.receive_json()
+            handoff_event = handoff.receive_json()
+
+    assert primary_event["type"] == "source_sync_state"
+    assert handoff_event == primary_event
 
 
 def test_mock_events_conform_to_event_models() -> None:

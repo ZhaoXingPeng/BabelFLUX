@@ -16,8 +16,8 @@ const signature = computed(() =>
     .join("|")
 );
 
-const sourceFollow = useStickyFollow(sourceList, () => signature.value, { block: "start" });
-const translationFollow = useStickyFollow(translationList, () => signature.value, { block: "start" });
+const sourceFollow = useStickyFollow(sourceList, () => signature.value, { block: "center", force: true });
+const translationFollow = useStickyFollow(translationList, () => signature.value, { block: "center", force: true });
 </script>
 
 <template>

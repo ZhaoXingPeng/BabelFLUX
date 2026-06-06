@@ -6,6 +6,7 @@ export interface SourceSyncState {
   status: "listening" | "syncing" | "ready" | "lagging" | "missing" | "recovered";
   lagMs: number;
   message: string;
+  sourceMs?: number | null;
 }
 
 export interface SubtitleSegment {

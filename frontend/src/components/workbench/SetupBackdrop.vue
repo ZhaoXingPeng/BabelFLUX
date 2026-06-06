@@ -8,8 +8,8 @@ useGsapReveal(root, { y: 10, stagger: 0.08 });
 
 <template>
   <section ref="root" class="setup-backdrop" aria-hidden="true">
-    <p data-reveal>LingoSync Web</p>
-    <h1 data-reveal>灵犀同传</h1>
+    <p data-reveal>BabelFlux Web</p>
+    <h1 data-reveal>巴别流 同传</h1>
     <span data-reveal>设置音源、语言与模型后进入沉浸式同传工作台</span>
   </section>
 </template>

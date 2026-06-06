@@ -13,6 +13,7 @@
 import asyncio
 import json
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.services.pipeline import InterpretationPipeline
 from app.services.providers.dashscope import DashScopeClient, DashScopeConfig
 from app.services.providers.mock import build_mock_events
 from app.services.report import generate_session_report
+from app.services.session_events import session_event_hub
 from app.services.session_store import session_store
 
 router = APIRouter(tags=["websocket"])
@@ -35,6 +37,9 @@ CLIENT_CAPTURE_MODES = {
     "media_element_audio",
     "system_audio",
 }
+PCM_FRAME_MS = 40
+MAX_PCM_QUEUE_AUDIO_MS = 1_000
+MAX_PCM_QUEUE_FRAMES = MAX_PCM_QUEUE_AUDIO_MS // PCM_FRAME_MS
 
 
 @router.websocket("/ws/sessions/{session_id}")
@@ -44,6 +49,10 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
     if ws_token and not handoff_tokens.validate_ws_token(session_id, ws_token):
         await websocket.send_json({"type": "error", "message": "Invalid handoff WebSocket token"})
         await websocket.close(code=4401)
+        return
+
+    if ws_token:
+        await _serve_handoff_socket(websocket, session_id)
         return
 
     record = session_store.get_or_create(session_id)
@@ -58,6 +67,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             except (RuntimeError, WebSocketDisconnect):
                 # 客户端已断开/连接已关闭：报告等结果已落盘，可经 REST 拉取，忽略发送异常。
                 pass
+        session_event_hub.publish(session_id, event)
 
     state: dict[str, Any] = {
         "pipeline": None,
@@ -97,7 +107,12 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             if data_bytes is not None:
                 queue = state["pcm_queue"]
                 if queue is not None:
-                    queue.put_nowait(data_bytes)
+                    _put_pcm_frame(queue, data_bytes)
+                    # Browser media capture can deliver audio frames steadily enough that
+                    # the receive loop keeps draining socket messages before the ingest
+                    # task gets scheduled. Yield briefly so the PCM consumer can feed the
+                    # realtime model instead of letting the bounded queue stay full.
+                    await asyncio.sleep(0.001)
                 continue
 
             text = message.get("text")
@@ -123,12 +138,12 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     )
             elif mtype == "audio_chunk_end" or mtype == "audio_end":
                 if state["pcm_queue"] is not None:
-                    state["pcm_queue"].put_nowait(None)
+                    _put_pcm_end(state["pcm_queue"])
             elif mtype == "stop_session":
                 if state["pipeline"] is not None:
                     state["pipeline"].stop()
                 if state["pcm_queue"] is not None:
-                    state["pcm_queue"].put_nowait(None)
+                    _put_pcm_end(state["pcm_queue"])
                 if state["run_task"] is not None:
                     await state["run_task"]
                 else:
@@ -160,13 +175,46 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
         if state["pipeline"] is not None:
             state["pipeline"].stop()
         if state["pcm_queue"] is not None:
-            state["pcm_queue"].put_nowait(None)
+            _put_pcm_end(state["pcm_queue"])
         run_task = state["run_task"]
         if run_task is not None and not run_task.done():
             try:
                 await asyncio.wait_for(run_task, timeout=10)
             except (TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
                 run_task.cancel()
+
+
+async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
+    subscription = session_event_hub.subscribe(session_id)
+    await websocket.send_json({"type": "session_started", "sessionId": session_id})
+
+    for event in subscription.replay:
+        await websocket.send_json(event)
+
+    async def forward_events() -> None:
+        while True:
+            await websocket.send_json(await subscription.queue.get())
+
+    forward_task = asyncio.create_task(forward_events())
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            text = message.get("text")
+            if not text:
+                continue
+            with suppress(json.JSONDecodeError):
+                payload = json.loads(text)
+                if payload.get("type") == "stop_session":
+                    break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session_event_hub.unsubscribe(subscription)
+        forward_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await forward_task
 
 
 async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
@@ -189,7 +237,7 @@ async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
     state["pipeline"] = pipeline
 
     if input_mode in CLIENT_CAPTURE_MODES:
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=MAX_PCM_QUEUE_FRAMES)
         state["pcm_queue"] = queue
         await pipeline.run_pcm_stream(queue)
         return
@@ -217,6 +265,25 @@ async def _run_mock(session_id: str, emit: Any) -> None:
     for event in build_mock_events(session_id):
         await emit(event)
         await asyncio.sleep(0.25)
+
+
+def _put_pcm_frame(queue: asyncio.Queue[bytes | None], frame: bytes) -> None:
+    # 队列只在已积压约 1 秒音频时丢最旧帧，优先保证实时性而不是播放过期音频。
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(frame)
+
+
+def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
+    while queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(None)
 
 
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:

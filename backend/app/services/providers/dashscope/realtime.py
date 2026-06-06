@@ -190,6 +190,7 @@ class LiveTranslateSession:
         session: dict[str, Any] = {
             "modalities": ["text", "audio"] if self.tts_enabled else ["text"],
             "input_audio_format": "pcm",
+            "sample_rate": 16000,
             "output_audio_format": "pcm",
             "input_audio_transcription": {
                 "model": self.asr_model,

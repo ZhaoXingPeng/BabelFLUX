@@ -9,14 +9,15 @@ revision 事件，达到时长上限或自然结束后 stop_session → 等待 s
 """
 import asyncio
 import json
+import os
 import sys
 import time
 
 import httpx
 import websockets
 
-API = "http://127.0.0.1:8000/api"
-WS = "ws://127.0.0.1:8000/api"
+API = os.getenv("BABELFLUX_E2E_API", "http://127.0.0.1:8000/api")
+WS = os.getenv("BABELFLUX_E2E_WS", "ws://127.0.0.1:8000/api")
 
 
 async def main() -> None:
@@ -45,6 +46,8 @@ async def main() -> None:
     src_final = tr_final = revisions = 0
     report_id = None
     first_src_at = None
+    first_src_event_at = None
+    first_tr_event_at = None
     started = time.monotonic()
     sample_src = sample_tr = None
 
@@ -56,22 +59,30 @@ async def main() -> None:
                 # 放宽：本链路分段较粗（整段才 final），且 stop 后 finalize 要调
                 # qwen-plus 处理整稿，需较长等待才能收到 session_report。
                 raw = await asyncio.wait_for(ws.recv(), timeout=70)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 print("[warn] 70s 无事件，结束")
                 break
             evt = json.loads(raw)
             t = evt.get("type")
-            if t == "transcript_segment" and evt["segment"]["status"] in ("final", "revised"):
-                src_final += 1
-                if first_src_at is None:
-                    first_src_at = time.monotonic() - started
-                sample_src = evt["segment"]["text"]
-            elif t == "translation_segment" and evt["segment"]["status"] in ("final", "revised"):
-                tr_final += 1
-                sample_tr = evt["segment"]["text"]
+            if t == "transcript_segment":
+                if first_src_event_at is None:
+                    first_src_event_at = time.monotonic() - started
+                if evt["segment"]["status"] in ("final", "revised"):
+                    src_final += 1
+                    if first_src_at is None:
+                        first_src_at = time.monotonic() - started
+                    sample_src = evt["segment"]["text"]
+            elif t == "translation_segment":
+                if first_tr_event_at is None:
+                    first_tr_event_at = time.monotonic() - started
+                if evt["segment"]["status"] in ("final", "revised"):
+                    tr_final += 1
+                    sample_tr = evt["segment"]["text"]
             elif t == "revision_event":
                 revisions += 1
-                print(f"[revision] {evt['revision']['beforeText']} -> {evt['revision']['afterText']}")
+                before = evt["revision"]["beforeText"]
+                after = evt["revision"]["afterText"]
+                print(f"[revision] {before} -> {after}")
             elif t == "session_report":
                 report_id = evt.get("reportId")
                 break
@@ -87,6 +98,16 @@ async def main() -> None:
     print(f"识别 final 句数 : {src_final}")
     print(f"翻译 final 句数 : {tr_final}")
     print(f"实时纠偏次数    : {revisions}")
+    print(
+        f"首个源文事件    : {first_src_event_at:.2f}s"
+        if first_src_event_at
+        else "首个源文事件    : N/A"
+    )
+    print(
+        f"首个译文事件    : {first_tr_event_at:.2f}s"
+        if first_tr_event_at
+        else "首个译文事件    : N/A"
+    )
     print(f"首句识别延迟    : {first_src_at:.2f}s" if first_src_at else "首句识别延迟    : N/A")
     print(f"会后报告        : {'已生成 ' + report_id if report_id else '未生成'}")
     if sample_src:
@@ -97,7 +118,10 @@ async def main() -> None:
     if report_id:
         async with httpx.AsyncClient(timeout=30) as http:
             for fmt in ("txt", "srt", "md", "json"):
-                r = await http.get(f"{API}/sessions/{session_id}/report/download", params={"format": fmt})
+                r = await http.get(
+                    f"{API}/sessions/{session_id}/report/download",
+                    params={"format": fmt},
+                )
                 print(f"下载[{fmt}] {r.status_code} {len(r.content)}B")
 
 

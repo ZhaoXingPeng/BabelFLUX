@@ -66,5 +66,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running LingoSync desktop overlay");
+        .expect("error while running BabelFlux desktop overlay");
 }

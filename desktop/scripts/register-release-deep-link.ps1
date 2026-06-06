@@ -14,7 +14,7 @@ $command = "`"$releaseExe`" `"%1`""
 
 New-Item -Path $schemeRoot -Force | Out-Null
 New-Item -Path $commandKey -Force | Out-Null
-Set-Item -Path $schemeRoot -Value "URL:LingoSync Protocol"
+Set-Item -Path $schemeRoot -Value "URL:BabelFlux Protocol"
 Set-ItemProperty -Path $schemeRoot -Name "URL Protocol" -Value ""
 Set-Item -Path $commandKey -Value $command
 

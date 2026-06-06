@@ -517,6 +517,10 @@ describe("同传工作台 mock 流程", () => {
       { autoStart: true }
     );
 
+    store.handleMediaPlaybackPaused();
+    expect(store.modeStates.quick).toBe("running");
+    expect(mockRuntime.sockets[0].socket.sent).not.toContain(JSON.stringify({ type: "pause_session" }));
+
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);

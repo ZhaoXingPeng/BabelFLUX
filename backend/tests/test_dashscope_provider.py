@@ -6,7 +6,12 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.services.providers.dashscope import ASRSegment, DashScopeClient, DashScopeConfig
+from app.services.providers.dashscope import (
+    ASRSegment,
+    DashScopeClient,
+    DashScopeConfig,
+    LiveTranslateSession,
+)
 from app.services.providers.dashscope.errors import DashScopeConfigurationError
 
 
@@ -47,6 +52,15 @@ def test_dashscope_config_requires_api_key() -> None:
 
     with pytest.raises(DashScopeConfigurationError):
         DashScopeConfig.from_settings(settings)
+
+
+def test_live_translate_session_update_declares_low_latency_pcm_rate() -> None:
+    session = LiveTranslateSession(DashScopeConfig(api_key="test-key"), model="m")
+
+    event = session._session_update_event()
+
+    assert event["session"]["input_audio_format"] == "pcm"
+    assert event["session"]["sample_rate"] == 16000
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,8 @@
-![LingoSync / 灵犀同传仓库主图](docs/design/lingosync-repo-cover.png)
+![BabelFlux / 巴别流 同传仓库主图](docs/design/babelflux-logo.png)
 
-> LingoSync / 灵犀同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
+> BabelFlux / 巴别流 同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
 >
-> 黑客松选题二的完整实现：LingoSync Web 工作台 + 灵犀同传桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
-
-![LingoSync / 灵犀同传产品界面](docs/design/main.png)
+> 黑客松选题二的完整实现：BabelFlux Web 工作台 + 巴别流 同传桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
 
 ---
 
@@ -27,7 +25,7 @@
 
 三端 + 一条真实模型链路，所有服务可同机部署（演示环境为 Windows 单机）。
 
-![LingoSync / 灵犀同传系统架构](docs/design/lingosync-architecture.png)
+![BabelFlux / 巴别流 同传系统架构](docs/design/babelflux-architecture.png)
 
 ### 模型链路与选型
 
@@ -60,7 +58,7 @@
 
 ## 本地启动
 
-> 依赖：Python 3.11、Node 18+、`ffmpeg` 在 PATH 中；桌面端额外需要 Rust + WebView2（Windows）。
+> 依赖：Python 3.11+、Node 20.19+、Rust stable（桌面端）、WebView2（Windows）。`ffmpeg` 可放在系统 PATH，也可放在仓库同级 `tools/` 目录，后端会自动递归查找 `ffmpeg.exe` / `ffprobe.exe`。
 
 ### 后端
 
@@ -69,7 +67,7 @@ cp .env.example .env        # 默认 MODEL_PROVIDER=mock，可零配额跑通全
 ./scripts/dev-backend.sh    # uvicorn app.main:app  ->  http://localhost:8000
 ```
 
-接入**真实模型**：在 `.env` 设 `MODEL_PROVIDER=real` 并填 `DASHSCOPE_API_KEY`（如用业务空间再填 `DASHSCOPE_WORKSPACE_ID`），其余模型名已给默认值。
+接入**真实模型**：在 `.env` 设 `MODEL_PROVIDER=real` 并填 `DASHSCOPE_API_KEY`。如使用百炼业务空间，再填 `DASHSCOPE_WORKSPACE_ID`。其余模型名已给默认值，通常无需改动。
 
 ### 前端
 
@@ -115,16 +113,21 @@ POST /api/models/tts/speech
 ## 目录结构
 
 ```text
-frontend/   Vue 3 + Vite + Pinia 前端工作台：输入源配置、双语字幕流、实时纠偏高亮、报告下载
-backend/    FastAPI 后端
-  app/api/        health / sessions / model_gateway / ws
-  app/services/   pipeline(管线) / revision(实时纠偏) / report(会后纠偏+报告)
-                  / media / handoff / session_store / model_strategy / providers(dashscope|mock)
-  scripts/        prove_realtime_revision.py(纠偏能力证明) / e2e_online_url.py(在线直链联调)
-desktop/    Tauri v2 桌面悬浮窗：standalone 自采集 + deep-link 接管
-docs/       architecture / backend / design / project-plans / requirements 等
-scripts/    dev-backend.sh / dev-frontend.sh / check.sh
-.env.example / providers.example.yaml
+.
+├── backend/                 FastAPI 后端服务
+│   ├── app/api/             health / sessions / model_gateway / ws
+│   ├── app/services/        media / pipeline / revision / report / handoff / providers
+│   ├── scripts/             真实模型链路与在线直链联调脚本
+│   └── tests/               后端单元与契约测试
+├── frontend/                Vue 3 + Vite + Pinia Web 工作台
+│   ├── public/fixtures/     默认测试视频与字幕素材
+│   └── src/                 组件、状态、输入源、字幕视图与报告下载
+├── desktop/                 Tauri v2 桌面悬浮字幕客户端
+├── docs/                    架构、设计、后端联调与项目计划文档
+├── scripts/                 本地启动与检查脚本
+├── tools/                   可选本地工具目录（如 ffmpeg）
+├── .env.example             后端环境变量模板
+└── providers.example.yaml   模型供应商配置示例
 ```
 
 ---
@@ -171,4 +174,4 @@ cd desktop && npx vue-tsc --noEmit     # 桌面类型检查
 
 ## 当前状态
 
-LingoSync / 灵犀同传已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端与 deep-link 统一使用 `lingosync://`。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。
+BabelFlux / 巴别流 同传已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端 deep-link 当前兼容保留 `lingosync://` 协议，便于已注册客户端平滑升级。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。

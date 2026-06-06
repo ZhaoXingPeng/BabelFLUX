@@ -9,10 +9,13 @@ LiveTranslate / Fun-ASR 所需的裸 PCM。默认按 ~1x 实时节奏产出帧�
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+
+from app.core.config import PROJECT_ROOT
 
 DEFAULT_SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2  # s16le
@@ -22,20 +25,51 @@ class MediaDecodeError(RuntimeError):
     """ffmpeg 解码失败或源不可用。"""
 
 
+def _tool_executable_name(name: str) -> str:
+    return f"{name}.exe" if os.name == "nt" else name
+
+
+def _resolve_tool_binary(name: str) -> str | None:
+    executable = _tool_executable_name(name)
+    upper = name.upper()
+    for env_name in (f"{upper}_PATH", f"{upper}_BINARY"):
+        value = os.environ.get(env_name)
+        if value and Path(value).is_file():
+            return str(Path(value).resolve())
+
+    from_path = shutil.which(name)
+    if from_path:
+        return from_path
+
+    search_roots = [
+        PROJECT_ROOT / "tools",
+        PROJECT_ROOT.parent / "tools",
+    ]
+    for root in search_roots:
+        if not root.exists():
+            continue
+        matches = sorted(root.glob(f"**/{executable}"), key=lambda path: len(str(path)))
+        for match in matches:
+            if match.is_file():
+                return str(match.resolve())
+    return None
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _resolve_tool_binary("ffmpeg") is not None
 
 
 def _is_url(source: str) -> bool:
     return source.startswith(("http://", "https://", "rtmp://", "rtsp://"))
 
 
-def frame_size_bytes(sample_rate: int = DEFAULT_SAMPLE_RATE, frame_ms: int = 100) -> int:
+def frame_size_bytes(sample_rate: int = DEFAULT_SAMPLE_RATE, frame_ms: int = 40) -> int:
     return int(sample_rate * frame_ms / 1000) * BYTES_PER_SAMPLE
 
 
 def _build_ffmpeg_args(source: str, sample_rate: int) -> list[str]:
-    args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
+    ffmpeg = _resolve_tool_binary("ffmpeg") or "ffmpeg"
+    args = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
     if _is_url(source):
         # 在线直链/直播：断流自动重连，提升健壮性。
         args += [
@@ -56,10 +90,11 @@ def _build_ffmpeg_args(source: str, sample_rate: int) -> list[str]:
 
 async def probe_duration_seconds(source: str) -> float | None:
     """用 ffprobe 探测时长（秒）；失败返回 None。"""
-    if shutil.which("ffprobe") is None:
+    ffprobe = _resolve_tool_binary("ffprobe")
+    if ffprobe is None:
         return None
     args = [
-        "ffprobe", "-v", "error",
+        ffprobe, "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         source,
@@ -81,7 +116,7 @@ async def iter_pcm_frames(
     source: str,
     *,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
-    frame_ms: int = 100,
+    frame_ms: int = 40,
     realtime: bool = True,
     speed: float = 1.0,
     on_progress: Callable[[int], None] | None = None,
@@ -91,7 +126,7 @@ async def iter_pcm_frames(
 
     参数:
         source: 本地路径或 http(s) 直链。
-        frame_ms: 每帧时长（100ms = 3200 字节 @16k）。
+        frame_ms: 每帧时长（40ms = 1280 字节 @16k）。
         realtime: True 时按 frame_ms/speed 的节奏产出，模拟直播；False 尽快产出。
         speed: 实时倍速（1.0=原速，>1 更快，便于压测）。
         on_progress: 回调累计已产出毫秒数。
