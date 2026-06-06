@@ -34,6 +34,7 @@ const emit = defineEmits<{
   reset: [];
   openDesktop: [];
   toggleFloatingCaptions: [];
+  mediaReady: [element: HTMLMediaElement | null];
   syncPlayback: [currentTimeSeconds: number];
   playbackPause: [];
   playbackPlay: [];
@@ -47,10 +48,27 @@ function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
 }
 
+function isMediaElementCaptureSource() {
+  return props.source.key === "video-file" || props.source.key === "audio-file";
+}
+
+function canAutoPlay() {
+  const mediaElementReady =
+    props.sourceSyncState.status === "ready" ||
+    props.sourceSyncState.message.startsWith("媒体同步") ||
+    props.sourceSyncState.message === "会话已继续";
+  return props.state === "running" && (!isMediaElementCaptureSource() || mediaElementReady);
+}
+
+async function emitMediaElement() {
+  await nextTick();
+  emit("mediaReady", currentMediaElement());
+}
+
 async function tryAutoPlay() {
   await nextTick();
   const element = currentMediaElement();
-  if (!element || props.state !== "running" || !element.paused) return;
+  if (!element || !canAutoPlay() || !element.paused) return;
   try {
     await element.play();
   } catch {
@@ -76,10 +94,16 @@ function handlePlay() {
   emit("playbackPlay");
 }
 
+function handleLoadedMetadata() {
+  void emitMediaElement();
+  void tryAutoPlay();
+}
+
 watch(
-  () => [props.state, props.mediaUrl, props.audioUrl, props.mediaKind],
+  () => [props.state, props.mediaUrl, props.audioUrl, props.mediaKind, props.sourceSyncState.status],
   () => {
-    if (props.state === "running") {
+    void emitMediaElement();
+    if (canAutoPlay()) {
       void tryAutoPlay();
     } else {
       pauseMedia();
@@ -114,7 +138,7 @@ watch(
           autoplay
           preload="metadata"
           data-testid="fixture-video"
-          @loadedmetadata="tryAutoPlay"
+          @loadedmetadata="handleLoadedMetadata"
           @play="handlePlay"
           @pause="handlePause"
           @timeupdate="emitPlaybackTime"
@@ -136,7 +160,7 @@ watch(
           autoplay
           preload="metadata"
           data-testid="fixture-audio"
-          @loadedmetadata="tryAutoPlay"
+          @loadedmetadata="handleLoadedMetadata"
           @play="handlePlay"
           @pause="handlePause"
           @timeupdate="emitPlaybackTime"

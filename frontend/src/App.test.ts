@@ -17,8 +17,8 @@ interface SocketHandlers {
 interface MockSocket {
   readyState: number;
   sent: string[];
-  send: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
+  send: (message: string) => void;
+  close: () => void;
 }
 
 const mockRuntime = vi.hoisted(() => ({
@@ -100,18 +100,32 @@ async function setSource(wrapper: VueWrapper, sourceKey: string) {
   await chooseSelect(wrapper, "source-select", sourceKey);
 }
 
-function buildSocket(sessionId: string, handlers: SocketHandlers): MockSocket {
-  const socket: MockSocket = {
+function buildSocket(
+  sessionId: string,
+  handlers: SocketHandlers,
+  options: { autoStart?: boolean } = {}
+): MockSocket {
+  let socket!: MockSocket;
+  const wrappedHandlers: SocketHandlers = {
+    ...handlers,
+    onOpen: () => {
+      handlers.onOpen?.();
+      if (options.autoStart ?? true) {
+        socket.send(JSON.stringify({ type: "start_session" }));
+      }
+    }
+  };
+  socket = {
     readyState: 1,
     sent: [],
     send: vi.fn((message: string) => socket.sent.push(message)),
     close: vi.fn(() => {
       socket.readyState = 3;
-      handlers.onClose?.();
+      wrappedHandlers.onClose?.();
     })
   };
 
-  mockRuntime.handlersBySession.set(sessionId, handlers);
+  mockRuntime.handlersBySession.set(sessionId, wrappedHandlers);
   mockRuntime.sockets.push({ sessionId, socket });
   return socket;
 }
@@ -462,13 +476,8 @@ describe("同传工作台 mock 流程", () => {
     );
   });
 
-  it("upload video source keeps a local playback preview after the session starts", async () => {
+  it("upload video source uses media-element PCM streaming and keeps a local preview", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "upload-video-session", status: "created" });
-    mockRuntime.uploadSessionMedia.mockResolvedValueOnce({
-      mediaId: "upload-video-session.mp4",
-      fileName: "demo.mp4",
-      sizeBytes: 9
-    });
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -485,7 +494,14 @@ describe("同传工作台 mock 流程", () => {
     await wrapper.find(".settings-footer .primary-button").trigger("click");
     await flushPromises();
 
-    expect(mockRuntime.uploadSessionMedia).toHaveBeenCalledWith("upload-video-session", file);
+    expect(mockRuntime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputMode: "media_element_audio",
+        sourceKey: "video-file",
+        sourceFileName: "demo.mp4"
+      })
+    );
+    expect(mockRuntime.uploadSessionMedia).not.toHaveBeenCalled();
     expect(store.mediaUrl).toBe("blob:preview-demo.mp4");
     expect(store.audioUrl).toBeNull();
     const video = wrapper.find('[data-testid="fixture-video"]');
@@ -498,26 +514,36 @@ describe("同传工作台 mock 流程", () => {
     expect(mockRuntime.createSessionSocket).toHaveBeenCalledWith(
       "upload-video-session",
       expect.any(Object),
-      { autoStart: false }
+      { autoStart: true }
     );
 
-    if (!mockRuntime.sockets[0].socket.sent.includes(JSON.stringify({ type: "start_session" }))) {
-      await video.trigger("play");
-    }
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
-
-    await video.trigger("pause");
-    expect(store.modeStates.quick).toBe("paused");
-    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "pause_session" }));
-
     await video.trigger("play");
-    expect(store.modeStates.quick).toBe("running");
-    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "resume_session" }));
+    expect(
+      mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
+    ).toHaveLength(1);
+    expect(store.sourceSyncState.status).not.toBe("ready");
+
+    store.syncPlayback(5);
+    mockRuntime.handlersBySession.get("upload-video-session")?.onEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "upload-seg-1",
+        text: "The uploaded video is now driving the model input.",
+        language: "en",
+        startMs: 3000,
+        endMs: 7000,
+        status: "final"
+      }
+    });
+    await nextTick();
+
+    expect(store.activeSegmentId).toBe("upload-seg-1");
   });
 
-  it("splits long backend paragraphs into sentence-level transcript cards", async () => {
+  it("keeps long backend paragraphs in one paired segment card", async () => {
     mountApp();
     const store = useSessionStore();
     store.resetSessionData();
@@ -546,11 +572,12 @@ describe("同传工作台 mock 流程", () => {
       }
     ];
 
-    expect(store.transcriptPairs).toHaveLength(3);
-    expect(store.transcriptPairs.map((pair) => pair.time)).toEqual(["00:00", "00:04", "00:08"]);
+    expect(store.transcriptPairs).toHaveLength(1);
+    expect(store.transcriptPairs[0].time).toBe("00:00");
     expect(store.transcriptPairs[0].source).toContain("Museum of Modern Art");
-    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
-    expect(store.transcriptPairs[2].isActive).toBe(true);
+    expect(store.transcriptPairs[0].source).toContain("I learned so much");
+    expect(store.transcriptPairs[0].translation).toContain("现代艺术博物馆");
+    expect(store.transcriptPairs[0].isActive).toBe(true);
   });
 
   it("does not cross-pair unfinished streaming source and translation chunks", async () => {
@@ -584,7 +611,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.transcriptPairs).toHaveLength(1);
     expect(store.transcriptPairs[0].source).toContain("Museum of Modern Art");
-    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
+    expect(store.transcriptPairs[0].source).toContain("I learned so much");
     expect(store.transcriptPairs[0].translation).not.toContain("等待");
   });
 
@@ -619,7 +646,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.transcriptPairs).toHaveLength(1);
     expect(store.transcriptPairs[0].state).toBe("partial");
-    expect(store.transcriptPairs[0].source).not.toContain("I learned so much");
+    expect(store.transcriptPairs[0].source).toContain("I learned so much");
     expect(store.transcriptPairs[0].translation).toContain("现代艺术博物馆");
   });
 

@@ -3,7 +3,7 @@
 客户端在连接后发送 start_session 启动同传；服务端按会话的 inputMode 选择音频入口：
     - url                         → 后端用 ffmpeg 从在线直链解码并喂入；
     - upload_video / upload_audio → 解码先前上传到 /sessions/{id}/media 的文件；
-    - 采集类（microphone/browser_audio/screen_window/system_audio）
+    - 采集类（microphone/browser_audio/screen_window/media_element_audio/system_audio）
                                   → 前端把 PCM 以 WS 二进制帧推来；
     - demo                        → 演示事件流（或 DEMO_MEDIA_PATH 指向的样例媒体）。
 会话自然结束或客户端发送 stop_session 时，触发会后完整纠偏并生成报告，
@@ -28,7 +28,13 @@ from app.services.session_store import session_store
 
 router = APIRouter(tags=["websocket"])
 
-CLIENT_CAPTURE_MODES = {"microphone", "browser_audio", "screen_window", "system_audio"}
+CLIENT_CAPTURE_MODES = {
+    "microphone",
+    "browser_audio",
+    "screen_window",
+    "media_element_audio",
+    "system_audio",
+}
 
 
 @router.websocket("/ws/sessions/{session_id}")
@@ -108,6 +114,13 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                 if state["run_task"] is None:
                     _apply_overrides(record, payload)
                     state["run_task"] = asyncio.create_task(run_and_finalize())
+            elif mtype == "media_clock":
+                pipeline = state["pipeline"]
+                if pipeline is not None:
+                    pipeline.update_client_clock(
+                        int(payload.get("playbackMs") or 0),
+                        int(payload.get("sentAudioMs") or 0),
+                    )
             elif mtype == "audio_chunk_end" or mtype == "audio_end":
                 if state["pcm_queue"] is not None:
                     state["pcm_queue"].put_nowait(None)

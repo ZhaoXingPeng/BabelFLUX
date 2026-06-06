@@ -539,6 +539,7 @@ a:focus-visible {
 }
 
 .sync-dot.listening,
+.sync-dot.ready,
 .sync-dot.syncing,
 .sync-dot.recovered {
   background: var(--stage-ok);

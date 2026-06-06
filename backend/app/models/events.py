@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class SourceSyncState(BaseModel):
-    status: Literal["listening", "syncing", "lagging", "missing", "recovered"]
+    status: Literal["listening", "syncing", "ready", "lagging", "missing", "recovered"]
     lag_ms: int = Field(alias="lagMs")
     message: str
 

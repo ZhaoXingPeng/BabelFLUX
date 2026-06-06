@@ -11,6 +11,7 @@ export interface CreateSessionPayload {
     | "microphone"
     | "browser_audio"
     | "screen_window"
+    | "media_element_audio"
     | "system_audio";
   sourceLanguage: string;
   targetLanguage: string;
