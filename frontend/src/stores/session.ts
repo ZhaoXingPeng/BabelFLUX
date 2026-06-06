@@ -11,6 +11,12 @@ import {
   type SessionReport
 } from "../api/client";
 import { createSessionSocket } from "../api/ws";
+import {
+  acquireStream,
+  startAudioCapture,
+  type AudioCaptureSession,
+  type CaptureSourceKind
+} from "../composables/useAudioCapture";
 import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
   RevisionEvent,
@@ -39,6 +45,17 @@ let desktopLaunchTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
 // File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
 const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
+// 实时采集句柄与“本次会话应采集的音源种类”，同样不入响应式 state。
+let audioCapture: AudioCaptureSession | null = null;
+let pendingCaptureKind: CaptureSourceKind | null = null;
+let captureStarted = false;
+
+const captureKindBySource: Record<string, CaptureSourceKind> = {
+  microphone: "microphone",
+  "browser-tab": "browser_audio",
+  "screen-window": "screen_window",
+  "system-audio": "system_audio"
+};
 
 const DESKTOP_LAUNCH_TIMEOUT_MS = 2500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
@@ -838,6 +855,7 @@ export const useSessionStore = defineStore("session", {
         this.reportError = null;
         this.reportLoading = true;
         socket.send(JSON.stringify({ type: "stop_session" }));
+        void this.stopCapture();
         const endingRequestId = this.startRequestId;
         // 兜底：后端长时间无报告（异常/断连）时降级，避免一直卡在“生成中”。
         window.setTimeout(() => {
@@ -945,6 +963,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     stopSession(nextStatus: SessionStatus = "stopped") {
+      void this.stopCapture();
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop_session" }));
       }
@@ -1070,6 +1089,10 @@ export const useSessionStore = defineStore("session", {
 
     connectSocket(sessionId: string, mode: ProductMode, requestId: number) {
       socket?.close();
+      // 判定本次会话是否需要前端实时采集音频（麦克风/标签页/屏幕/系统音频）。
+      const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
+      pendingCaptureKind = captureKindBySource[sourceKey] ?? null;
+      captureStarted = false;
       let connection: WebSocket;
       connection = createSessionSocket(sessionId, {
         onOpen: () => {
@@ -1105,6 +1128,11 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "source_sync_state") {
         this.sourceSyncState = event.state;
+        // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
+        if (pendingCaptureKind && !captureStarted) {
+          captureStarted = true;
+          void this.startCaptureStreaming(pendingCaptureKind);
+        }
         return;
       }
 
@@ -1172,6 +1200,47 @@ export const useSessionStore = defineStore("session", {
         this.reportError = error instanceof Error ? error.message : "报告拉取失败";
       } finally {
         this.reportLoading = false;
+      }
+    },
+
+    /** 实时采集类音源：取流 → 16k PCM → WS 二进制推送。后端管线就绪后调用。 */
+    async startCaptureStreaming(kind: CaptureSourceKind) {
+      try {
+        const stream = await acquireStream(kind);
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        audioCapture = await startAudioCapture(stream, {
+          onChunk: (chunk) => {
+            if (socket && socket.readyState === WebSocket.OPEN) socket.send(chunk);
+          },
+          onEnded: () => {
+            // 用户在系统选择器中停止共享 → 通知后端收尾并出报告。
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "audio_end" }));
+            }
+          },
+          onError: (message) => {
+            this.errorMessage = message;
+          }
+        });
+      } catch (error) {
+        this.status = "error";
+        this.errorMessage = error instanceof Error ? error.message : "音频采集启动失败";
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "audio_end" }));
+        }
+      }
+    },
+
+    async stopCapture() {
+      pendingCaptureKind = null;
+      captureStarted = false;
+      if (audioCapture) {
+        const capture = audioCapture;
+        audioCapture = null;
+        await capture.stop();
       }
     },
 
