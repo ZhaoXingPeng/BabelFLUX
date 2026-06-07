@@ -151,7 +151,9 @@ async def test_source_incremental_partials_are_accumulated() -> None:
         _source_text_for_item(record, "itemA")
         == "I feel so fortunate that one of the works, in fact, did not meet her mark."
     )
-    assert events[-1]["segment"]["text"] == "did not meet her mark."
+    assert events[-1]["segment"]["text"] == (
+        "I feel so fortunate that one of the works, in fact, did not meet her mark."
+    )
 
 
 @pytest.mark.asyncio
@@ -228,7 +230,7 @@ async def test_source_partials_drop_unstable_tail_before_overlap_merge() -> None
 
 
 @pytest.mark.asyncio
-async def test_translation_clauses_are_split_before_length_limit() -> None:
+async def test_display_segments_keep_source_and_translation_paired() -> None:
     record = SessionRecord(
         session_id="target-clause-split", source_language="en", target_language="zh"
     )
@@ -239,21 +241,79 @@ async def test_translation_clauses_are_split_before_length_limit() -> None:
     pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
 
     await pipeline._on_source(
-        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        (
+            "I feel so fortunate that my first job was working at the Museum of Modern Art. "
+            "I learned so much from her."
+        ),
         "itemA",
         final=False,
     )
     await pipeline._on_translation(
-        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。",
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。 我从她身上学到了很多。",
         "responseA",
         final=False,
     )
 
-    assert [segment.translation_text for segment in record.segments[:2]] == [
-        "我感到非常幸运，",
-        "我的第一份工作是在现代艺术博物馆。",
-    ]
-    assert max(segment.end_ms for segment in record.segments[:2]) <= 1000
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == (
+        "I feel so fortunate that my first job was working at the Museum of Modern Art."
+    )
+    assert record.segments[0].translation_text == (
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。"
+    )
+    assert record.segments[0].status == "final"
+    assert record.segments[1].source_text == "I learned so much from her."
+    assert record.segments[1].translation_text == "我从她身上学到了很多。"
+    assert record.segments[1].status == "partial"
+    assert max(segment.end_ms for segment in record.segments) <= 1000
+
+    pipeline.elapsed_ms = 20_000
+    await pipeline._on_source(
+        (
+            "I feel so fortunate that my first job was working at the Museum of Modern Art. "
+            "I learned so much from her."
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。 我从她身上学到了很多。",
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == (
+        "I feel so fortunate that my first job was working at the Museum of Modern Art."
+    )
+    assert record.segments[0].translation_text == (
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。"
+    )
+    assert record.segments[1].source_text == "I learned so much from her."
+    assert record.segments[1].translation_text == "我从她身上学到了很多。"
+    assert record.segments[0].end_ms == record.segments[1].start_ms
+    assert record.segments[0].end_ms < record.segments[1].end_ms
+
+
+@pytest.mark.asyncio
+async def test_display_segments_keep_mismatched_sentence_counts_together() -> None:
+    record = SessionRecord(session_id="paired-tail", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "First sentence. Second sentence. Third sentence.",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation("第一句。第二句。", "responseA", final=True)
+
+    assert len(record.segments) == 1
+    assert record.segments[0].source_text == "First sentence. Second sentence. Third sentence."
+    assert record.segments[0].translation_text == "第一句。第二句。"
 
 
 @pytest.mark.asyncio
@@ -273,7 +333,7 @@ async def test_partial_display_bounds_stay_under_one_second_when_split() -> None
         final=False,
     )
 
-    assert len(record.segments) == 2
+    assert len(record.segments) == 1
     assert max(segment.end_ms for segment in record.segments) <= 1000
 
 
