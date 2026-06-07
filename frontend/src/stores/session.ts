@@ -87,7 +87,7 @@ const SUBTITLE_LATENCY_MS = 1000;
 const MIN_OUTPUT_LATENCY_MS = 250;
 const MAX_OUTPUT_LATENCY_MS = 6000;
 const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
-const REPORT_READY_TIMEOUT_MS = 45_000;
+const REPORT_READY_TIMEOUT_MS = 150_000;
 const REPORT_POLL_INTERVAL_MS = 1_000;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
 const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
@@ -562,6 +562,7 @@ function renderReportClient(
       `- **语言**：${report.sourceLanguage} → ${report.targetLanguage}`,
       `- **时长**：${report.durationText}`,
       `- **句数**：${report.metrics.segments}　实时修正：${report.metrics.realtimeRevisions}　会后修正：${report.metrics.finalRevisions}`,
+      `- **全文纠偏**：${correctionStatusText(report)}`,
       "",
       "## 摘要",
       report.summary,
@@ -575,12 +576,26 @@ function renderReportClient(
           `| ${seg.timecode} | ${seg.sourceText.replace(/\|/g, "\\|")} | ${seg.finalTranslation.replace(/\|/g, "\\|")} |`
       )
     ];
+    if (report.finalRevisions.length) {
+      lines.push("", "## 会后校正记录", "", "| 原译文 | 校正后 | 原因 |", "| --- | --- | --- |");
+      report.finalRevisions.forEach((rev) => {
+        lines.push(
+          `| ${rev.beforeText.replace(/\|/g, "\\|")} | ${rev.afterText.replace(/\|/g, "\\|")} | ${rev.reason} |`
+        );
+      });
+    } else if (report.correctionStatus === "completed") {
+      lines.push("", "## 会后校正记录", "", "全文纠偏已完成，本场未发现需要改写的译文。");
+    }
+    if (report.qualityNotes) {
+      lines.push("", "## 质量说明", report.qualityNotes);
+    }
     return { body: lines.join("\n"), mime: "text/markdown", ext: "md" };
   }
   const lines = [
     `# ${report.sessionName}`,
     `领域：${report.domain}  |  语言：${report.sourceLanguage} -> ${report.targetLanguage}  |  时长：${report.durationText}`,
     `生成时间：${report.generatedAt}`,
+    `全文纠偏：${correctionStatusText(report)}`,
     "",
     "【摘要】",
     report.summary,
@@ -589,10 +604,26 @@ function renderReportClient(
     ...report.segments.flatMap((seg) => [`[${seg.timecode}] ${seg.sourceText}`, `          ${seg.finalTranslation}`])
   ];
   if (report.finalRevisions.length) {
-    lines.push("", "【校正记录】");
+    lines.push("", "【会后校正记录】");
     report.finalRevisions.forEach((rev) => lines.push(`- ${rev.beforeText}  =>  ${rev.afterText}  （${rev.reason}）`));
+  } else if (report.correctionStatus === "completed") {
+    lines.push("", "【会后校正记录】", "全文纠偏已完成，本场未发现需要改写的译文。");
+  }
+  if (report.qualityNotes) {
+    lines.push("", "【质量说明】", report.qualityNotes);
   }
   return { body: lines.join("\n"), mime: "text/plain", ext: "txt" };
+}
+
+function correctionStatusText(report: SessionReport): string {
+  const elapsedMs = report.correctionElapsedMs ?? 0;
+  const elapsed = elapsedMs > 0 ? `，耗时 ${(elapsedMs / 1000).toFixed(1)} 秒` : "";
+  const model = report.correctionModel ? `，模型 ${report.correctionModel}` : "";
+  if (report.correctionStatus === "completed") return `已完成${model}${elapsed}`;
+  if (report.correctionStatus === "partial") return `部分完成${model}${elapsed}`;
+  if (report.correctionStatus === "timeout") return `超时降级${elapsed}`;
+  if (report.correctionStatus === "skipped") return "未执行";
+  return report.correctionModel ? `已完成${model}${elapsed}` : `降级为实时译文${elapsed}`;
 }
 
 export const useSessionStore = defineStore("session", {
@@ -1802,7 +1833,10 @@ export const useSessionStore = defineStore("session", {
         segments: segs,
         finalRevisions,
         realtimeRevisions: finalRevisions,
-        correctionModel: null
+        correctionModel: null,
+        correctionStatus: "skipped",
+        correctionError: "本地演示报告未调用后端会后完整纠偏。",
+        correctionElapsedMs: 0
       };
       this.reportId = null;
       this.reportLoading = false;

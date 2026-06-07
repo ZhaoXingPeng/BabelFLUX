@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -611,6 +612,65 @@ async def test_report_skips_source_only_segments() -> None:
 
 
 @pytest.mark.asyncio
+async def test_report_generation_uses_final_correction_output() -> None:
+    class CorrectionClient:
+        async def generate(self, **_: object) -> object:
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "summary": "完整纠偏摘要",
+                        "qualityNotes": "译文整体准确，已统一标点。",
+                        "glossaryHits": [],
+                        "segments": [{"id": "s1", "finalTranslation": "你好，世界。"}],
+                        "revisions": [
+                            {
+                                "id": "s1",
+                                "before": "你好世界",
+                                "after": "你好，世界。",
+                                "reason": "补充标点",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    record = SessionRecord(
+        session_id="report-correction", source_language="en", target_language="zh"
+    )
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 0
+    seg.end_ms = 3000
+    seg.source_text = "Hello world."
+    seg.translation_text = "你好世界"
+    seg.status = "final"
+
+    original_provider = settings.model_provider
+    original_key = settings.dashscope_api_key
+    object.__setattr__(settings, "model_provider", "real")
+    object.__setattr__(settings, "dashscope_api_key", "sk-test")
+    try:
+        report = await generate_session_report(
+            record,
+            settings=settings,
+            client=CorrectionClient(),  # type: ignore[arg-type]
+        )
+    finally:
+        object.__setattr__(settings, "model_provider", original_provider)
+        object.__setattr__(settings, "dashscope_api_key", original_key)
+
+    assert report["correctionStatus"] == "completed"
+    assert report["correctionModel"] == settings.final_correction_model
+    assert report["metrics"]["finalRevisions"] == 1
+    assert report["segments"][0]["finalTranslation"] == "你好，世界。"
+    assert report["summary"] == "完整纠偏摘要"
+    txt = render_txt(report)
+    assert "全文纠偏：已完成" in txt
+    assert "会后校正记录" in txt
+    assert "补充标点" in txt
+
+
+@pytest.mark.asyncio
 async def test_report_generation_falls_back_when_final_correction_times_out() -> None:
     class SlowCorrectionClient:
         async def generate(self, **_: object) -> object:
@@ -646,5 +706,7 @@ async def test_report_generation_falls_back_when_final_correction_times_out() ->
 
     assert elapsed < 0.5
     assert report["correctionModel"] is None
+    assert report["correctionStatus"] == "timeout"
+    assert "超过" in report["correctionError"]
     assert report["metrics"]["segments"] == 1
     assert report["segments"][0]["finalTranslation"] == "你好，世界。"

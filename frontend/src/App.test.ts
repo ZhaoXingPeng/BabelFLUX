@@ -5,6 +5,7 @@ import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
+import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
 
 interface SocketHandlers {
@@ -189,6 +190,52 @@ const revisionEvent: ServerEvent = {
   }
 };
 
+const completedCorrectionReport: SessionReport = {
+  reportId: "report-1",
+  sessionId: "ui-session-1",
+  sessionName: "季度发布会同传",
+  domain: "商务",
+  sourceLanguage: "en",
+  targetLanguage: "zh",
+  durationMs: 4300,
+  durationText: "00:04",
+  generatedAt: "2026-06-07 21:30:00",
+  summary: "完整纠偏摘要",
+  qualityNotes: "译文整体准确，已统一术语。",
+  glossaryHits: [],
+  metrics: {
+    segments: 1,
+    realtimeRevisions: 1,
+    finalRevisions: 1,
+    durationText: "00:04"
+  },
+  segments: [
+    {
+      segmentId: "ui-zh-1",
+      startMs: 1200,
+      endMs: 4300,
+      timecode: "00:01",
+      sourceText: "Please review the quarterly launch plan.",
+      liveTranslation: "请审阅季度发布计划。",
+      finalTranslation: "请审阅季度发布方案。",
+      revisedRealtime: true
+    }
+  ],
+  finalRevisions: [
+    {
+      segmentId: "ui-zh-1",
+      beforeText: "请审阅季度发布计划。",
+      afterText: "请审阅季度发布方案。",
+      reason: "术语统一"
+    }
+  ],
+  realtimeRevisions: [],
+  correctionModel: "qwen-plus",
+  correctionStatus: "completed",
+  correctionError: "",
+  correctionElapsedMs: 39_000
+};
+
 describe("同传工作台 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
@@ -311,6 +358,26 @@ describe("同传工作台 mock 流程", () => {
     expect(store.report).not.toBeNull();
     expect(store.report?.durationText).toBe("02:16");
     expect(wrapper.text()).toContain("同传报告");
+  });
+
+  it("报告页展示会后完整纠偏结果", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    store.modeStates.quick = "report";
+    store.reportLoading = false;
+    store.reportError = null;
+    store.report = completedCorrectionReport;
+    await nextTick();
+
+    expect(wrapper.text()).toContain("全文纠偏已完成");
+    expect(wrapper.text()).toContain("qwen-plus · 39.0 秒");
+    expect(wrapper.text()).toContain("译文整体准确，已统一术语。");
+    expect(wrapper.text()).toContain("术语统一");
+    expect(wrapper.text()).toContain("请审阅季度发布方案。");
   });
 
   it("手动结束时报告时长等于已收听进度，而非 00:00", async () => {
