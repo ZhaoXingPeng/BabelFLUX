@@ -24,6 +24,45 @@ fn exit_overlay_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+// 悬浮窗是透明无边框置顶窗口，WebView2 默认的权限气泡在此类窗口上几乎无法交互，
+// 会导致「麦克风」音源的 getUserMedia 卡在等待授权而静默失败。这里在宿主侧注册
+// PermissionRequested 处理器，对麦克风/摄像头直接放行 —— 符合 Windows/WebView2
+// 桌面应用「由宿主决定媒体权限」的最佳实践，用户选麦克风即可一次成功、无需弹窗。
+// 系统音频走原生 WASAPI loopback（见 audio_capture.rs），不经过 WebView2，本就无需授权。
+#[cfg(target_os = "windows")]
+fn grant_overlay_media_permissions(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    };
+    use webview2_com::PermissionRequestedEventHandler;
+
+    let _ = window.with_webview(|webview| unsafe {
+        let core = match webview.controller().CoreWebView2() {
+            Ok(core) => core,
+            Err(_) => return,
+        };
+        let mut token = Default::default();
+        let _ = core.add_PermissionRequested(
+            &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.PermissionKind(&mut kind)?;
+                if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
+                    || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
+                {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn grant_overlay_media_permissions(_window: &tauri::WebviewWindow) {}
+
 fn main() {
     tauri::Builder::default()
         .manage(audio_capture::AudioCaptureState::default())
@@ -56,6 +95,8 @@ fn main() {
                 let _ = window.set_shadow(false);
                 let _ = native_drag::install_overlay_drag_region(&window);
                 let _ = window.show();
+                // 宿主侧放行麦克风/摄像头，让悬浮窗内麦克风音源 getUserMedia 免弹窗直通。
+                grant_overlay_media_permissions(&window);
             }
 
             // Windows 下 debug 构建同样注册 lingosync:// scheme，否则 `tauri dev` 期间
