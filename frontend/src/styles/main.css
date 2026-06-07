@@ -725,6 +725,10 @@ a:focus-visible {
   cursor: default;
 }
 
+.floating-caption-panel.desktop-overlay.pinned {
+  cursor: default;
+}
+
 .floating-caption-panel.desktop-overlay.compact .floating-translation {
   overflow: hidden;
   text-overflow: ellipsis;
