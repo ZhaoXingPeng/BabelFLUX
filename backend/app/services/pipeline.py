@@ -36,6 +36,8 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
 PARTIAL_THROTTLE_S = 0.08
 MEDIA_PROGRESS_SYNC_S = 0.5
+STOP_DRAIN_GRACE_S = 0.8
+STOP_DRAIN_MAX_S = 3.0
 DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.25
@@ -216,11 +218,13 @@ class InterpretationPipeline:
 
     async def _drain(self, consumer: asyncio.Task[Any]) -> None:
         """音频喂完后，等待最后若干句的最终事件落定。"""
-        deadline = time.monotonic() + DRAIN_MAX_S
+        max_wait = STOP_DRAIN_MAX_S if self._stopped else DRAIN_MAX_S
+        grace = STOP_DRAIN_GRACE_S if self._stopped else DRAIN_GRACE_S
+        deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             if consumer.done():
                 break
-            if time.monotonic() - self._last_event_at > DRAIN_GRACE_S:
+            if time.monotonic() - self._last_event_at > grace:
                 break
             await asyncio.sleep(0.3)
 
@@ -725,6 +729,10 @@ class InterpretationPipeline:
         await self.emit({"type": "revision_event", "revision": revision.model_dump(by_alias=True)})
 
     async def _await_reviews(self) -> None:
+        if self._stopped:
+            for task in self._review_tasks:
+                if not task.done():
+                    task.cancel()
         if self._review_tasks:
             await asyncio.gather(*list(self._review_tasks), return_exceptions=True)
 

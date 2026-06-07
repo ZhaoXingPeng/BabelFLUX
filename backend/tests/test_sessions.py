@@ -72,6 +72,31 @@ def test_mock_websocket_stream() -> None:
     ]
 
 
+def test_mock_websocket_report_includes_emitted_segments() -> None:
+    client = TestClient(app)
+    session_id = "test-session-report"
+
+    with client.websocket_connect(f"/api/ws/sessions/{session_id}") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "start_session"})
+        while True:
+            event = websocket.receive_json()
+            if event["type"] == "session_report":
+                report_id = event["reportId"]
+                break
+
+    response = client.get(f"/api/sessions/{session_id}/report")
+    assert response.status_code == 200
+    report = response.json()
+    assert report["reportId"] == report_id
+    assert report["metrics"]["segments"] == 1
+    assert report["metrics"]["realtimeRevisions"] == 1
+    assert report["durationText"] == "00:04"
+    segment = report["segments"][0]
+    assert segment["sourceText"].startswith("Today we are going to talk")
+    assert segment["finalTranslation"]
+
+
 def test_mock_websocket_pause_and_resume() -> None:
     client = TestClient(app)
 

@@ -10,6 +10,7 @@ LLM 失败时优雅降级：直接用实时译文拼出报告，保证「结束�
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -76,7 +77,13 @@ async def generate_session_report(
 
     llm_out: dict[str, Any] = {}
     if client is not None and segments and settings.use_real_pipeline:
-        llm_out = await _call_correction_llm(record, segments, settings, client)
+        try:
+            llm_out = await asyncio.wait_for(
+                _call_correction_llm(record, segments, settings, client),
+                timeout=max(0.1, settings.final_correction_timeout_seconds),
+            )
+        except TimeoutError:
+            llm_out = {}
 
     # 防御：真实 LLM 偶尔会把 segments/revisions 返回成非 dict（如字符串列表）。
     # 这些项必须忽略而非崩溃——否则整份报告生成失败（此处在降级 try 之外）。

@@ -6,7 +6,7 @@ import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
-import { createSession, reportDownloadUrl, type ReportFormat } from "@frontend/api/client";
+import { createSession, getSessionReport, reportDownloadUrl, type ReportFormat } from "@frontend/api/client";
 import {
   acquireStream,
   startAudioCapture,
@@ -130,18 +130,23 @@ function resolvePendingReport(ready: boolean) {
   pendingReportResolver = null;
 }
 
-function waitForReport(timeoutMs = 90_000): Promise<boolean> {
-  if (reportId.value) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(() => {
-      resolvePendingReport(false);
-      resolve(false);
-    }, timeoutMs);
-    pendingReportResolver = (ready) => {
-      window.clearTimeout(timer);
-      resolve(ready);
-    };
-  });
+async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (reportId.value) return true;
+    if (activeSessionId.value) {
+      try {
+        const report = await getSessionReport(activeSessionId.value);
+        reportId.value = report.reportId;
+        return true;
+      } catch {
+        // Report is not persisted yet; keep polling until the bounded backend path finishes.
+      }
+    }
+    await wait(1_000);
+  }
+  resolvePendingReport(false);
+  return false;
 }
 
 function reportFilename(format: ReportFormat) {

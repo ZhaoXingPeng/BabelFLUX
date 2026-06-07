@@ -389,3 +389,43 @@ async def test_report_counts_partial_segments_created_before_stop() -> None:
     assert report["metrics"]["segments"] == 1
     assert report["durationText"] == "00:05"
     assert report["segments"][0]["sourceText"] == "I feel so fortunate."
+
+
+@pytest.mark.asyncio
+async def test_report_generation_falls_back_when_final_correction_times_out() -> None:
+    class SlowCorrectionClient:
+        async def generate(self, **_: object) -> object:
+            await asyncio.sleep(1)
+            return object()
+
+    record = SessionRecord(session_id="report-timeout", source_language="en", target_language="zh")
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 0
+    seg.end_ms = 3000
+    seg.source_text = "Hello world."
+    seg.translation_text = "你好，世界。"
+    seg.status = "final"
+
+    original_provider = settings.model_provider
+    original_key = settings.dashscope_api_key
+    original_timeout = settings.final_correction_timeout_seconds
+    object.__setattr__(settings, "model_provider", "real")
+    object.__setattr__(settings, "dashscope_api_key", "sk-test")
+    object.__setattr__(settings, "final_correction_timeout_seconds", 0.01)
+    try:
+        started = asyncio.get_running_loop().time()
+        report = await generate_session_report(
+            record,
+            settings=settings,
+            client=SlowCorrectionClient(),  # type: ignore[arg-type]
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+    finally:
+        object.__setattr__(settings, "model_provider", original_provider)
+        object.__setattr__(settings, "dashscope_api_key", original_key)
+        object.__setattr__(settings, "final_correction_timeout_seconds", original_timeout)
+
+    assert elapsed < 0.5
+    assert report["correctionModel"] is None
+    assert report["metrics"]["segments"] == 1
+    assert report["segments"][0]["finalTranslation"] == "你好，世界。"

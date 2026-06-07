@@ -26,7 +26,7 @@ from app.services.providers.dashscope import DashScopeClient, DashScopeConfig
 from app.services.providers.mock import build_mock_events
 from app.services.report import generate_session_report
 from app.services.session_events import session_event_hub
-from app.services.session_store import session_store
+from app.services.session_store import RevisionRecord, session_store
 
 router = APIRouter(tags=["websocket"])
 
@@ -220,13 +220,13 @@ async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
 async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
     input_mode = record.input_mode
     if not settings.use_real_pipeline:
-        await _run_mock(record.session_id, emit)
+        await _run_mock(record, emit)
         return
 
     if input_mode == "demo":
         demo_path = _demo_media_path()
         if demo_path is None:
-            await _run_mock(record.session_id, emit)
+            await _run_mock(record, emit)
             return
         pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
         state["pipeline"] = pipeline
@@ -261,10 +261,70 @@ async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
     await emit({"type": "error", "message": f"暂不支持的输入模式：{input_mode}"})
 
 
-async def _run_mock(session_id: str, emit: Any) -> None:
-    for event in build_mock_events(session_id):
+async def _run_mock(record: Any, emit: Any) -> None:
+    for event in build_mock_events(record.session_id):
+        _record_mock_event(record, event)
         await emit(event)
         await asyncio.sleep(0.25)
+
+
+def _record_mock_event(record: Any, event: dict[str, Any]) -> None:
+    event_type = event.get("type")
+    if event_type in {"transcript_segment", "translation_segment"}:
+        payload = event.get("segment") or {}
+        seg = _mock_record_segment(record, payload)
+        text = str(payload.get("text") or "")
+        status = str(payload.get("status") or "partial")
+        if event_type == "transcript_segment":
+            seg.source_text = text
+            if not seg.translation_text:
+                seg.status = status
+        else:
+            seg.translation_text = text
+            if not seg.original_translation:
+                seg.original_translation = text
+            seg.status = status
+        record.duration_ms = max(record.duration_ms, seg.end_ms)
+        return
+
+    if event_type == "revision_event":
+        payload = event.get("revision") or {}
+        target = next((seg for seg in reversed(record.segments) if seg.translation_text), None)
+        if target is None:
+            return
+        before_text = str(payload.get("beforeText") or target.translation_text)
+        after_text = str(payload.get("afterText") or target.translation_text)
+        target.original_translation = target.original_translation or before_text
+        target.translation_text = after_text
+        target.status = "revised"
+        target.revised = True
+        target.revision_reason = str(payload.get("reason") or "")
+        record.revisions.append(
+            RevisionRecord(
+                revision_id=str(payload.get("revisionId") or f"{record.session_id}-mock-rev"),
+                target_segment_ids=[target.segment_id],
+                before_text=before_text,
+                after_text=after_text,
+                reason=target.revision_reason,
+                confidence=float(payload.get("confidence") or 0),
+                source="mock",
+                created_ms=target.end_ms,
+            )
+        )
+
+
+def _mock_record_segment(record: Any, payload: dict[str, Any]) -> Any:
+    start_ms = int(payload.get("startMs") or 0)
+    end_ms = int(payload.get("endMs") or start_ms)
+    for seg in record.segments:
+        if seg.start_ms == start_ms and seg.end_ms == end_ms:
+            return seg
+
+    index = len(record.segments) + 1
+    seg = record.get_or_create_segment(f"{record.session_id}-mock-{index}", index)
+    seg.start_ms = start_ms
+    seg.end_ms = end_ms
+    return seg
 
 
 def _put_pcm_frame(queue: asyncio.Queue[bytes | None], frame: bytes) -> None:
