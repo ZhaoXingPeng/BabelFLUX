@@ -27,6 +27,13 @@ const sourceRef = ref<HTMLElement | null>(null);
 const translationRef = ref<HTMLElement | null>(null);
 let drag: Draggable[] = [];
 let dragging = false;
+const SOURCE_MAX_CHARS = 180;
+const TRANSLATION_MAX_CHARS = 150;
+
+interface CaptionWindowText {
+  text: string;
+  key: string;
+}
 
 const opacity = computed(() => {
   const value = Number.parseInt(props.form.opacity, 10);
@@ -44,6 +51,78 @@ const sizeClass = computed(() => {
 const isCompact = computed(() => props.displayMode === "floating" || props.displayMode === "compact");
 const showSource = computed(() => !isCompact.value && props.displayMode !== "translation-only" && props.form.style !== "仅译文");
 const dragRegionEnabled = computed(() => props.desktop && !props.form.captionPinned && !props.locked);
+const displayedSource = computed(() => captionWindowText(props.pair.source, SOURCE_MAX_CHARS));
+const displayedTranslation = computed(() => captionWindowText(props.pair.translation, TRANSLATION_MAX_CHARS));
+const displayedSentenceKey = computed(
+  () => `${props.pair.segmentId ?? "no-segment"}:${displayedSource.value.key}:${displayedTranslation.value.key}`
+);
+
+function compactWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function splitCaptionSentences(text: string): string[] {
+  return (
+    text
+      .match(/[^.!?。！？；;]+[.!?。！？；;]?["'”’）)]*/g)
+      ?.map((item) => item.trim())
+      .filter(Boolean) ?? []
+  );
+}
+
+function splitCaptionPhrases(text: string): string[] {
+  return (
+    text
+      .match(/[^,，、:：]+[,，、:：]?/g)
+      ?.map((item) => item.trim())
+      .filter(Boolean) ?? []
+  );
+}
+
+function trimCaptionText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const tail = text.slice(-maxChars);
+  const wordBoundary = tail.search(/\s/);
+  const trimmed = wordBoundary > 0 ? tail.slice(wordBoundary + 1) : tail;
+  return `…${trimmed.trimStart()}`;
+}
+
+function tailPhraseWindow(text: string, maxChars: number): CaptionWindowText {
+  const phrases = splitCaptionPhrases(text);
+  if (phrases.length <= 1) return { text: trimCaptionText(text, maxChars), key: `raw-${Math.floor(text.length / maxChars)}` };
+
+  const picked: string[] = [];
+  let firstIndex = phrases.length - 1;
+  for (let index = phrases.length - 1; index >= 0; index -= 1) {
+    const candidate = [phrases[index], ...picked].join(" ");
+    if (picked.length > 0 && candidate.length > maxChars) break;
+    picked.unshift(phrases[index]);
+    firstIndex = index;
+    if (candidate.length >= Math.min(42, maxChars * 0.45)) break;
+  }
+  return {
+    text: trimCaptionText(picked.join(" "), maxChars),
+    key: `phrase-${firstIndex}-${phrases.length}`
+  };
+}
+
+function captionWindowText(text: string, maxChars: number): CaptionWindowText {
+  const normalized = compactWhitespace(text);
+  if (!normalized) return { text: "", key: "empty" };
+
+  const sentences = splitCaptionSentences(normalized);
+  if (sentences.length > 1) {
+    const index = sentences.length - 1;
+    const sentence = sentences[index];
+    return {
+      text: sentence.length > maxChars ? tailPhraseWindow(sentence, maxChars).text : sentence,
+      key: `sentence-${index}-${sentences.length}`
+    };
+  }
+
+  if (normalized.length > maxChars) return tailPhraseWindow(normalized, maxChars);
+  return { text: normalized, key: "single" };
+}
 
 function toggleStyle() {
   props.form.style = props.form.style === "仅译文" ? "双语字幕" : "仅译文";
@@ -106,7 +185,7 @@ watch(
 // 切到「新的一句」时做一次轻量交叉淡入，避免悬浮字幕整句硬切；
 // 句内逐字增长（segmentId 不变）不触发，保持原地平滑更新。
 watch(
-  () => props.pair.segmentId,
+  () => displayedSentenceKey.value,
   () => {
     if (shouldReduceMotion()) return;
     [sourceRef.value, translationRef.value].forEach((el) => {
@@ -177,7 +256,7 @@ watch(
       :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.source"
     >
-      {{ pair.source }}
+      {{ displayedSource.text }}
     </p>
     <p
       ref="translationRef"
@@ -185,7 +264,7 @@ watch(
       :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.translation"
     >
-      {{ pair.translation }}
+      {{ displayedTranslation.text }}
     </p>
   </section>
 </template>
