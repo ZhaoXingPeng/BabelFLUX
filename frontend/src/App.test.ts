@@ -674,6 +674,82 @@ describe("同传工作台 mock 流程", () => {
     expect(store.transcriptPairs[0].translation).toContain("现代艺术博物馆");
   });
 
+  it("keeps realtime highlight from jumping back on regressed partial timing", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "realtime-highlight-session";
+    store.status = "running";
+    store.modeStates.quick = "running";
+    store.playbackMs = 12_000;
+    store.activeSegmentId = "seg-current";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-first",
+        text: "First sentence.",
+        language: "en",
+        startMs: 0,
+        endMs: 4_000,
+        status: "final"
+      },
+      {
+        segmentId: "seg-current",
+        text: "Current sentence.",
+        language: "en",
+        startMs: 10_000,
+        endMs: 13_000,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-first",
+        text: "第一句。",
+        language: "zh",
+        startMs: 0,
+        endMs: 4_000,
+        status: "final"
+      },
+      {
+        segmentId: "seg-current",
+        text: "当前句。",
+        language: "zh",
+        startMs: 10_000,
+        endMs: 13_000,
+        status: "partial"
+      }
+    ];
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-current",
+        text: "Current sentence is still streaming.",
+        language: "en",
+        startMs: 0,
+        endMs: 0,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-current");
+    expect(store.sourceSegments[1].startMs).toBe(10_000);
+
+    store.applyServerEvent({
+      type: "translation_segment",
+      segment: {
+        segmentId: "seg-wide-old",
+        text: "旧的异常长片段。",
+        language: "zh",
+        startMs: 0,
+        endMs: 20_000,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-current");
+  });
+
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "url-session", status: "created" });
     const wrapper = mountApp();

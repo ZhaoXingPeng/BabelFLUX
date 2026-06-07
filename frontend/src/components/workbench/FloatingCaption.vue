@@ -175,10 +175,16 @@ watch(
       ref="sourceRef"
       class="floating-source"
       :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
+      :title="pair.source"
     >
       {{ pair.source }}
     </p>
-    <p ref="translationRef" class="floating-translation" :data-tauri-drag-region="dragRegionEnabled ? true : undefined">
+    <p
+      ref="translationRef"
+      class="floating-translation"
+      :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
+      :title="pair.translation"
+    >
       {{ pair.translation }}
     </p>
   </section>

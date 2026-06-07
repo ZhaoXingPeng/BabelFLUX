@@ -334,7 +334,10 @@ class InterpretationPipeline:
         if len(prior_words) < 2 or len(current_words) < 2:
             return None
         prior_norm = self._normalize_source_words(prior_words)
-        current_norm = self._normalize_source_words(current_words)
+        current_variants = [current_words]
+        trimmed_current = self._drop_unstable_source_prefix(current_words)
+        if trimmed_current != current_words and len(trimmed_current) >= 2:
+            current_variants.append(trimmed_current)
         for dropped_tail in range(min(3, len(prior_words) - 1) + 1):
             if dropped_tail and not all(
                 self._looks_unstable_source_word(word) for word in prior_words[-dropped_tail:]
@@ -346,14 +349,24 @@ class InterpretationPipeline:
                 else prior_words
             )
             base_norm = prior_norm[: len(base_words)]
-            for size in range(min(len(base_words), len(current_words)), 1, -1):
-                if base_norm[-size:] == current_norm[:size]:
-                    return " ".join([*base_words[:-size], *current_words])
+            for candidate_words in current_variants:
+                current_norm = self._normalize_source_words(candidate_words)
+                for size in range(min(len(base_words), len(candidate_words)), 1, -1):
+                    if base_norm[-size:] == current_norm[:size]:
+                        return " ".join([*base_words[:-size], *candidate_words])
         return None
 
     def _looks_unstable_source_word(self, word: str) -> bool:
-        value = word.strip(".,;:!?，。；：！？")
-        return len(value) <= 5 and not word.endswith((".", "!", "?", ",", ";", ":"))
+        value = self._normalize_source_word(word)
+        return len(value) <= 5 and not word.endswith((".", "!", "?"))
+
+    def _drop_unstable_source_prefix(self, words: list[str]) -> list[str]:
+        if len(words) < 3:
+            return words
+        value = self._normalize_source_word(words[0])
+        if value in {"t", "re", "ve", "ll", "d", "s", "m"}:
+            return words[1:]
+        return words
 
     def _prefer_source_snapshot(self, prior: str, current: str) -> str:
         collapsed_current = self._collapse_source_repetition(current)
@@ -406,7 +419,33 @@ class InterpretationPipeline:
         return text
 
     def _normalize_source_words(self, words: list[str]) -> list[str]:
-        return [word.lower().strip(".,;:!?，。；：！？") for word in words]
+        return [self._normalize_source_word(word) for word in words]
+
+    def _normalize_source_word(self, word: str) -> str:
+        value = word.lower().strip(" \t\r\n.,;:!?\"'()[]{}")
+        value = value.strip("\u2018\u2019")
+        for suffix in ("n't", "n\u2019t"):
+            if value.endswith(suffix) and len(value) > len(suffix):
+                return f"{value[: -len(suffix)]}n"
+        for suffix in (
+            "'re",
+            "\u2019re",
+            "'ve",
+            "\u2019ve",
+            "'ll",
+            "\u2019ll",
+            "'d",
+            "\u2019d",
+            "'s",
+            "\u2019s",
+            "'m",
+            "\u2019m",
+            "'t",
+            "\u2019t",
+        ):
+            if value.endswith(suffix) and len(value) > len(suffix):
+                return value[: -len(suffix)]
+        return value
 
     async def _on_source(self, text: str, item_id: str | None, *, final: bool) -> None:
         if not text:
@@ -470,9 +509,24 @@ class InterpretationPipeline:
         translation_final = root.segment_id in self._translation_final_roots
         source_sentences = self._split_source_sentences(source_text)
         translation_sentences = self._split_target_sentences(translation_text)
+        previous_count = self._display_count_by_root.get(root.segment_id, 1)
+        keep_existing_split = previous_count > 1 and (
+            len(source_sentences) > 1 or len(translation_sentences) > 1
+        )
         if len(source_sentences) > 1 and len(source_sentences) == len(translation_sentences):
             source_parts = source_sentences
             translation_parts = translation_sentences
+        elif keep_existing_split:
+            source_parts = (
+                source_sentences
+                if len(source_sentences) > 1
+                else ([source_text] if source_text else [])
+            )
+            translation_parts = (
+                translation_sentences
+                if len(translation_sentences) > 1
+                else ([translation_text] if translation_text else [])
+            )
         else:
             source_parts = [source_text] if source_text else []
             translation_parts = [translation_text] if translation_text else []
@@ -480,11 +534,27 @@ class InterpretationPipeline:
             return
 
         current_count = max(len(source_parts), len(translation_parts), 1)
-        count = max(self._display_count_by_root.get(root.segment_id, 1), current_count)
+        count = max(previous_count, current_count)
         self._display_count_by_root[root.segment_id] = count
 
-        source_display = self._align_parts(source_parts, count, separator=" ")
-        translation_display = self._align_parts(translation_parts, count, separator="")
+        existing_children = self._children_by_root.get(root.segment_id, [root])
+        preserve_split = previous_count > 1 and (
+            len(source_parts) < previous_count or len(translation_parts) < previous_count
+        )
+        source_display = self._align_parts(
+            source_parts,
+            count,
+            separator=" ",
+            previous=[child.source_text for child in existing_children],
+            preserve_existing=preserve_split,
+        )
+        translation_display = self._align_parts(
+            translation_parts,
+            count,
+            separator="",
+            previous=[child.translation_text for child in existing_children],
+            preserve_existing=preserve_split,
+        )
         display_final = (not source_parts or source_final) and (
             not translation_parts or translation_final
         )
@@ -661,14 +731,31 @@ class InterpretationPipeline:
     def _word_count(self, text: str) -> int:
         return len([word for word in text.split() if word])
 
-    def _align_parts(self, parts: list[str], count: int, *, separator: str) -> list[str]:
+    def _align_parts(
+        self,
+        parts: list[str],
+        count: int,
+        *,
+        separator: str,
+        previous: list[str] | None = None,
+        preserve_existing: bool = False,
+    ) -> list[str]:
         if count <= 0:
             return []
         if not parts:
+            if preserve_existing and previous:
+                return [*previous[:count], *([""] * max(0, count - len(previous)))]
             return [""] * count
         if len(parts) == count:
             return parts
         if len(parts) < count:
+            if preserve_existing and previous:
+                padded_previous = [*previous[:count], *([""] * max(0, count - len(previous)))]
+                if len(parts) == 1 and parts[0]:
+                    existing_non_empty = [part for part in padded_previous if part]
+                    if self._contains_aligned_parts(parts[0], existing_non_empty):
+                        return padded_previous[:count]
+                return [*parts, *padded_previous[len(parts) : count]]
             return [*parts, *([""] * (count - len(parts)))]
 
         groups: list[str] = []
@@ -679,6 +766,15 @@ class InterpretationPipeline:
                 end = start + 1
             groups.append(separator.join(parts[start:end]).strip())
         return groups
+
+    def _contains_aligned_parts(self, candidate: str, parts: list[str]) -> bool:
+        if len(parts) <= 1:
+            return False
+        normalized_candidate = self._normalize_alignment_text(candidate)
+        return all(self._normalize_alignment_text(part) in normalized_candidate for part in parts)
+
+    def _normalize_alignment_text(self, text: str) -> str:
+        return re.sub(r"[\s.,;:!?，。；：！？\"'’“”()（）\[\]{}]", "", text).lower()
 
     def _estimate_display_bounds(
         self,

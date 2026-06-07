@@ -230,6 +230,31 @@ async def test_source_partials_drop_unstable_tail_before_overlap_merge() -> None
 
 
 @pytest.mark.asyncio
+async def test_source_partials_merge_contraction_stashes_without_duplicates() -> None:
+    record = SessionRecord(
+        session_id="partial-contraction-stash", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source("She told me that a few didn't quite meet her", "itemA", final=False)
+    await pipeline._on_source("'t quite meet her own mark", "itemA", final=False)
+    await pipeline._on_source("what we're always celebrating is", "itemA", final=False)
+    await pipeline._on_source(
+        "'re always celebrating is creativity and mastery.", "itemA", final=False
+    )
+
+    text = record.segments[0].source_text
+    assert "didn't quite meet her 't quite meet her" not in text
+    assert "we're always celebrating is 're always celebrating" not in text
+    assert "She told me that a few didn't quite meet her own mark" in text
+    assert "what we're always celebrating is creativity and mastery." in text
+
+
+@pytest.mark.asyncio
 async def test_display_segments_keep_source_and_translation_paired() -> None:
     record = SessionRecord(
         session_id="target-clause-split", source_language="en", target_language="zh"
@@ -314,6 +339,31 @@ async def test_display_segments_keep_mismatched_sentence_counts_together() -> No
     assert len(record.segments) == 1
     assert record.segments[0].source_text == "First sentence. Second sentence. Third sentence."
     assert record.segments[0].translation_text == "第一句。第二句。"
+
+
+@pytest.mark.asyncio
+async def test_partial_display_segments_do_not_collapse_after_split() -> None:
+    record = SessionRecord(
+        session_id="partial-display-stable", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source("First sentence. Second sentence.", "itemA", final=False)
+    await pipeline._on_translation("第一句。第二句。", "responseA", final=False)
+
+    assert len(record.segments) == 2
+    assert record.segments[0].translation_text == "第一句。"
+    assert record.segments[1].translation_text == "第二句。"
+
+    await pipeline._on_translation("第一句第二句。", "responseA", final=False)
+
+    assert len(record.segments) == 2
+    assert record.segments[0].translation_text == "第一句。"
+    assert record.segments[1].translation_text == "第二句。"
 
 
 @pytest.mark.asyncio

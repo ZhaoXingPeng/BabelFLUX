@@ -224,10 +224,36 @@ interface SessionState {
   reportError: string | null;
 }
 
+function hasStableTiming(segment: SubtitleSegment): boolean {
+  return Number.isFinite(segment.startMs) && Number.isFinite(segment.endMs) && segment.endMs > segment.startMs;
+}
+
+function mergeSegmentUpdate(previous: SubtitleSegment, next: SubtitleSegment): SubtitleSegment {
+  let startMs = next.startMs;
+  let endMs = next.endMs;
+
+  if (hasStableTiming(previous)) {
+    const incomingStable = hasStableTiming(next);
+    if (!incomingStable || (previous.startMs > 0 && next.startMs <= 0)) {
+      startMs = previous.startMs;
+      endMs = previous.endMs;
+    } else if (next.status === "partial" && next.startMs + 500 < previous.startMs) {
+      startMs = previous.startMs;
+      endMs = Math.max(previous.endMs, next.endMs);
+    }
+  }
+
+  if (!Number.isFinite(endMs) || endMs <= startMs) {
+    endMs = hasStableTiming(previous) ? previous.endMs : startMs;
+  }
+
+  return { ...previous, ...next, startMs, endMs };
+}
+
 function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): SubtitleSegment[] {
   const index = items.findIndex((item) => item.segmentId === segment.segmentId);
   if (index === -1) return [...items, segment];
-  return items.map((item, itemIndex) => (itemIndex === index ? segment : item));
+  return items.map((item, itemIndex) => (itemIndex === index ? mergeSegmentUpdate(item, segment) : item));
 }
 
 function createFixtureSourceSegments(): SubtitleSegment[] {
@@ -457,6 +483,30 @@ function activeSegmentForPlayback(
   return [...enriched].reverse().find((segment) => segment.startMs <= displayClockMs)?.segmentId
     ?? enriched[enriched.length - 1]?.segmentId
     ?? null;
+}
+
+function timelineSegmentById(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  segmentId: string | null
+): { segmentId: string; startMs: number; endMs: number } | undefined {
+  if (!segmentId) return undefined;
+  return combinedTimeline(sourceSegments, translationSegments).find((segment) => segment.segmentId === segmentId);
+}
+
+function shouldKeepCurrentActiveSegment(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  currentId: string | null,
+  candidateId: string | null,
+  playbackMs: number,
+  allowBackward: boolean
+): boolean {
+  if (allowBackward || !currentId || !candidateId || currentId === candidateId) return false;
+  const current = timelineSegmentById(sourceSegments, translationSegments, currentId);
+  const candidate = timelineSegmentById(sourceSegments, translationSegments, candidateId);
+  if (!current || !candidate) return false;
+  return candidate.startMs + 500 < current.startMs && playbackMs >= current.startMs - 500;
 }
 
 /** 客户端报告渲染（本地演示下载用，与后端 report.py 的 txt/srt/md/json 对齐）。 */
@@ -1257,9 +1307,10 @@ export const useSessionStore = defineStore("session", {
     syncPlayback(currentTimeSeconds: number) {
       if (this.status !== "running" || this.modeStates.quick !== "running") return;
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
+      const previousPlaybackMs = this.playbackMs;
       this.playbackMs = playbackMs;
       if (this.sessionId !== "local-test-video-fixture") {
-        this.updateActiveSegmentFromPlayback(playbackMs);
+        this.updateActiveSegmentFromPlayback(playbackMs, playbackMs + 500 < previousPlaybackMs);
         return;
       }
 
@@ -1275,14 +1326,27 @@ export const useSessionStore = defineStore("session", {
       this.syncPlayback(currentTimeSeconds);
     },
 
-    updateActiveSegmentFromPlayback(playbackMs?: number) {
+    updateActiveSegmentFromPlayback(playbackMs?: number, allowBackward = false) {
       if (this.sessionId === "local-test-video-fixture") return;
       const currentPlaybackMs = playbackMs ?? this.playbackMs;
-      this.activeSegmentId = activeSegmentForPlayback(
+      const candidateId = activeSegmentForPlayback(
         this.sourceSegments,
         this.translationSegments,
         currentPlaybackMs
       );
+      if (
+        shouldKeepCurrentActiveSegment(
+          this.sourceSegments,
+          this.translationSegments,
+          this.activeSegmentId,
+          candidateId,
+          currentPlaybackMs,
+          allowBackward
+        )
+      ) {
+        return;
+      }
+      this.activeSegmentId = candidateId;
     },
 
     isMediaElementCaptureSource(): boolean {
