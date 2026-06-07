@@ -485,6 +485,34 @@ function activeSegmentForPlayback(
     ?? null;
 }
 
+function hasTranslationText(translationSegments: SubtitleSegment[], segmentId: string | null): boolean {
+  if (!segmentId) return false;
+  return Boolean(
+    translationSegments.find((segment) => segment.segmentId === segmentId)?.text.trim()
+  );
+}
+
+function activeTranslatedSegmentForPlayback(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  playbackMs: number
+): string | null {
+  const timeline = combinedTimeline(sourceSegments, translationSegments).filter((segment) =>
+    hasTranslationText(translationSegments, segment.segmentId)
+  );
+  if (timeline.length === 0) return null;
+  const displayClockMs = Math.max(0, playbackMs - estimatedOutputLatencyMs);
+  const exact = timeline.find(
+    (segment, index) =>
+      displayClockMs >= segment.startMs &&
+      displayClockMs < Math.max(segment.endMs, timeline[index + 1]?.startMs ?? 0, segment.startMs + 2000)
+  );
+  if (exact) return exact.segmentId;
+  return [...timeline].reverse().find((segment) => segment.startMs <= displayClockMs)?.segmentId
+    ?? timeline[timeline.length - 1]?.segmentId
+    ?? null;
+}
+
 function timelineSegmentById(
   sourceSegments: SubtitleSegment[],
   translationSegments: SubtitleSegment[],
@@ -679,7 +707,7 @@ export const useSessionStore = defineStore("session", {
           originalTranslation: translation?.originalText,
           revisionReason: translation?.revisionReason
         };
-      }).filter((pair) => pair.source || pair.translation);
+      }).filter((pair) => (pair.source || pair.translation) && (pair.translation || pair.state !== "partial"));
     },
     currentPair(): TranscriptPair {
       return (
@@ -1334,19 +1362,27 @@ export const useSessionStore = defineStore("session", {
         this.translationSegments,
         currentPlaybackMs
       );
+      const translatedCandidateId = hasTranslationText(this.translationSegments, candidateId)
+        ? candidateId
+        : activeTranslatedSegmentForPlayback(
+            this.sourceSegments,
+            this.translationSegments,
+            currentPlaybackMs
+          );
+      const nextActiveId = translatedCandidateId ?? candidateId;
       if (
         shouldKeepCurrentActiveSegment(
           this.sourceSegments,
           this.translationSegments,
           this.activeSegmentId,
-          candidateId,
+          nextActiveId,
           currentPlaybackMs,
           allowBackward
         )
       ) {
         return;
       }
-      this.activeSegmentId = candidateId;
+      this.activeSegmentId = nextActiveId;
     },
 
     isMediaElementCaptureSource(): boolean {

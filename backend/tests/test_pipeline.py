@@ -342,6 +342,60 @@ async def test_display_segments_keep_mismatched_sentence_counts_together() -> No
 
 
 @pytest.mark.asyncio
+async def test_lowercase_source_continuation_does_not_shift_following_translations() -> None:
+    record = SessionRecord(
+        session_id="continuation-source", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    pipeline._begin_segment("itemA")
+    await pipeline._on_source(
+        (
+            "One of the works, in fact, so didn't meet her mark, "
+            "she had set it out in the trash on her."
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "事实上，其中一件作品甚至远未达到她的标准，她把它扔进了工作室的垃圾桶，结果被邻居捡走了，因为邻居看出了它的价值。",
+        "respA",
+        final=True,
+    )
+
+    pipeline._begin_segment("itemB")
+    await pipeline._on_source(
+        "the trash in her studio, and her neighbor had taken it because she saw its value.",
+        "itemB",
+        final=True,
+    )
+
+    pipeline._begin_segment("itemC")
+    await pipeline._on_source(
+        "In that moment, my view of success and creativity changed.",
+        "itemC",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "在那一刻，我对成功和创造力的看法发生了改变。",
+        "respB",
+        final=True,
+    )
+
+    assert len(record.segments) == 2
+    assert "the trash in her studio" in record.segments[0].source_text
+    assert "on her. the trash" not in record.segments[0].source_text
+    assert record.segments[1].source_text == (
+        "In that moment, my view of success and creativity changed."
+    )
+    assert record.segments[1].translation_text == "在那一刻，我对成功和创造力的看法发生了改变。"
+
+
+@pytest.mark.asyncio
 async def test_partial_display_segments_do_not_collapse_after_split() -> None:
     record = SessionRecord(
         session_id="partial-display-stable", source_language="en", target_language="zh"

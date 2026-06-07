@@ -80,6 +80,7 @@ class InterpretationPipeline:
         self._display_count_by_root: dict[str, int] = {}
         self._raw_source_by_root: dict[str, str] = {}
         self._raw_translation_by_root: dict[str, str] = {}
+        self._continuation_items: set[str] = set()
         self._source_final_roots: set[str] = set()
         self._translation_final_roots: set[str] = set()
         self._display_final_roots: set[str] = set()
@@ -293,6 +294,67 @@ class InterpretationPipeline:
         for child in self._children_by_root.get(root.segment_id, [root]):
             child.response_id = root.response_id
 
+    def _merge_source_continuation_if_needed(
+        self, seg: SegmentRecord, item_id: str | None, text: str
+    ) -> SegmentRecord:
+        if item_id in self._continuation_items:
+            return self._by_item.get(item_id) or seg
+        if (
+            not item_id
+            or seg.source_text
+            or seg.translation_text
+            or seg.response_id is not None
+            or not self._looks_like_source_continuation(text)
+        ):
+            return seg
+
+        previous = self._previous_source_root(seg)
+        if previous is None:
+            return seg
+
+        self._continuation_items.add(item_id)
+        self._by_item[item_id] = previous
+        self._discard_empty_root(seg)
+        return previous
+
+    def _previous_source_root(self, seg: SegmentRecord) -> SegmentRecord | None:
+        try:
+            index = self._roots.index(seg)
+        except ValueError:
+            index = len(self._roots)
+        for root in reversed(self._roots[:index]):
+            if root.source_text or self._raw_source_by_root.get(root.segment_id):
+                return root
+        return None
+
+    def _discard_empty_root(self, seg: SegmentRecord) -> None:
+        if seg.source_text or seg.translation_text or seg.response_id is not None:
+            return
+        if seg in self._roots:
+            self._roots.remove(seg)
+        if self._current is seg:
+            self._current = self._roots[-1] if self._roots else None
+        self._children_by_root.pop(seg.segment_id, None)
+        self._display_count_by_root.pop(seg.segment_id, None)
+        self._raw_source_by_root.pop(seg.segment_id, None)
+        self._raw_translation_by_root.pop(seg.segment_id, None)
+        self._source_final_roots.discard(seg.segment_id)
+        self._translation_final_roots.discard(seg.segment_id)
+        self._display_final_roots.discard(seg.segment_id)
+        self.record._by_id.pop(seg.segment_id, None)
+        self.record.segments = [
+            existing for existing in self.record.segments if existing.segment_id != seg.segment_id
+        ]
+
+    def _looks_like_source_continuation(self, text: str) -> bool:
+        value = text.strip()
+        if not value:
+            return False
+        if value[0] in {"'", "\u2019"}:
+            return True
+        match = re.search(r"[A-Za-z]", value)
+        return bool(match and value[match.start()].islower())
+
     def _merge_source_partial(self, previous: str, text: str) -> str:
         current = text.strip()
         if not current:
@@ -325,8 +387,14 @@ class InterpretationPipeline:
             return self._prefer_source_snapshot(prior, current)
 
         no_space_before = current[0] in ",.;:!?，。；：！？)]}”’"
+        if self._starts_with_lowercase_alpha(current) and prior[-1] in ".!?":
+            prior = prior.rstrip(".!?") + ","
         separator = "" if prior[-1].isspace() or no_space_before else " "
         return self._collapse_source_repetition(f"{prior}{separator}{current}")
+
+    def _starts_with_lowercase_alpha(self, text: str) -> bool:
+        match = re.search(r"[A-Za-z]", text)
+        return bool(match and text[match.start()].islower())
 
     def _merge_source_overlap(self, prior: str, current: str) -> str | None:
         prior_words = prior.split()
@@ -451,10 +519,11 @@ class InterpretationPipeline:
         if not text:
             return
         seg = self._source_segment(item_id)
+        seg = self._merge_source_continuation_if_needed(seg, item_id, text)
         previous = self._raw_source_by_root.get(seg.segment_id, "")
         display_text = (
             self._collapse_source_repetition(text.strip())
-            if final
+            if final and item_id not in self._continuation_items
             else self._merge_source_partial(previous, text)
         )
         self._raw_source_by_root[seg.segment_id] = display_text

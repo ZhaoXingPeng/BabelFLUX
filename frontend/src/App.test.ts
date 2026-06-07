@@ -750,6 +750,52 @@ describe("同传工作台 mock 流程", () => {
     expect(store.activeSegmentId).toBe("seg-current");
   });
 
+  it("does not highlight or show source-only realtime partials as translation results", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "source-only-partial-session";
+    store.status = "running";
+    store.modeStates.quick = "running";
+    store.playbackMs = 34_000;
+    store.activeSegmentId = "seg-translated";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-translated",
+        text: "I realized that success is a moment, but what we,",
+        language: "en",
+        startMs: 34_000,
+        endMs: 36_000,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-translated",
+        text: "我意识到，成功只是一瞬间，",
+        language: "zh",
+        startMs: 34_000,
+        endMs: 36_000,
+        status: "partial"
+      }
+    ];
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-source-only",
+        text: "success",
+        language: "en",
+        startMs: 34_000,
+        endMs: 35_000,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-translated");
+    expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-source-only")).toBe(false);
+  });
+
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "url-session", status: "created" });
     const wrapper = mountApp();
