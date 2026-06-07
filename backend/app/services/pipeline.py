@@ -415,7 +415,13 @@ class InterpretationPipeline:
         )
         self._raw_source_by_root[seg.segment_id] = display_text
         if final:
-            seg.end_ms = max(self.elapsed_ms, seg.start_ms)
+            stable_final = (
+                seg.status == "final"
+                and previous == display_text
+                and seg.end_ms > seg.start_ms
+            )
+            if not stable_final:
+                seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._source_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
 
@@ -426,9 +432,16 @@ class InterpretationPipeline:
             return None
         seg = self._bind_response(response_id)
         display_text = text.strip()
+        previous = self._raw_translation_by_root.get(seg.segment_id, "")
         self._raw_translation_by_root[seg.segment_id] = display_text
         if final and seg.status != "revised":
-            seg.end_ms = max(self.elapsed_ms, seg.start_ms)
+            stable_final = (
+                seg.status == "final"
+                and previous == display_text
+                and seg.end_ms > seg.start_ms
+            )
+            if not stable_final:
+                seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._translation_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
         return seg
@@ -473,19 +486,22 @@ class InterpretationPipeline:
             source_status = "final" if source_final or not is_last else "partial"
             translation_status = "final" if translation_final or not is_last else "partial"
             next_status = translation_status if translation_text else source_status
-            time_close = (
-                abs(child.start_ms - start_ms) <= 1000
-                and abs(child.end_ms - end_ms) <= 1000
-            )
             stable_unchanged = (
                 child.status == "final"
                 and next_status == "final"
                 and child.source_text == source_text
                 and child.translation_text == translation_text
                 and child.end_ms > child.start_ms
-                and time_close
             )
-            if not stable_unchanged:
+            if stable_unchanged:
+                start_ms = child.start_ms
+                end_ms = child.end_ms
+            elif child.source_text or child.translation_text:
+                start_ms = child.start_ms
+                end_ms = max(child.end_ms, end_ms)
+                child.start_ms = start_ms
+                child.end_ms = end_ms
+            else:
                 child.start_ms = start_ms
                 child.end_ms = end_ms
             child.status = next_status
@@ -731,7 +747,7 @@ class InterpretationPipeline:
             self._last_partial_emit[key] = now
         emit_key = f"{event_type}:{seg.segment_id}"
         end_ms = seg.end_ms or seg.start_ms
-        signature = (text, status, seg.start_ms, end_ms)
+        signature = (text, status)
         if self._last_emitted_segment.get(emit_key) == signature:
             return
         segment = SubtitleSegment(

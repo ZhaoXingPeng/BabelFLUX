@@ -57,6 +57,7 @@ let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
 let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
+const sampledOutputLatencySegmentIds = new Set<string>();
 
 function revokeLocalPreview(mode: ProductMode) {
   const url = localPreviewUrls[mode];
@@ -397,9 +398,11 @@ function median(values: number[]): number {
 }
 
 function recordOutputLatency(segment: SubtitleSegment, playbackMs: number) {
+  if (sampledOutputLatencySegmentIds.has(segment.segmentId)) return;
   if (playbackMs <= 0 || segment.startMs < 0) return;
   const latency = playbackMs - segment.startMs;
   if (latency < MIN_OUTPUT_LATENCY_MS || latency > MAX_OUTPUT_LATENCY_MS) return;
+  sampledOutputLatencySegmentIds.add(segment.segmentId);
   recentOutputLatencies.push(latency);
   while (recentOutputLatencies.length > OUTPUT_LATENCY_SAMPLE_SIZE) recentOutputLatencies.shift();
   estimatedOutputLatencyMs = median(recentOutputLatencies);
@@ -1172,6 +1175,7 @@ export const useSessionStore = defineStore("session", {
       mediaElement = null;
       estimatedOutputLatencyMs = SUBTITLE_LATENCY_MS;
       recentOutputLatencies.length = 0;
+      sampledOutputLatencySegmentIds.clear();
       this.sessionId = null;
       this.sourceSyncState = { ...defaultSourceSyncState };
       this.mediaUrl = null;
@@ -1428,7 +1432,6 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "transcript_segment") {
         if (liveEventsLocked) return;
-        recordOutputLatency(event.segment, this.playbackMs);
         this.sourceSegments = upsertSegment(this.sourceSegments, event.segment);
         this.updateActiveSegmentFromPlayback();
         return;

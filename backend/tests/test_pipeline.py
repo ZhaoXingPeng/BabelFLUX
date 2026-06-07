@@ -277,6 +277,29 @@ async def test_partial_display_bounds_stay_under_one_second_when_split() -> None
     assert max(segment.end_ms for segment in record.segments) <= 1000
 
 
+@pytest.mark.asyncio
+async def test_final_display_timing_does_not_drift_when_same_text_repeats() -> None:
+    record = SessionRecord(session_id="stable-final", source_language="en", target_language="zh")
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    text = "One two three four five six seven eight nine ten eleven twelve."
+
+    pipeline.elapsed_ms = 3_000
+    await pipeline._on_source(text, "itemA", final=True)
+    first_timing = [(segment.start_ms, segment.end_ms) for segment in record.segments]
+    first_event_count = len(events)
+
+    pipeline.elapsed_ms = 10_000
+    await pipeline._on_source(text, "itemA", final=True)
+
+    assert [(segment.start_ms, segment.end_ms) for segment in record.segments] == first_timing
+    assert len(events) == first_event_count
+
+
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
     reviser = RealtimeReviser(
         client=None, model="m", source_language="en", target_language="zh", domain="通用"
