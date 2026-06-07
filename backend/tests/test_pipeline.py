@@ -186,6 +186,37 @@ async def test_source_snapshot_partials_do_not_duplicate_prefixes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_short_noise_source_does_not_take_next_long_translation() -> None:
+    record = SessionRecord(session_id="noise-source", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    pipeline._begin_segment("itemNoise")
+    await pipeline._on_source("Olha.", "itemNoise", final=True)
+    pipeline._begin_segment("itemA")
+    await pipeline._on_source(
+        "I I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。",
+        "respA",
+        final=True,
+    )
+
+    noise = next(segment for segment in record.segments if segment.item_id == "itemNoise")
+    paired = next(segment for segment in record.segments if segment.item_id == "itemA")
+    assert noise.translation_text == ""
+    assert paired.source_text.startswith("I feel so fortunate")
+    assert "I I feel" not in paired.source_text
+    assert paired.translation_text == "我感到非常幸运，我的第一份工作是在现代艺术博物馆。"
+
+
+@pytest.mark.asyncio
 async def test_source_sliding_window_partials_are_overlap_merged() -> None:
     record = SessionRecord(session_id="partial-overlap", source_language="en", target_language="zh")
 

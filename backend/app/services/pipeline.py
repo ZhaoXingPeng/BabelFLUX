@@ -47,6 +47,47 @@ TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
 
+ENGLISH_SHORT_SOURCE_WORDS = {
+    "a",
+    "ah",
+    "am",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "go",
+    "he",
+    "hi",
+    "i",
+    "if",
+    "in",
+    "is",
+    "it",
+    "me",
+    "my",
+    "no",
+    "of",
+    "oh",
+    "ok",
+    "on",
+    "or",
+    "she",
+    "so",
+    "the",
+    "to",
+    "uh",
+    "um",
+    "up",
+    "us",
+    "we",
+    "yes",
+    "you",
+}
+
 
 class InterpretationPipeline:
     def __init__(
@@ -81,6 +122,7 @@ class InterpretationPipeline:
         self._raw_source_by_root: dict[str, str] = {}
         self._raw_translation_by_root: dict[str, str] = {}
         self._continuation_items: set[str] = set()
+        self._noise_roots: set[str] = set()
         self._source_final_roots: set[str] = set()
         self._translation_final_roots: set[str] = set()
         self._display_final_roots: set[str] = set()
@@ -239,7 +281,7 @@ class InterpretationPipeline:
         elif kind == "source_final":
             await self._on_source(ev.text, ev.item_id, final=True)
         elif kind == "response_created":
-            self._bind_response(ev.response_id)
+            return
         elif kind == "translation_partial":
             await self._on_translation(ev.text, ev.response_id, final=False)
         elif kind == "translation_final":
@@ -272,23 +314,58 @@ class InterpretationPipeline:
             return self._current
         return self._begin_segment(None)
 
-    def _bind_response(self, response_id: str | None) -> SegmentRecord:
+    def _bind_response(self, response_id: str | None, translation_text: str = "") -> SegmentRecord:
         if response_id and response_id in self._by_response:
             return self._by_response[response_id]
         # 绑定到最早一个尚未分配 response 的模型根段（FIFO，与生成顺序一致）。
         for seg in self._roots:
-            if seg.response_id is None:
-                seg.response_id = response_id
-                if response_id:
-                    self._by_response[response_id] = seg
-                self._sync_child_response_ids(seg)
-                return seg
+            if seg.response_id is not None or seg.segment_id in self._noise_roots:
+                continue
+            if self._should_skip_response_root(seg, translation_text):
+                self._noise_roots.add(seg.segment_id)
+                continue
+            seg.response_id = response_id
+            if response_id:
+                self._by_response[response_id] = seg
+            self._sync_child_response_ids(seg)
+            return seg
         seg = self._begin_segment(None)
         seg.response_id = response_id
         if response_id:
             self._by_response[response_id] = seg
         self._sync_child_response_ids(seg)
         return seg
+
+    def _should_skip_response_root(self, seg: SegmentRecord, translation_text: str) -> bool:
+        if seg.translation_text or not seg.source_text:
+            return False
+        if not self._has_later_unbound_source_root(seg):
+            return False
+        if len(translation_text.strip()) < 6:
+            return False
+        return self._looks_like_noise_source(seg.source_text)
+
+    def _has_later_unbound_source_root(self, seg: SegmentRecord) -> bool:
+        try:
+            index = self._roots.index(seg)
+        except ValueError:
+            return False
+        return any(
+            root.response_id is None
+            and root.segment_id not in self._noise_roots
+            and bool(root.source_text or self._raw_source_by_root.get(root.segment_id))
+            for root in self._roots[index + 1 :]
+        )
+
+    def _looks_like_noise_source(self, text: str) -> bool:
+        words = self._normalize_source_words(text.split())
+        words = [word for word in words if word]
+        if len(words) != 1:
+            return False
+        word = words[0]
+        if self.record.source_language.lower().startswith("en"):
+            return word not in ENGLISH_SHORT_SOURCE_WORDS
+        return len(word) <= 4
 
     def _sync_child_response_ids(self, root: SegmentRecord) -> None:
         for child in self._children_by_root.get(root.segment_id, [root]):
@@ -456,6 +533,9 @@ class InterpretationPipeline:
 
     def _collapse_source_repetition_once(self, text: str) -> str:
         words = text.split()
+        deduped = self._collapse_adjacent_source_duplicates(words)
+        if deduped != words:
+            return " ".join(deduped)
         if len(words) < 6:
             return text
         normalized = self._normalize_source_words(words)
@@ -485,6 +565,16 @@ class InterpretationPipeline:
                 if normalized[index : index + size] == prefix:
                     return " ".join(words[index:])
         return text
+
+    def _collapse_adjacent_source_duplicates(self, words: list[str]) -> list[str]:
+        result: list[str] = []
+        for word in words:
+            if result and (
+                self._normalize_source_word(result[-1]) == self._normalize_source_word(word)
+            ):
+                continue
+            result.append(word)
+        return result
 
     def _normalize_source_words(self, words: list[str]) -> list[str]:
         return [self._normalize_source_word(word) for word in words]
@@ -543,8 +633,8 @@ class InterpretationPipeline:
     ) -> SegmentRecord | None:
         if not text:
             return None
-        seg = self._bind_response(response_id)
         display_text = text.strip()
+        seg = self._bind_response(response_id, display_text)
         previous = self._raw_translation_by_root.get(seg.segment_id, "")
         self._raw_translation_by_root[seg.segment_id] = display_text
         if final and seg.status != "revised":
