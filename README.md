@@ -1,6 +1,17 @@
 <div align="center">
 
-## Demo 视频
+## DEMO
+
+<iframe
+  src="https://player.bilibili.com/player.html?bvid=BV1cjEh6BEyu&page=1&autoplay=0"
+  width="960"
+  height="540"
+  scrolling="no"
+  border="0"
+  frameborder="no"
+  framespacing="0"
+  allowfullscreen="true"
+></iframe>
 
 <a href="https://www.bilibili.com/video/BV1cjEh6BEyu/">
   <strong>点击观看 BabelFlux / 巴别流 同传演示视频</strong>
