@@ -750,7 +750,7 @@ describe("同传工作台 mock 流程", () => {
     expect(store.activeSegmentId).toBe("seg-current");
   });
 
-  it("does not highlight or show source-only realtime partials as translation results", async () => {
+  it("does not highlight or show source-only realtime segments as translation results", async () => {
     mountApp();
     const store = useSessionStore();
     store.resetSessionData();
@@ -794,6 +794,21 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.activeSegmentId).toBe("seg-translated");
     expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-source-only")).toBe(false);
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-final-source-only",
+        text: "I think it comes when we start to value the gift of a near win.",
+        language: "en",
+        startMs: 45_000,
+        endMs: 48_000,
+        status: "final"
+      }
+    });
+
+    expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-final-source-only")).toBe(false);
+    expect(store.transcriptPairs.every((pair) => pair.translation.trim())).toBe(true);
   });
 
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {

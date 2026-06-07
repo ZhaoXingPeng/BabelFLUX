@@ -707,12 +707,22 @@ export const useSessionStore = defineStore("session", {
           originalTranslation: translation?.originalText,
           revisionReason: translation?.revisionReason
         };
-      }).filter((pair) => (pair.source || pair.translation) && (pair.translation || pair.state !== "partial"));
+      }).filter((pair) => pair.translation.trim());
     },
     currentPair(): TranscriptPair {
+      const active = this.transcriptPairs.find((pair) => pair.isActive);
+      const latest = this.transcriptPairs[this.transcriptPairs.length - 1];
+      if (active || latest) return active ?? latest;
+      if (this.sessionId) {
+        return {
+          time: formatPlaybackTime(this.playbackMs),
+          source: "",
+          translation: "",
+          state: "partial",
+          isActive: false
+        };
+      }
       return (
-        this.transcriptPairs.find((pair) => pair.isActive) ??
-        this.transcriptPairs[this.transcriptPairs.length - 1] ??
         samplePairs[0]
       );
     },

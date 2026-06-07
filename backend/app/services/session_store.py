@@ -78,7 +78,7 @@ class SessionRecord:
         return [s for s in self.segments if s.status in ("final", "revised") and s.source_text]
 
     def reportable_segments(self) -> list[SegmentRecord]:
-        return [s for s in self.segments if s.source_text or s.translation_text]
+        return [s for s in self.segments if s.source_text and s.translation_text]
 
 
 class SessionStore:

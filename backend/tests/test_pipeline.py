@@ -556,6 +556,30 @@ async def test_report_counts_partial_segments_created_before_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_report_skips_source_only_segments() -> None:
+    record = SessionRecord(
+        session_id="report-source-only", source_language="en", target_language="zh"
+    )
+    translated = record.get_or_create_segment("s1", 1)
+    translated.start_ms = 0
+    translated.end_ms = 3000
+    translated.source_text = "Translated source."
+    translated.translation_text = "已有译文。"
+    translated.status = "final"
+    source_only = record.get_or_create_segment("s2", 2)
+    source_only.start_ms = 4000
+    source_only.end_ms = 6000
+    source_only.source_text = "Source without translation."
+    source_only.status = "final"
+
+    report = await generate_session_report(record, settings=settings, client=None)
+
+    assert report["metrics"]["segments"] == 1
+    assert [segment["segmentId"] for segment in report["segments"]] == ["s1"]
+    assert "Source without translation." not in render_txt(report)
+
+
+@pytest.mark.asyncio
 async def test_report_generation_falls_back_when_final_correction_times_out() -> None:
     class SlowCorrectionClient:
         async def generate(self, **_: object) -> object:
