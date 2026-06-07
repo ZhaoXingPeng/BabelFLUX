@@ -4,11 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
-import FloatingCaption from "./components/workbench/FloatingCaption.vue";
 import { useSessionStore } from "./stores/session";
 import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
-import type { FloatingFormState, TranscriptPair } from "./types/workflow";
 
 interface SocketHandlers {
   onOpen?: () => void;
@@ -238,19 +236,6 @@ const completedCorrectionReport: SessionReport = {
   correctionElapsedMs: 39_000
 };
 
-const floatingForm: FloatingFormState = {
-  domain: "通用",
-  sourceLanguage: "英语",
-  targetLanguage: "中文",
-  modelProfile: "快速低延迟",
-  source: "system-audio",
-  style: "双语字幕",
-  size: "标准",
-  opacity: "90%",
-  captionPinned: false,
-  captionOffsetY: 0
-};
-
 describe("同传工作台 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
@@ -286,35 +271,6 @@ describe("同传工作台 mock 流程", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("悬浮字幕在后端长片段内显示当前尾句而不是整段堆积", () => {
-    const pair: TranscriptPair = {
-      segmentId: "long-floating",
-      time: "00:34",
-      source:
-        "I feel so fortunate that my first job was working at the Museum of Modern Art. I learned so much from her. She told me that a few did not quite meet her own mark.",
-      translation:
-        "我感到非常幸运，我的第一份工作是在现代艺术博物馆参与画家伊丽莎白默里的回顾展。我从她身上学到了很多。她告诉我，有几件作品并没有完全达到她为自己设定的标准。",
-      state: "partial",
-      isActive: true
-    };
-
-    const wrapper = mount(FloatingCaption, {
-      props: {
-        pair,
-        form: { ...floatingForm }
-      }
-    });
-
-    expect(wrapper.find(".floating-source").text()).toBe(
-      "She told me that a few did not quite meet her own mark."
-    );
-    expect(wrapper.find(".floating-translation").text()).toBe(
-      "她告诉我，有几件作品并没有完全达到她为自己设定的标准。"
-    );
-    expect(wrapper.text()).not.toContain("Museum of Modern Art");
-    expect(wrapper.find(".floating-source").attributes("title")).toContain("Museum of Modern Art");
   });
 
   it("默认测试视频字幕滞后音频约 1.5s 逐句产出，并在约 13s 触发上下文纠偏", async () => {

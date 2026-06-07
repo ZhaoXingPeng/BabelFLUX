@@ -94,7 +94,6 @@ let nativeAudioSignalChunks = 0;
 let pendingReportResolver: ((ready: boolean) => void) | null = null;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
 const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
-const REPORT_READY_TIMEOUT_MS = 150_000;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
 
@@ -135,7 +134,7 @@ function resolvePendingReport(ready: boolean) {
   pendingReportResolver = null;
 }
 
-async function waitForReport(timeoutMs = REPORT_READY_TIMEOUT_MS): Promise<boolean> {
+async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (reportId.value) return true;
