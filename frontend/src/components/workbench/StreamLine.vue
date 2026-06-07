@@ -7,19 +7,36 @@ const props = defineProps<{
   strong?: boolean;
 }>();
 
-const tokens = computed(() => props.text.split(/(\s+)/).filter((token) => token.length > 0));
+// 只有「正在识别中」的当前句需要逐单元入场动画；已定稿/已校正的句子是稳定文本，
+// 直接渲染纯文本节点，既无意义也避免被反复重挂载。
+const isStreaming = computed(() => props.state === "partial");
 
-function isSpace(token: string) {
-  return /^\s+$/.test(token);
-}
+// CJK 没有空格，旧实现 `text.split(/\s+/)` 会把整句中文当成单个 token，
+// 每次 partial 文本变化 → token 内容变 → key 变 → Vue 重挂载 → 整行重放入场动画 = 「顿/闪」。
+// 这里改成「中文按字、拉丁文按词、空白单独成块」切分，并用索引作为 key：
+// 已显示的单元原地复用（不重挂载、不重放动画），只有新增的尾部单元淡入。
+const CJK = "\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef";
+const SEGMENTER = new RegExp(`\\s+|[${CJK}]|[^\\s${CJK}]+`, "gu");
+
+type StreamUnit = { value: string; space: boolean };
+
+const units = computed<StreamUnit[]>(() => {
+  if (!isStreaming.value) return [];
+  const matches = props.text.match(SEGMENTER);
+  if (!matches) return [];
+  return matches.map((value) => ({ value, space: /^\s+$/.test(value) }));
+});
 </script>
 
 <template>
-  <span class="stream-line" :class="{ partial: state === 'partial', strong }">
-    <template v-for="(part, index) in tokens" :key="`${part}-${index}`">
-      <span v-if="isSpace(part)" class="stream-space">{{ part }}</span>
-      <span v-else class="stream-token">{{ part }}</span>
+  <span class="stream-line" :class="{ partial: isStreaming, strong }">
+    <template v-if="isStreaming">
+      <template v-for="(unit, index) in units" :key="index">
+        <span v-if="unit.space" class="stream-space">{{ unit.value }}</span>
+        <span v-else class="stream-token">{{ unit.value }}</span>
+      </template>
+      <span class="stream-caret" aria-hidden="true">▍</span>
     </template>
-    <span v-if="state === 'partial'" class="stream-caret" aria-hidden="true">▍</span>
+    <template v-else>{{ text }}</template>
   </span>
 </template>
