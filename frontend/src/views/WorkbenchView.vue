@@ -15,7 +15,7 @@ import { useSessionStore } from "../stores/session";
 const router = useRouter();
 const sessionStore = useSessionStore();
 const root = ref<HTMLElement | null>(null);
-const settingsOpen = ref(false);
+const settingsOpen = ref(true);
 
 const {
   displayModes,
@@ -57,12 +57,20 @@ const {
 } = storeToRefs(sessionStore);
 
 const shouldShowSettings = computed(
-  () => settingsOpen.value || modeStates.value.quick === "setup" || modeStates.value.quick === "error"
+  () => settingsOpen.value
 );
 
 async function startQuickSession() {
   await sessionStore.startMode("quick");
+  settingsOpen.value = modeStates.value.quick === "error";
+}
+
+function closeSettings() {
   settingsOpen.value = false;
+  if (!isLive.value) {
+    sessionStore.resetMode("quick");
+    router.push("/");
+  }
 }
 
 function returnHome() {
@@ -218,7 +226,7 @@ function toggleFloatingCaptions() {
       :input="quickInput"
       :url-error="quickUrlError"
       :can-start="quickCanStart"
-      @close="settingsOpen = false"
+      @close="closeSettings"
       @start="startQuickSession"
       @select-source="sessionStore.selectQuickSource"
       @select-file="sessionStore.setQuickSourceFile"

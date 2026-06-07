@@ -151,7 +151,9 @@ async def test_source_incremental_partials_are_accumulated() -> None:
         _source_text_for_item(record, "itemA")
         == "I feel so fortunate that one of the works, in fact, did not meet her mark."
     )
-    assert events[-1]["segment"]["text"] == "did not meet her mark."
+    assert events[-1]["segment"]["text"] == (
+        "I feel so fortunate that one of the works, in fact, did not meet her mark."
+    )
 
 
 @pytest.mark.asyncio
@@ -228,7 +230,7 @@ async def test_source_partials_drop_unstable_tail_before_overlap_merge() -> None
 
 
 @pytest.mark.asyncio
-async def test_translation_clauses_are_split_before_length_limit() -> None:
+async def test_display_segments_keep_source_and_translation_paired() -> None:
     record = SessionRecord(
         session_id="target-clause-split", source_language="en", target_language="zh"
     )
@@ -239,21 +241,79 @@ async def test_translation_clauses_are_split_before_length_limit() -> None:
     pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
 
     await pipeline._on_source(
-        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        (
+            "I feel so fortunate that my first job was working at the Museum of Modern Art. "
+            "I learned so much from her."
+        ),
         "itemA",
         final=False,
     )
     await pipeline._on_translation(
-        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。",
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。 我从她身上学到了很多。",
         "responseA",
         final=False,
     )
 
-    assert [segment.translation_text for segment in record.segments[:2]] == [
-        "我感到非常幸运，",
-        "我的第一份工作是在现代艺术博物馆。",
-    ]
-    assert max(segment.end_ms for segment in record.segments[:2]) <= 1000
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == (
+        "I feel so fortunate that my first job was working at the Museum of Modern Art."
+    )
+    assert record.segments[0].translation_text == (
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。"
+    )
+    assert record.segments[0].status == "final"
+    assert record.segments[1].source_text == "I learned so much from her."
+    assert record.segments[1].translation_text == "我从她身上学到了很多。"
+    assert record.segments[1].status == "partial"
+    assert max(segment.end_ms for segment in record.segments) <= 1000
+
+    pipeline.elapsed_ms = 20_000
+    await pipeline._on_source(
+        (
+            "I feel so fortunate that my first job was working at the Museum of Modern Art. "
+            "I learned so much from her."
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。 我从她身上学到了很多。",
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == (
+        "I feel so fortunate that my first job was working at the Museum of Modern Art."
+    )
+    assert record.segments[0].translation_text == (
+        "我感到非常幸运，我的第一份工作是在现代艺术博物馆。"
+    )
+    assert record.segments[1].source_text == "I learned so much from her."
+    assert record.segments[1].translation_text == "我从她身上学到了很多。"
+    assert record.segments[0].end_ms == record.segments[1].start_ms
+    assert record.segments[0].end_ms < record.segments[1].end_ms
+
+
+@pytest.mark.asyncio
+async def test_display_segments_keep_mismatched_sentence_counts_together() -> None:
+    record = SessionRecord(session_id="paired-tail", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "First sentence. Second sentence. Third sentence.",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation("第一句。第二句。", "responseA", final=True)
+
+    assert len(record.segments) == 1
+    assert record.segments[0].source_text == "First sentence. Second sentence. Third sentence."
+    assert record.segments[0].translation_text == "第一句。第二句。"
 
 
 @pytest.mark.asyncio
@@ -273,8 +333,31 @@ async def test_partial_display_bounds_stay_under_one_second_when_split() -> None
         final=False,
     )
 
-    assert len(record.segments) == 2
+    assert len(record.segments) == 1
     assert max(segment.end_ms for segment in record.segments) <= 1000
+
+
+@pytest.mark.asyncio
+async def test_final_display_timing_does_not_drift_when_same_text_repeats() -> None:
+    record = SessionRecord(session_id="stable-final", source_language="en", target_language="zh")
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    text = "One two three four five six seven eight nine ten eleven twelve."
+
+    pipeline.elapsed_ms = 3_000
+    await pipeline._on_source(text, "itemA", final=True)
+    first_timing = [(segment.start_ms, segment.end_ms) for segment in record.segments]
+    first_event_count = len(events)
+
+    pipeline.elapsed_ms = 10_000
+    await pipeline._on_source(text, "itemA", final=True)
+
+    assert [(segment.start_ms, segment.end_ms) for segment in record.segments] == first_timing
+    assert len(events) == first_event_count
 
 
 def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
@@ -366,3 +449,43 @@ async def test_report_counts_partial_segments_created_before_stop() -> None:
     assert report["metrics"]["segments"] == 1
     assert report["durationText"] == "00:05"
     assert report["segments"][0]["sourceText"] == "I feel so fortunate."
+
+
+@pytest.mark.asyncio
+async def test_report_generation_falls_back_when_final_correction_times_out() -> None:
+    class SlowCorrectionClient:
+        async def generate(self, **_: object) -> object:
+            await asyncio.sleep(1)
+            return object()
+
+    record = SessionRecord(session_id="report-timeout", source_language="en", target_language="zh")
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 0
+    seg.end_ms = 3000
+    seg.source_text = "Hello world."
+    seg.translation_text = "你好，世界。"
+    seg.status = "final"
+
+    original_provider = settings.model_provider
+    original_key = settings.dashscope_api_key
+    original_timeout = settings.final_correction_timeout_seconds
+    object.__setattr__(settings, "model_provider", "real")
+    object.__setattr__(settings, "dashscope_api_key", "sk-test")
+    object.__setattr__(settings, "final_correction_timeout_seconds", 0.01)
+    try:
+        started = asyncio.get_running_loop().time()
+        report = await generate_session_report(
+            record,
+            settings=settings,
+            client=SlowCorrectionClient(),  # type: ignore[arg-type]
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+    finally:
+        object.__setattr__(settings, "model_provider", original_provider)
+        object.__setattr__(settings, "dashscope_api_key", original_key)
+        object.__setattr__(settings, "final_correction_timeout_seconds", original_timeout)
+
+    assert elapsed < 0.5
+    assert report["correctionModel"] is None
+    assert report["metrics"]["segments"] == 1
+    assert report["segments"][0]["finalTranslation"] == "你好，世界。"

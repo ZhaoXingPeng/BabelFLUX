@@ -57,6 +57,7 @@ let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
 let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
+const sampledOutputLatencySegmentIds = new Set<string>();
 
 function revokeLocalPreview(mode: ProductMode) {
   const url = localPreviewUrls[mode];
@@ -86,6 +87,8 @@ const SUBTITLE_LATENCY_MS = 1000;
 const MIN_OUTPUT_LATENCY_MS = 250;
 const MAX_OUTPUT_LATENCY_MS = 6000;
 const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
+const REPORT_READY_TIMEOUT_MS = 45_000;
+const REPORT_POLL_INTERVAL_MS = 1_000;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
 const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
 
@@ -396,10 +399,16 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function recordOutputLatency(segment: SubtitleSegment, playbackMs: number) {
+  if (sampledOutputLatencySegmentIds.has(segment.segmentId)) return;
   if (playbackMs <= 0 || segment.startMs < 0) return;
   const latency = playbackMs - segment.startMs;
   if (latency < MIN_OUTPUT_LATENCY_MS || latency > MAX_OUTPUT_LATENCY_MS) return;
+  sampledOutputLatencySegmentIds.add(segment.segmentId);
   recentOutputLatencies.push(latency);
   while (recentOutputLatencies.length > OUTPUT_LATENCY_SAMPLE_SIZE) recentOutputLatencies.shift();
   estimatedOutputLatencyMs = median(recentOutputLatencies);
@@ -1013,15 +1022,7 @@ export const useSessionStore = defineStore("session", {
         socket.send(JSON.stringify({ type: "stop_session" }));
         void this.stopCapture();
         const endingRequestId = this.startRequestId;
-        // 兜底：后端长时间无报告（异常/断连）时降级，避免一直卡在“生成中”。
-        window.setTimeout(() => {
-          if (this.startRequestId === endingRequestId && this.reportLoading && !this.reportId) {
-            this.reportLoading = false;
-            this.reportError = "报告生成超时，请稍后在报告区重试下载";
-            if (this.activeMode === mode) this.activeMode = null;
-            this.stopSession("stopped");
-          }
-        }, 30000);
+        void this.waitForReportReady(mode, endingRequestId);
       } else {
         // 无后端会话（本地 fixture 演示）→ 客户端合成报告，保证“结束→可看”闭环。
         this.startRequestId += 1;
@@ -1172,6 +1173,7 @@ export const useSessionStore = defineStore("session", {
       mediaElement = null;
       estimatedOutputLatencyMs = SUBTITLE_LATENCY_MS;
       recentOutputLatencies.length = 0;
+      sampledOutputLatencySegmentIds.clear();
       this.sessionId = null;
       this.sourceSyncState = { ...defaultSourceSyncState };
       this.mediaUrl = null;
@@ -1428,7 +1430,6 @@ export const useSessionStore = defineStore("session", {
 
       if (event.type === "transcript_segment") {
         if (liveEventsLocked) return;
-        recordOutputLatency(event.segment, this.playbackMs);
         this.sourceSegments = upsertSegment(this.sourceSegments, event.segment);
         this.updateActiveSegmentFromPlayback();
         return;
@@ -1485,6 +1486,39 @@ export const useSessionStore = defineStore("session", {
             }
           : segment
       );
+    },
+
+    async waitForReportReady(mode: ProductMode, requestId: number) {
+      const sessionId = this.sessionId;
+      if (!sessionId) return;
+
+      const deadline = Date.now() + REPORT_READY_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (this.startRequestId !== requestId || !this.reportLoading) return;
+        if (this.report) return;
+
+        try {
+          const report = await getSessionReport(sessionId);
+          if (this.startRequestId !== requestId || !this.reportLoading) return;
+          this.report = report;
+          this.reportId = report.reportId;
+          this.reportError = null;
+          this.reportLoading = false;
+          this.status = "stopped";
+          if (this.activeMode === mode) this.activeMode = null;
+          this.stopSession("stopped");
+          return;
+        } catch {
+          await wait(REPORT_POLL_INTERVAL_MS);
+        }
+      }
+
+      if (this.startRequestId === requestId && this.reportLoading && !this.report) {
+        this.reportLoading = false;
+        this.reportError = "报告仍在生成中，请稍后重试下载";
+        if (this.activeMode === mode) this.activeMode = null;
+        this.stopSession("stopped");
+      }
     },
 
     async loadReport() {

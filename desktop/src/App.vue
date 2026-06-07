@@ -6,7 +6,7 @@ import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
-import { createSession } from "@frontend/api/client";
+import { createSession, getSessionReport, reportDownloadUrl, type ReportFormat } from "@frontend/api/client";
 import {
   acquireStream,
   startAudioCapture,
@@ -45,6 +45,9 @@ const displayMode = ref<NonNullable<LaunchParams["displayMode"]>>("bilingual");
 const mode = ref<"handoff" | "standalone">("standalone");
 const capturing = ref(false);
 const starting = ref(false);
+const reportPending = ref(false);
+const activeSessionId = ref<string | null>(null);
+const reportId = ref<string | null>(null);
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "system_audio", label: "Windows 系统音频" },
@@ -84,6 +87,7 @@ let cleanupShortcut: (() => void) | null = null;
 let nativeAudioWatchdog: number | null = null;
 let nativeAudioChunks = 0;
 let nativeAudioSignalChunks = 0;
+let pendingReportResolver: ((ready: boolean) => void) | null = null;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
 const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
 
@@ -115,6 +119,59 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
 function formatTime(ms: number): string {
   const total = Math.floor(ms / 1000);
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function resolvePendingReport(ready: boolean) {
+  pendingReportResolver?.(ready);
+  pendingReportResolver = null;
+}
+
+async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (reportId.value) return true;
+    if (activeSessionId.value) {
+      try {
+        const report = await getSessionReport(activeSessionId.value);
+        reportId.value = report.reportId;
+        return true;
+      } catch {
+        // Report is not persisted yet; keep polling until the bounded backend path finishes.
+      }
+    }
+    await wait(1_000);
+  }
+  resolvePendingReport(false);
+  return false;
+}
+
+function reportFilename(format: ReportFormat) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `BabelFlux-report-${stamp}.${format}`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+async function downloadCurrentReport(format: ReportFormat = "txt") {
+  if (!activeSessionId.value) return false;
+  const response = await fetch(reportDownloadUrl(activeSessionId.value, format));
+  if (!response.ok) return false;
+  downloadBlob(await response.blob(), reportFilename(format));
+  return true;
 }
 
 function applyEvent(event: ServerEvent) {
@@ -164,9 +221,17 @@ function applyEvent(event: ServerEvent) {
     };
     return;
   }
+  if (event.type === "session_report") {
+    reportId.value = event.reportId;
+    reportPending.value = false;
+    status.value = { status: "ready", lagMs: 0, message: "最终报告已生成，正在下载" };
+    resolvePendingReport(true);
+    return;
+  }
   if (event.type === "error") {
     errorMessage.value = event.message;
     status.value = { status: "missing", lagMs: 0, message: event.message };
+    resolvePendingReport(false);
   }
 }
 
@@ -184,6 +249,8 @@ async function startFromLaunchParams(params: LaunchParams) {
     const claim = await claimHandoffToken(params.token);
     mode.value = "handoff";
     displayMode.value = claim.displayMode;
+    activeSessionId.value = claim.sessionId;
+    reportId.value = null;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent);
   } catch (error) {
@@ -269,6 +336,8 @@ async function startStandalone() {
       sourceKey: kind,
       sourcePermission: "granted"
     });
+    activeSessionId.value = session.sessionId;
+    reportId.value = null;
     capturing.value = true;
     status.value = {
       status: "syncing",
@@ -294,6 +363,7 @@ async function beginCapture() {
       sendAudioChunk(chunk);
     };
     const handleEnded = () => {
+      if (reportPending.value) return;
       if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio_end" }));
       void stopStandalone();
     };
@@ -339,6 +409,8 @@ async function beginCapture() {
 }
 
 async function stopStandalone() {
+  resolvePendingReport(false);
+  reportPending.value = false;
   capturing.value = false;
   captureStarted = false;
   resetNativeAudioStats();
@@ -352,11 +424,53 @@ async function stopStandalone() {
   }
   socket?.close();
   socket = null;
+  activeSessionId.value = null;
+  reportId.value = null;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
+async function finishStandaloneAndDownloadReport() {
+  if (mode.value !== "standalone" || !activeSessionId.value) {
+    await stopStandalone();
+    return;
+  }
+  if (reportPending.value) return;
+
+  reportPending.value = true;
+  capturing.value = false;
+  captureStarted = false;
+  resetNativeAudioStats();
+  status.value = { status: "syncing", lagMs: 0, message: "正在生成最终报告" };
+
+  if (capture) {
+    const current = capture;
+    capture = null;
+    await current.stop();
+  }
+
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "stop_session" }));
+    const ready = await waitForReport();
+    if (ready) {
+      const downloaded = await downloadCurrentReport("txt");
+      if (downloaded) await wait(1200);
+    } else {
+      status.value = { status: "missing", lagMs: 0, message: "报告生成超时，可在 Web 端稍后下载" };
+      await wait(1200);
+    }
+  }
+
+  socket?.close();
+  socket = null;
+  reportPending.value = false;
+}
+
 async function closeOverlayWindow() {
-  await stopStandalone();
+  if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
+    await finishStandaloneAndDownloadReport();
+  } else {
+    await stopStandalone();
+  }
   mode.value = "standalone";
   errorMessage.value = "";
   try {

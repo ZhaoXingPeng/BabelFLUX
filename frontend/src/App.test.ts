@@ -28,6 +28,8 @@ const mockRuntime = vi.hoisted(() => ({
   reportDownloadUrl: vi.fn(),
   uploadSessionMedia: vi.fn(),
   createSessionSocket: vi.fn(),
+  routerPush: vi.fn(),
+  routerReplace: vi.fn(),
   handlersBySession: new Map<string, SocketHandlers>(),
   sockets: [] as Array<{ sessionId: string; socket: MockSocket }>
 }));
@@ -45,7 +47,7 @@ vi.mock("./api/ws", () => ({
 }));
 
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() })
+  useRouter: () => ({ push: mockRuntime.routerPush, replace: mockRuntime.routerReplace })
 }));
 
 function mountApp(): VueWrapper {
@@ -203,6 +205,8 @@ describe("同传工作台 mock 流程", () => {
     mockRuntime.reportDownloadUrl.mockReset();
     mockRuntime.uploadSessionMedia.mockReset();
     mockRuntime.createSessionSocket.mockReset();
+    mockRuntime.routerPush.mockReset();
+    mockRuntime.routerReplace.mockReset();
     mockRuntime.handlersBySession.clear();
     mockRuntime.sockets = [];
     mockRuntime.createSessionSocket.mockImplementation(buildSocket);
@@ -274,6 +278,22 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.activeSegmentId).toBe("fixture-seg-025");
     expect(store.sourceSyncState.message).toContain("01:14");
+  });
+
+  it.each(["关闭设置", "取消"])("开始前点击%s会返回初始界面", async (buttonLabel) => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    expect(wrapper.text()).toContain("同声传译设置");
+
+    await findButton(wrapper, buttonLabel).trigger("click");
+    await nextTick();
+
+    expect(wrapper.text()).not.toContain("同声传译设置");
+    expect(wrapper.text()).toContain("巴别流 同传");
+    expect(store.modeStates.quick).toBe("setup");
+    expect(store.activeMode).toBeNull();
+    expect(mockRuntime.routerPush).toHaveBeenCalledWith("/");
   });
 
   it("测试视频自然播放结束后自动出报告，时长为素材完整时长", async () => {

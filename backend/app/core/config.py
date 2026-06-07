@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     live_translate_asr_model: str = "qwen3-asr-flash-realtime"
     realtime_revision_model: str = "qwen-flash"
     final_correction_model: str = "qwen-plus"
+    final_correction_timeout_seconds: float = 8.0
     tts_model: str = "qwen3-tts-flash-realtime"
     tts_voice: str = "Cherry"
 

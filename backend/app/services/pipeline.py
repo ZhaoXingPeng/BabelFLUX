@@ -36,6 +36,8 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
 PARTIAL_THROTTLE_S = 0.08
 MEDIA_PROGRESS_SYNC_S = 0.5
+STOP_DRAIN_GRACE_S = 0.8
+STOP_DRAIN_MAX_S = 3.0
 DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.25
@@ -80,6 +82,7 @@ class InterpretationPipeline:
         self._raw_translation_by_root: dict[str, str] = {}
         self._source_final_roots: set[str] = set()
         self._translation_final_roots: set[str] = set()
+        self._display_final_roots: set[str] = set()
         self._last_partial_emit: dict[str, float] = {}
         self._last_emitted_segment: dict[str, tuple[str, str, int, int]] = {}
         self._last_event_at = time.monotonic()
@@ -216,11 +219,13 @@ class InterpretationPipeline:
 
     async def _drain(self, consumer: asyncio.Task[Any]) -> None:
         """音频喂完后，等待最后若干句的最终事件落定。"""
-        deadline = time.monotonic() + DRAIN_MAX_S
+        max_wait = STOP_DRAIN_MAX_S if self._stopped else DRAIN_MAX_S
+        grace = STOP_DRAIN_GRACE_S if self._stopped else DRAIN_GRACE_S
+        deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             if consumer.done():
                 break
-            if time.monotonic() - self._last_event_at > DRAIN_GRACE_S:
+            if time.monotonic() - self._last_event_at > grace:
                 break
             await asyncio.sleep(0.3)
 
@@ -415,7 +420,13 @@ class InterpretationPipeline:
         )
         self._raw_source_by_root[seg.segment_id] = display_text
         if final:
-            seg.end_ms = max(self.elapsed_ms, seg.start_ms)
+            stable_final = (
+                seg.status == "final"
+                and previous == display_text
+                and seg.end_ms > seg.start_ms
+            )
+            if not stable_final:
+                seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._source_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
 
@@ -426,20 +437,45 @@ class InterpretationPipeline:
             return None
         seg = self._bind_response(response_id)
         display_text = text.strip()
+        previous = self._raw_translation_by_root.get(seg.segment_id, "")
         self._raw_translation_by_root[seg.segment_id] = display_text
         if final and seg.status != "revised":
-            seg.end_ms = max(self.elapsed_ms, seg.start_ms)
+            stable_final = (
+                seg.status == "final"
+                and previous == display_text
+                and seg.end_ms > seg.start_ms
+            )
+            if not stable_final:
+                seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._translation_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
         return seg
 
     async def _emit_display_segments(self, root: SegmentRecord) -> None:
-        source_parts = self._split_source_display(
-            self._raw_source_by_root.get(root.segment_id, "")
+        # Split paired bilingual text only at sentence level, and only when both
+        # sides produce the same number of sentences. Clause/length splitting per
+        # language creates false pairings because English and Chinese boundaries
+        # rarely line up exactly.
+        source_text = re.sub(
+            r"\s+",
+            " ",
+            self._raw_source_by_root.get(root.segment_id, "").strip(),
         )
-        translation_parts = self._split_target_display(
-            self._raw_translation_by_root.get(root.segment_id, "")
+        translation_text = re.sub(
+            r"\s+",
+            "",
+            self._raw_translation_by_root.get(root.segment_id, "").strip(),
         )
+        source_final = root.segment_id in self._source_final_roots
+        translation_final = root.segment_id in self._translation_final_roots
+        source_sentences = self._split_source_sentences(source_text)
+        translation_sentences = self._split_target_sentences(translation_text)
+        if len(source_sentences) > 1 and len(source_sentences) == len(translation_sentences):
+            source_parts = source_sentences
+            translation_parts = translation_sentences
+        else:
+            source_parts = [source_text] if source_text else []
+            translation_parts = [translation_text] if translation_text else []
         if not source_parts and not translation_parts:
             return
 
@@ -449,8 +485,6 @@ class InterpretationPipeline:
 
         source_display = self._align_parts(source_parts, count, separator=" ")
         translation_display = self._align_parts(translation_parts, count, separator="")
-        source_final = root.segment_id in self._source_final_roots
-        translation_final = root.segment_id in self._translation_final_roots
         display_final = (not source_parts or source_final) and (
             not translation_parts or translation_final
         )
@@ -473,19 +507,27 @@ class InterpretationPipeline:
             source_status = "final" if source_final or not is_last else "partial"
             translation_status = "final" if translation_final or not is_last else "partial"
             next_status = translation_status if translation_text else source_status
-            time_close = (
-                abs(child.start_ms - start_ms) <= 1000
-                and abs(child.end_ms - end_ms) <= 1000
-            )
             stable_unchanged = (
-                child.status == "final"
+                root.segment_id in self._display_final_roots
+                and child.status == "final"
                 and next_status == "final"
                 and child.source_text == source_text
                 and child.translation_text == translation_text
                 and child.end_ms > child.start_ms
-                and time_close
             )
-            if not stable_unchanged:
+            if stable_unchanged:
+                start_ms = child.start_ms
+                end_ms = child.end_ms
+            elif child.source_text or child.translation_text:
+                if display_final:
+                    child.start_ms = start_ms
+                    child.end_ms = end_ms
+                else:
+                    start_ms = child.start_ms
+                    end_ms = max(child.end_ms, end_ms)
+                    child.start_ms = start_ms
+                    child.end_ms = end_ms
+            else:
                 child.start_ms = start_ms
                 child.end_ms = end_ms
             child.status = next_status
@@ -513,6 +555,9 @@ class InterpretationPipeline:
                     throttle=translation_status == "partial",
                 )
 
+        if display_final:
+            self._display_final_roots.add(root.segment_id)
+
     def _display_children(self, root: SegmentRecord, count: int) -> list[SegmentRecord]:
         children = self._children_by_root.setdefault(root.segment_id, [root])
         while len(children) < count:
@@ -532,12 +577,24 @@ class InterpretationPipeline:
         if not value:
             return []
 
-        sentence_parts = self._split_by_regex(value, r"(?<=[.!?])\s+")
+        sentence_parts = self._split_source_sentences(value)
         parts: list[str] = []
         for sentence in sentence_parts:
             for part in self._split_source_clauses(sentence):
                 parts.extend(self._split_long_source_part(part))
         return parts
+
+    def _split_source_sentences(self, text: str) -> list[str]:
+        value = re.sub(r"\s+", " ", text.strip())
+        if not value:
+            return []
+        return self._split_by_regex(value, r"(?<=[.!?])\s+")
+
+    def _split_target_sentences(self, text: str) -> list[str]:
+        value = re.sub(r"\s+", "", text.strip())
+        if not value:
+            return []
+        return [part for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part]
 
     def _split_source_clauses(self, text: str) -> list[str]:
         clauses = self._split_by_regex(text, r"(?<=[,;:])\s+")
@@ -709,6 +766,10 @@ class InterpretationPipeline:
         await self.emit({"type": "revision_event", "revision": revision.model_dump(by_alias=True)})
 
     async def _await_reviews(self) -> None:
+        if self._stopped:
+            for task in self._review_tasks:
+                if not task.done():
+                    task.cancel()
         if self._review_tasks:
             await asyncio.gather(*list(self._review_tasks), return_exceptions=True)
 
@@ -731,7 +792,7 @@ class InterpretationPipeline:
             self._last_partial_emit[key] = now
         emit_key = f"{event_type}:{seg.segment_id}"
         end_ms = seg.end_ms or seg.start_ms
-        signature = (text, status, seg.start_ms, end_ms)
+        signature = (text, status)
         if self._last_emitted_segment.get(emit_key) == signature:
             return
         segment = SubtitleSegment(
