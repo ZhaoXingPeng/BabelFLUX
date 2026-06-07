@@ -360,7 +360,7 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.text()).toContain("同传报告");
   });
 
-  it("报告页展示会后完整纠偏结果", async () => {
+  it("报告页只提示会后完整纠偏已写入下载报告", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -374,10 +374,10 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(wrapper.text()).toContain("全文纠偏已完成");
-    expect(wrapper.text()).toContain("qwen-plus · 39.0 秒");
-    expect(wrapper.text()).toContain("译文整体准确，已统一术语。");
-    expect(wrapper.text()).toContain("术语统一");
-    expect(wrapper.text()).toContain("请审阅季度发布方案。");
+    expect(wrapper.text()).toContain("完整内容已写入下载报告");
+    expect(wrapper.text()).not.toContain("译文整体准确，已统一术语。");
+    expect(wrapper.text()).not.toContain("术语统一");
+    expect(wrapper.text()).not.toContain("请审阅季度发布方案。");
   });
 
   it("手动结束时报告时长等于已收听进度，而非 00:00", async () => {

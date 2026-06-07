@@ -66,15 +66,7 @@ const reportCorrectionStatus = computed(() => {
   return current.correctionStatus ?? (current.correctionModel ? "completed" : "fallback");
 });
 
-const reportCorrectionBadge = computed(() => {
-  if (reportCorrectionStatus.value === "completed") return "全文纠偏已完成";
-  if (reportCorrectionStatus.value === "partial") return "全文纠偏部分完成";
-  if (reportCorrectionStatus.value === "timeout") return "全文纠偏超时";
-  if (reportCorrectionStatus.value === "skipped") return "全文纠偏未执行";
-  return "全文纠偏已降级";
-});
-
-const reportCorrectionMeta = computed(() => {
+const reportCorrectionHint = computed(() => {
   const current = report.value;
   if (!current) return "";
   const parts: string[] = [];
@@ -82,23 +74,13 @@ const reportCorrectionMeta = computed(() => {
   if (current.correctionElapsedMs) {
     parts.push(`${(current.correctionElapsedMs / 1000).toFixed(1)} 秒`);
   }
-  return parts.join(" · ");
+  const meta = parts.length ? `（${parts.join(" · ")}）` : "";
+  if (reportCorrectionStatus.value === "completed") return `全文纠偏已完成${meta}，完整内容已写入下载报告。`;
+  if (reportCorrectionStatus.value === "partial") return `全文纠偏部分完成${meta}，完整内容已写入下载报告。`;
+  if (reportCorrectionStatus.value === "timeout") return `全文纠偏超时，当前下载报告包含实时译文与降级说明。`;
+  if (reportCorrectionStatus.value === "skipped") return "全文纠偏未执行，当前下载报告包含实时译文说明。";
+  return "全文纠偏已降级，当前下载报告包含实时译文与降级说明。";
 });
-
-const reportCorrectionNote = computed(() => {
-  const current = report.value;
-  if (!current) return "";
-  return current.qualityNotes || current.correctionError || "";
-});
-
-const reportFinalRevisions = computed(() => report.value?.finalRevisions.slice(0, 6) ?? []);
-
-const reportChangedSegments = computed(
-  () =>
-    report.value?.segments
-      .filter((segment) => segment.finalTranslation.trim() !== segment.liveTranslation.trim())
-      .slice(0, 4) ?? []
-);
 
 async function startQuickSession() {
   await sessionStore.startMode("quick");
@@ -203,36 +185,10 @@ function toggleFloatingCaptions() {
         正在生成会后完整纠偏报告…
       </p>
       <p v-else-if="reportError" class="report-summary report-summary-error">{{ reportError }}</p>
-      <p v-else-if="report?.summary" class="report-summary">{{ report.summary }}</p>
-      <div v-if="!reportLoading && !reportError && report" class="report-correction">
-        <div class="report-correction-head">
-          <span
-            class="report-correction-badge"
-            :class="{ warning: reportCorrectionStatus !== 'completed' }"
-          >
-            {{ reportCorrectionBadge }}
-          </span>
-          <small v-if="reportCorrectionMeta">{{ reportCorrectionMeta }}</small>
-        </div>
-        <p v-if="reportCorrectionNote" class="report-correction-note">{{ reportCorrectionNote }}</p>
-        <div v-if="reportFinalRevisions.length" class="report-revision-list">
-          <article v-for="revision in reportFinalRevisions" :key="`${revision.segmentId}-${revision.afterText}`">
-            <span>{{ revision.reason }}</span>
-            <p>{{ revision.beforeText }}</p>
-            <strong>{{ revision.afterText }}</strong>
-          </article>
-        </div>
-        <p v-else-if="reportCorrectionStatus === 'completed'" class="report-correction-empty">
-          全文纠偏已完成，本场未发现需要改写的译文。
-        </p>
-        <div v-if="reportChangedSegments.length" class="report-final-list">
-          <article v-for="segment in reportChangedSegments" :key="segment.segmentId">
-            <span>{{ segment.timecode }}</span>
-            <p>{{ segment.sourceText }}</p>
-            <strong>{{ segment.finalTranslation }}</strong>
-          </article>
-        </div>
-      </div>
+      <p v-else-if="report" class="report-summary">
+        <template v-if="report.summary">{{ report.summary }}<br /></template>
+        {{ reportCorrectionHint }}
+      </p>
       <div class="report-actions">
         <button
           class="secondary-button compact-button"
