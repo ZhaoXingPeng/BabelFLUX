@@ -37,6 +37,10 @@ body {
   cursor: move;
 }
 
+.desktop-overlay-shell.pinned {
+  cursor: default;
+}
+
 .desktop-caption-drag-layer {
   width: 100%;
   min-width: 0;

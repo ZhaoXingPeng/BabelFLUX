@@ -87,7 +87,7 @@ const SUBTITLE_LATENCY_MS = 1000;
 const MIN_OUTPUT_LATENCY_MS = 250;
 const MAX_OUTPUT_LATENCY_MS = 6000;
 const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
-const REPORT_READY_TIMEOUT_MS = 45_000;
+const REPORT_READY_TIMEOUT_MS = 150_000;
 const REPORT_POLL_INTERVAL_MS = 1_000;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
 const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
@@ -224,10 +224,36 @@ interface SessionState {
   reportError: string | null;
 }
 
+function hasStableTiming(segment: SubtitleSegment): boolean {
+  return Number.isFinite(segment.startMs) && Number.isFinite(segment.endMs) && segment.endMs > segment.startMs;
+}
+
+function mergeSegmentUpdate(previous: SubtitleSegment, next: SubtitleSegment): SubtitleSegment {
+  let startMs = next.startMs;
+  let endMs = next.endMs;
+
+  if (hasStableTiming(previous)) {
+    const incomingStable = hasStableTiming(next);
+    if (!incomingStable || (previous.startMs > 0 && next.startMs <= 0)) {
+      startMs = previous.startMs;
+      endMs = previous.endMs;
+    } else if (next.status === "partial" && next.startMs + 500 < previous.startMs) {
+      startMs = previous.startMs;
+      endMs = Math.max(previous.endMs, next.endMs);
+    }
+  }
+
+  if (!Number.isFinite(endMs) || endMs <= startMs) {
+    endMs = hasStableTiming(previous) ? previous.endMs : startMs;
+  }
+
+  return { ...previous, ...next, startMs, endMs };
+}
+
 function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): SubtitleSegment[] {
   const index = items.findIndex((item) => item.segmentId === segment.segmentId);
   if (index === -1) return [...items, segment];
-  return items.map((item, itemIndex) => (itemIndex === index ? segment : item));
+  return items.map((item, itemIndex) => (itemIndex === index ? mergeSegmentUpdate(item, segment) : item));
 }
 
 function createFixtureSourceSegments(): SubtitleSegment[] {
@@ -459,6 +485,58 @@ function activeSegmentForPlayback(
     ?? null;
 }
 
+function hasTranslationText(translationSegments: SubtitleSegment[], segmentId: string | null): boolean {
+  if (!segmentId) return false;
+  return Boolean(
+    translationSegments.find((segment) => segment.segmentId === segmentId)?.text.trim()
+  );
+}
+
+function activeTranslatedSegmentForPlayback(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  playbackMs: number
+): string | null {
+  const timeline = combinedTimeline(sourceSegments, translationSegments).filter((segment) =>
+    hasTranslationText(translationSegments, segment.segmentId)
+  );
+  if (timeline.length === 0) return null;
+  const displayClockMs = Math.max(0, playbackMs - estimatedOutputLatencyMs);
+  const exact = timeline.find(
+    (segment, index) =>
+      displayClockMs >= segment.startMs &&
+      displayClockMs < Math.max(segment.endMs, timeline[index + 1]?.startMs ?? 0, segment.startMs + 2000)
+  );
+  if (exact) return exact.segmentId;
+  return [...timeline].reverse().find((segment) => segment.startMs <= displayClockMs)?.segmentId
+    ?? timeline[timeline.length - 1]?.segmentId
+    ?? null;
+}
+
+function timelineSegmentById(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  segmentId: string | null
+): { segmentId: string; startMs: number; endMs: number } | undefined {
+  if (!segmentId) return undefined;
+  return combinedTimeline(sourceSegments, translationSegments).find((segment) => segment.segmentId === segmentId);
+}
+
+function shouldKeepCurrentActiveSegment(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  currentId: string | null,
+  candidateId: string | null,
+  playbackMs: number,
+  allowBackward: boolean
+): boolean {
+  if (allowBackward || !currentId || !candidateId || currentId === candidateId) return false;
+  const current = timelineSegmentById(sourceSegments, translationSegments, currentId);
+  const candidate = timelineSegmentById(sourceSegments, translationSegments, candidateId);
+  if (!current || !candidate) return false;
+  return candidate.startMs + 500 < current.startMs && playbackMs >= current.startMs - 500;
+}
+
 /** 客户端报告渲染（本地演示下载用，与后端 report.py 的 txt/srt/md/json 对齐）。 */
 function renderReportClient(
   report: SessionReport,
@@ -484,6 +562,7 @@ function renderReportClient(
       `- **语言**：${report.sourceLanguage} → ${report.targetLanguage}`,
       `- **时长**：${report.durationText}`,
       `- **句数**：${report.metrics.segments}　实时修正：${report.metrics.realtimeRevisions}　会后修正：${report.metrics.finalRevisions}`,
+      `- **全文纠偏**：${correctionStatusText(report)}`,
       "",
       "## 摘要",
       report.summary,
@@ -497,12 +576,26 @@ function renderReportClient(
           `| ${seg.timecode} | ${seg.sourceText.replace(/\|/g, "\\|")} | ${seg.finalTranslation.replace(/\|/g, "\\|")} |`
       )
     ];
+    if (report.finalRevisions.length) {
+      lines.push("", "## 会后校正记录", "", "| 原译文 | 校正后 | 原因 |", "| --- | --- | --- |");
+      report.finalRevisions.forEach((rev) => {
+        lines.push(
+          `| ${rev.beforeText.replace(/\|/g, "\\|")} | ${rev.afterText.replace(/\|/g, "\\|")} | ${rev.reason} |`
+        );
+      });
+    } else if (report.correctionStatus === "completed") {
+      lines.push("", "## 会后校正记录", "", "全文纠偏已完成，本场未发现需要改写的译文。");
+    }
+    if (report.qualityNotes) {
+      lines.push("", "## 质量说明", report.qualityNotes);
+    }
     return { body: lines.join("\n"), mime: "text/markdown", ext: "md" };
   }
   const lines = [
     `# ${report.sessionName}`,
     `领域：${report.domain}  |  语言：${report.sourceLanguage} -> ${report.targetLanguage}  |  时长：${report.durationText}`,
     `生成时间：${report.generatedAt}`,
+    `全文纠偏：${correctionStatusText(report)}`,
     "",
     "【摘要】",
     report.summary,
@@ -511,10 +604,26 @@ function renderReportClient(
     ...report.segments.flatMap((seg) => [`[${seg.timecode}] ${seg.sourceText}`, `          ${seg.finalTranslation}`])
   ];
   if (report.finalRevisions.length) {
-    lines.push("", "【校正记录】");
+    lines.push("", "【会后校正记录】");
     report.finalRevisions.forEach((rev) => lines.push(`- ${rev.beforeText}  =>  ${rev.afterText}  （${rev.reason}）`));
+  } else if (report.correctionStatus === "completed") {
+    lines.push("", "【会后校正记录】", "全文纠偏已完成，本场未发现需要改写的译文。");
+  }
+  if (report.qualityNotes) {
+    lines.push("", "【质量说明】", report.qualityNotes);
   }
   return { body: lines.join("\n"), mime: "text/plain", ext: "txt" };
+}
+
+function correctionStatusText(report: SessionReport): string {
+  const elapsedMs = report.correctionElapsedMs ?? 0;
+  const elapsed = elapsedMs > 0 ? `，耗时 ${(elapsedMs / 1000).toFixed(1)} 秒` : "";
+  const model = report.correctionModel ? `，模型 ${report.correctionModel}` : "";
+  if (report.correctionStatus === "completed") return `已完成${model}${elapsed}`;
+  if (report.correctionStatus === "partial") return `部分完成${model}${elapsed}`;
+  if (report.correctionStatus === "timeout") return `超时降级${elapsed}`;
+  if (report.correctionStatus === "skipped") return "未执行";
+  return report.correctionModel ? `已完成${model}${elapsed}` : `降级为实时译文${elapsed}`;
 }
 
 export const useSessionStore = defineStore("session", {
@@ -629,12 +738,22 @@ export const useSessionStore = defineStore("session", {
           originalTranslation: translation?.originalText,
           revisionReason: translation?.revisionReason
         };
-      }).filter((pair) => pair.source || pair.translation);
+      }).filter((pair) => pair.translation.trim());
     },
     currentPair(): TranscriptPair {
+      const active = this.transcriptPairs.find((pair) => pair.isActive);
+      const latest = this.transcriptPairs[this.transcriptPairs.length - 1];
+      if (active || latest) return active ?? latest;
+      if (this.sessionId) {
+        return {
+          time: formatPlaybackTime(this.playbackMs),
+          source: "",
+          translation: "",
+          state: "partial",
+          isActive: false
+        };
+      }
       return (
-        this.transcriptPairs.find((pair) => pair.isActive) ??
-        this.transcriptPairs[this.transcriptPairs.length - 1] ??
         samplePairs[0]
       );
     },
@@ -1257,9 +1376,10 @@ export const useSessionStore = defineStore("session", {
     syncPlayback(currentTimeSeconds: number) {
       if (this.status !== "running" || this.modeStates.quick !== "running") return;
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
+      const previousPlaybackMs = this.playbackMs;
       this.playbackMs = playbackMs;
       if (this.sessionId !== "local-test-video-fixture") {
-        this.updateActiveSegmentFromPlayback(playbackMs);
+        this.updateActiveSegmentFromPlayback(playbackMs, playbackMs + 500 < previousPlaybackMs);
         return;
       }
 
@@ -1275,14 +1395,35 @@ export const useSessionStore = defineStore("session", {
       this.syncPlayback(currentTimeSeconds);
     },
 
-    updateActiveSegmentFromPlayback(playbackMs?: number) {
+    updateActiveSegmentFromPlayback(playbackMs?: number, allowBackward = false) {
       if (this.sessionId === "local-test-video-fixture") return;
       const currentPlaybackMs = playbackMs ?? this.playbackMs;
-      this.activeSegmentId = activeSegmentForPlayback(
+      const candidateId = activeSegmentForPlayback(
         this.sourceSegments,
         this.translationSegments,
         currentPlaybackMs
       );
+      const translatedCandidateId = hasTranslationText(this.translationSegments, candidateId)
+        ? candidateId
+        : activeTranslatedSegmentForPlayback(
+            this.sourceSegments,
+            this.translationSegments,
+            currentPlaybackMs
+          );
+      const nextActiveId = translatedCandidateId ?? candidateId;
+      if (
+        shouldKeepCurrentActiveSegment(
+          this.sourceSegments,
+          this.translationSegments,
+          this.activeSegmentId,
+          nextActiveId,
+          currentPlaybackMs,
+          allowBackward
+        )
+      ) {
+        return;
+      }
+      this.activeSegmentId = nextActiveId;
     },
 
     isMediaElementCaptureSource(): boolean {
@@ -1692,7 +1833,10 @@ export const useSessionStore = defineStore("session", {
         segments: segs,
         finalRevisions,
         realtimeRevisions: finalRevisions,
-        correctionModel: null
+        correctionModel: null,
+        correctionStatus: "skipped",
+        correctionError: "本地演示报告未调用后端会后完整纠偏。",
+        correctionElapsedMs: 0
       };
       this.reportId = null;
       this.reportLoading = false;

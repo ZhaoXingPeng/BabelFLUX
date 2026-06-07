@@ -76,13 +76,46 @@ async def generate_session_report(
     report_id = f"{record.session_id}-report-{uuid4().hex[:8]}"
 
     llm_out: dict[str, Any] = {}
-    if client is not None and segments and settings.use_real_pipeline:
+    correction_status = "skipped"
+    correction_error = ""
+    correction_elapsed_ms = 0
+    if not segments:
+        correction_error = "本场无有效转写与译文，未执行会后完整纠偏。"
+    elif client is None or not settings.use_real_pipeline:
+        correction_error = "未启用真实模型，报告使用实时译文生成。"
+    else:
+        timeout_seconds = max(0.1, settings.final_correction_timeout_seconds)
+        started = time.perf_counter()
         try:
             llm_out = await asyncio.wait_for(
                 _call_correction_llm(record, segments, settings, client),
-                timeout=max(0.1, settings.final_correction_timeout_seconds),
+                timeout=timeout_seconds,
             )
+            correction_elapsed_ms = int((time.perf_counter() - started) * 1000)
+            expected_ids, returned_ids = _correction_segment_coverage(llm_out, segments)
+            if expected_ids.issubset(returned_ids):
+                correction_status = "completed"
+            elif returned_ids:
+                correction_status = "partial"
+                missing = len(expected_ids - returned_ids)
+                correction_error = f"会后完整纠偏返回缺少 {missing} 句，缺失句已使用实时译文。"
+            else:
+                correction_status = "fallback"
+                correction_error = "会后完整纠偏未返回可用句级终稿，报告使用实时译文生成。"
         except TimeoutError:
+            correction_elapsed_ms = int((time.perf_counter() - started) * 1000)
+            correction_status = "timeout"
+            correction_error = (
+                f"会后完整纠偏超过 {timeout_seconds:.0f} 秒未完成，报告使用实时译文生成。"
+            )
+            llm_out = {}
+        except Exception as exc:  # noqa: BLE001 - 报告仍需可下载，但必须暴露纠偏失败原因。
+            correction_elapsed_ms = int((time.perf_counter() - started) * 1000)
+            correction_status = "fallback"
+            correction_error = (
+                "会后完整纠偏调用失败，报告使用实时译文生成。"
+                f"原因：{type(exc).__name__}: {exc}"
+            )
             llm_out = {}
 
     # 防御：真实 LLM 偶尔会把 segments/revisions 返回成非 dict（如字符串列表）。
@@ -153,7 +186,7 @@ async def generate_session_report(
         "durationText": _fmt_ts(duration_ms),
         "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "summary": llm_out.get("summary", "") or _fallback_summary(segments),
-        "qualityNotes": llm_out.get("qualityNotes", ""),
+        "qualityNotes": llm_out.get("qualityNotes", "") or correction_error,
         "glossaryHits": llm_out.get("glossaryHits", []),
         "metrics": {
             "segments": len(report_segments),
@@ -165,6 +198,9 @@ async def generate_session_report(
         "finalRevisions": final_revisions,
         "realtimeRevisions": realtime_revisions,
         "correctionModel": settings.final_correction_model if llm_out else None,
+        "correctionStatus": correction_status,
+        "correctionError": correction_error,
+        "correctionElapsedMs": correction_elapsed_ms,
     }
     record.report = report
     return report
@@ -185,19 +221,31 @@ async def _call_correction_llm(
         for s in segments
     ]
     user = "整场句子如下：\n" + "\n".join(lines)
-    try:
-        result = await client.generate(
-            model=settings.final_correction_model,
-            endpoint="text",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            parameters={"result_format": "message", "temperature": 0.2},
-        )
-        return _loads_json(result.content) or {}
-    except Exception:  # noqa: BLE001 - 降级为纯实时译文报告
-        return {}
+    result = await client.generate(
+        model=settings.final_correction_model,
+        endpoint="text",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        parameters={"result_format": "message", "temperature": 0.2},
+    )
+    parsed = _loads_json(result.content)
+    if parsed is None:
+        raise ValueError("最终纠偏模型未返回可解析 JSON")
+    return parsed
+
+
+def _correction_segment_coverage(
+    llm_out: dict[str, Any], segments: list[Any]
+) -> tuple[set[str], set[str]]:
+    expected_ids = {str(seg.segment_id) for seg in segments if getattr(seg, "segment_id", None)}
+    returned_ids = {
+        str(item.get("id"))
+        for item in llm_out.get("segments", [])
+        if isinstance(item, dict) and item.get("id") and item.get("finalTranslation") is not None
+    }
+    return expected_ids, returned_ids
 
 
 def _fallback_summary(segments: list[Any]) -> str:
@@ -222,12 +270,32 @@ def _loads_json(content: str) -> dict[str, Any] | None:
 
 
 # ---------- 渲染 ----------
+def _correction_status_text(report: dict[str, Any]) -> str:
+    status = report.get("correctionStatus") or (
+        "completed" if report.get("correctionModel") else "fallback"
+    )
+    elapsed_ms = int(report.get("correctionElapsedMs") or 0)
+    elapsed = f"，耗时 {elapsed_ms / 1000:.1f} 秒" if elapsed_ms > 0 else ""
+    model = report.get("correctionModel")
+    model_text = f"，模型 {model}" if model else ""
+    if status == "completed":
+        return f"已完成{model_text}{elapsed}"
+    if status == "partial":
+        return f"部分完成{model_text}{elapsed}"
+    if status == "timeout":
+        return f"超时降级{elapsed}"
+    if status == "skipped":
+        return "未执行"
+    return f"降级为实时译文{elapsed}"
+
+
 def render_txt(report: dict[str, Any]) -> str:
     lines = [
         f"# {report['sessionName']}",
         f"领域：{report['domain']}  |  语言：{report['sourceLanguage']} -> {report['targetLanguage']}"  # noqa: E501
         f"  |  时长：{report['durationText']}",
         f"生成时间：{report['generatedAt']}",
+        f"全文纠偏：{_correction_status_text(report)}",
         "",
         "【摘要】",
         report.get("summary", ""),
@@ -242,6 +310,8 @@ def render_txt(report: dict[str, Any]) -> str:
         lines += ["", "【会后校正记录】"]
         for r in revisions:
             lines.append(f"- {r['beforeText']}  =>  {r['afterText']}  （{r['reason']}）")
+    elif report.get("correctionStatus") == "completed":
+        lines += ["", "【会后校正记录】", "全文纠偏已完成，本场未发现需要改写的译文。"]
     if report.get("qualityNotes"):
         lines += ["", "【质量说明】", report["qualityNotes"]]
     return "\n".join(lines)
@@ -266,6 +336,7 @@ def render_md(report: dict[str, Any]) -> str:
         f"- **句数**：{report['metrics']['segments']}  ｜ **实时修正**："
         f"{report['metrics']['realtimeRevisions']}  ｜ **会后修正**：{report['metrics']['finalRevisions']}",  # noqa: E501
         f"- **生成时间**：{report['generatedAt']}",
+        f"- **全文纠偏**：{_correction_status_text(report)}",
         "",
         "## 摘要",
         report.get("summary", ""),
@@ -287,6 +358,8 @@ def render_md(report: dict[str, Any]) -> str:
                 f"| {r['beforeText'].replace('|', chr(92) + '|')} | "
                 f"{r['afterText'].replace('|', chr(92) + '|')} | {r['reason']} |"
             )
+    elif report.get("correctionStatus") == "completed":
+        md += ["", "## 会后校正记录", "", "全文纠偏已完成，本场未发现需要改写的译文。"]
     if report.get("qualityNotes"):
         md += ["", "## 质量说明", report["qualityNotes"]]
     return "\n".join(md)

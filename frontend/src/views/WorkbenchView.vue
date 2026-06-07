@@ -60,6 +60,28 @@ const shouldShowSettings = computed(
   () => settingsOpen.value
 );
 
+const reportCorrectionStatus = computed(() => {
+  const current = report.value;
+  if (!current) return "fallback";
+  return current.correctionStatus ?? (current.correctionModel ? "completed" : "fallback");
+});
+
+const reportCorrectionHint = computed(() => {
+  const current = report.value;
+  if (!current) return "";
+  const parts: string[] = [];
+  if (current.correctionModel) parts.push(current.correctionModel);
+  if (current.correctionElapsedMs) {
+    parts.push(`${(current.correctionElapsedMs / 1000).toFixed(1)} 秒`);
+  }
+  const meta = parts.length ? `（${parts.join(" · ")}）` : "";
+  if (reportCorrectionStatus.value === "completed") return `全文纠偏已完成${meta}，完整内容已写入下载报告。`;
+  if (reportCorrectionStatus.value === "partial") return `全文纠偏部分完成${meta}，完整内容已写入下载报告。`;
+  if (reportCorrectionStatus.value === "timeout") return `全文纠偏超时，当前下载报告包含实时译文与降级说明。`;
+  if (reportCorrectionStatus.value === "skipped") return "全文纠偏未执行，当前下载报告包含实时译文说明。";
+  return "全文纠偏已降级，当前下载报告包含实时译文与降级说明。";
+});
+
 async function startQuickSession() {
   await sessionStore.startMode("quick");
   settingsOpen.value = modeStates.value.quick === "error";
@@ -163,7 +185,10 @@ function toggleFloatingCaptions() {
         正在生成会后完整纠偏报告…
       </p>
       <p v-else-if="reportError" class="report-summary report-summary-error">{{ reportError }}</p>
-      <p v-else-if="report?.summary" class="report-summary">{{ report.summary }}</p>
+      <p v-else-if="report" class="report-summary">
+        <template v-if="report.summary">{{ report.summary }}<br /></template>
+        {{ reportCorrectionHint }}
+      </p>
       <div class="report-actions">
         <button
           class="secondary-button compact-button"

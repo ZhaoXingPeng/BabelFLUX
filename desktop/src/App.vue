@@ -20,6 +20,10 @@ import { startNativeSystemAudioCapture } from "./nativeAudioCapture";
 import { registerUnlockShortcut, setOverlayLocked } from "./overlayWindow";
 
 const settings = ref<OverlaySettings>(loadOverlaySettings());
+// Older builds used the pin action as a click-through lock, which left users
+// unable to unpin or close the overlay. Normalize that persisted state on boot.
+settings.value.locked = false;
+settings.value.form.captionPinned = false;
 let currentWindow: ReturnType<typeof getCurrentWindow> | null = null;
 try {
   currentWindow = getCurrentWindow();
@@ -490,6 +494,7 @@ async function closeOverlayWindow() {
 
 function startWindowDrag(event: PointerEvent) {
   if (event.button !== 0) return;
+  if (settings.value.form.captionPinned || settings.value.locked) return;
   const target = event.target as HTMLElement | null;
   if (target?.closest("button, input, select, textarea, a")) return;
   if (!currentWindow) return;
@@ -543,13 +548,17 @@ async function listenForForwardedDeepLinks(handler: (params: LaunchParams) => vo
 watch(settings, (value) => saveOverlaySettings(value), { deep: true });
 watch(
   () => settings.value.form.captionPinned,
-  async (pinned) => {
-    settings.value.locked = pinned;
-    await setOverlayLocked(pinned);
+  async () => {
+    dragState = null;
+    settings.value.locked = false;
+    await setOverlayLocked(false);
   }
 );
 
 onMounted(async () => {
+  settings.value.locked = false;
+  settings.value.form.captionPinned = false;
+  await setOverlayLocked(false);
   cleanupDeepLink = await listenForDeepLinks(startFromLaunchParams);
   cleanupForwardedDeepLink = await listenForForwardedDeepLinks(startFromLaunchParams);
   cleanupShortcut = await registerUnlockShortcut(async () => {
@@ -573,6 +582,7 @@ onUnmounted(() => {
 <template>
   <main
     class="desktop-overlay-shell"
+    :class="{ pinned: settings.form.captionPinned }"
     :style="shellStyle"
     @pointerdown="startWindowDrag"
     @pointermove="moveWindowDrag"

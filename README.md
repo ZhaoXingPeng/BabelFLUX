@@ -1,3 +1,17 @@
+<div align="center">
+
+## Demo 视频
+
+<a href="https://www.bilibili.com/video/BV1cjEh6BEyu/">
+  <strong>点击观看 BabelFlux / 巴别流 同传演示视频</strong>
+</a>
+
+https://www.bilibili.com/video/BV1cjEh6BEyu/
+
+</div>
+
+---
+
 ![BabelFlux / 巴别流 同传仓库主图](docs/design/babelflux-logo.png)
 
 > BabelFlux / 巴别流 同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。

@@ -25,12 +25,29 @@ export const defaultOverlaySettings: OverlaySettings = {
   }
 };
 
+type StoredOverlaySettings = Partial<Omit<OverlaySettings, "form">> & {
+  form?: Partial<FloatingFormState>;
+};
+
+function normalizeOverlaySettings(settings?: StoredOverlaySettings): OverlaySettings {
+  return {
+    ...defaultOverlaySettings,
+    ...settings,
+    locked: false,
+    form: {
+      ...defaultOverlaySettings.form,
+      ...(settings?.form ?? {}),
+      captionPinned: false
+    }
+  };
+}
+
 export function loadOverlaySettings(): OverlaySettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...defaultOverlaySettings, ...JSON.parse(raw) } : defaultOverlaySettings;
+    return normalizeOverlaySettings(raw ? (JSON.parse(raw) as StoredOverlaySettings) : undefined);
   } catch {
-    return defaultOverlaySettings;
+    return normalizeOverlaySettings();
   }
 }
 

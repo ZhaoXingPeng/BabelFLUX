@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     dashscope_workspace_id: str | None = None
     dashscope_http_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     dashscope_websocket_base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1"
-    dashscope_request_timeout_seconds: float = 60.0
+    dashscope_request_timeout_seconds: float = 120.0
     dashscope_websocket_timeout_seconds: float = 60.0
     dashscope_tls_verify: bool = True
     dashscope_data_inspection: str | None = None
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     live_translate_asr_model: str = "qwen3-asr-flash-realtime"
     realtime_revision_model: str = "qwen-flash"
     final_correction_model: str = "qwen-plus"
-    final_correction_timeout_seconds: float = 8.0
+    final_correction_timeout_seconds: float = 120.0
     tts_model: str = "qwen3-tts-flash-realtime"
     tts_voice: str = "Cherry"
 

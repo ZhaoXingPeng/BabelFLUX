@@ -5,6 +5,7 @@ import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
+import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
 
 interface SocketHandlers {
@@ -189,6 +190,52 @@ const revisionEvent: ServerEvent = {
   }
 };
 
+const completedCorrectionReport: SessionReport = {
+  reportId: "report-1",
+  sessionId: "ui-session-1",
+  sessionName: "季度发布会同传",
+  domain: "商务",
+  sourceLanguage: "en",
+  targetLanguage: "zh",
+  durationMs: 4300,
+  durationText: "00:04",
+  generatedAt: "2026-06-07 21:30:00",
+  summary: "完整纠偏摘要",
+  qualityNotes: "译文整体准确，已统一术语。",
+  glossaryHits: [],
+  metrics: {
+    segments: 1,
+    realtimeRevisions: 1,
+    finalRevisions: 1,
+    durationText: "00:04"
+  },
+  segments: [
+    {
+      segmentId: "ui-zh-1",
+      startMs: 1200,
+      endMs: 4300,
+      timecode: "00:01",
+      sourceText: "Please review the quarterly launch plan.",
+      liveTranslation: "请审阅季度发布计划。",
+      finalTranslation: "请审阅季度发布方案。",
+      revisedRealtime: true
+    }
+  ],
+  finalRevisions: [
+    {
+      segmentId: "ui-zh-1",
+      beforeText: "请审阅季度发布计划。",
+      afterText: "请审阅季度发布方案。",
+      reason: "术语统一"
+    }
+  ],
+  realtimeRevisions: [],
+  correctionModel: "qwen-plus",
+  correctionStatus: "completed",
+  correctionError: "",
+  correctionElapsedMs: 39_000
+};
+
 describe("同传工作台 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
@@ -311,6 +358,26 @@ describe("同传工作台 mock 流程", () => {
     expect(store.report).not.toBeNull();
     expect(store.report?.durationText).toBe("02:16");
     expect(wrapper.text()).toContain("同传报告");
+  });
+
+  it("报告页只提示会后完整纠偏已写入下载报告", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    store.modeStates.quick = "report";
+    store.reportLoading = false;
+    store.reportError = null;
+    store.report = completedCorrectionReport;
+    await nextTick();
+
+    expect(wrapper.text()).toContain("全文纠偏已完成");
+    expect(wrapper.text()).toContain("完整内容已写入下载报告");
+    expect(wrapper.text()).not.toContain("译文整体准确，已统一术语。");
+    expect(wrapper.text()).not.toContain("术语统一");
+    expect(wrapper.text()).not.toContain("请审阅季度发布方案。");
   });
 
   it("手动结束时报告时长等于已收听进度，而非 00:00", async () => {
@@ -672,6 +739,143 @@ describe("同传工作台 mock 流程", () => {
     expect(store.transcriptPairs[0].state).toBe("partial");
     expect(store.transcriptPairs[0].source).toContain("I learned so much");
     expect(store.transcriptPairs[0].translation).toContain("现代艺术博物馆");
+  });
+
+  it("keeps realtime highlight from jumping back on regressed partial timing", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "realtime-highlight-session";
+    store.status = "running";
+    store.modeStates.quick = "running";
+    store.playbackMs = 12_000;
+    store.activeSegmentId = "seg-current";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-first",
+        text: "First sentence.",
+        language: "en",
+        startMs: 0,
+        endMs: 4_000,
+        status: "final"
+      },
+      {
+        segmentId: "seg-current",
+        text: "Current sentence.",
+        language: "en",
+        startMs: 10_000,
+        endMs: 13_000,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-first",
+        text: "第一句。",
+        language: "zh",
+        startMs: 0,
+        endMs: 4_000,
+        status: "final"
+      },
+      {
+        segmentId: "seg-current",
+        text: "当前句。",
+        language: "zh",
+        startMs: 10_000,
+        endMs: 13_000,
+        status: "partial"
+      }
+    ];
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-current",
+        text: "Current sentence is still streaming.",
+        language: "en",
+        startMs: 0,
+        endMs: 0,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-current");
+    expect(store.sourceSegments[1].startMs).toBe(10_000);
+
+    store.applyServerEvent({
+      type: "translation_segment",
+      segment: {
+        segmentId: "seg-wide-old",
+        text: "旧的异常长片段。",
+        language: "zh",
+        startMs: 0,
+        endMs: 20_000,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-current");
+  });
+
+  it("does not highlight or show source-only realtime segments as translation results", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "source-only-partial-session";
+    store.status = "running";
+    store.modeStates.quick = "running";
+    store.playbackMs = 34_000;
+    store.activeSegmentId = "seg-translated";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-translated",
+        text: "I realized that success is a moment, but what we,",
+        language: "en",
+        startMs: 34_000,
+        endMs: 36_000,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [
+      {
+        segmentId: "seg-translated",
+        text: "我意识到，成功只是一瞬间，",
+        language: "zh",
+        startMs: 34_000,
+        endMs: 36_000,
+        status: "partial"
+      }
+    ];
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-source-only",
+        text: "success",
+        language: "en",
+        startMs: 34_000,
+        endMs: 35_000,
+        status: "partial"
+      }
+    });
+
+    expect(store.activeSegmentId).toBe("seg-translated");
+    expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-source-only")).toBe(false);
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-final-source-only",
+        text: "I think it comes when we start to value the gift of a near win.",
+        language: "en",
+        startMs: 45_000,
+        endMs: 48_000,
+        status: "final"
+      }
+    });
+
+    expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-final-source-only")).toBe(false);
+    expect(store.transcriptPairs.every((pair) => pair.translation.trim())).toBe(true);
   });
 
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {

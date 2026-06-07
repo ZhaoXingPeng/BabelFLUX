@@ -170,6 +170,9 @@ export interface SessionReport {
   finalRevisions: SessionReportRevision[];
   realtimeRevisions: SessionReportRevision[];
   correctionModel: string | null;
+  correctionStatus?: "completed" | "partial" | "fallback" | "timeout" | "skipped";
+  correctionError?: string;
+  correctionElapsedMs?: number;
 }
 
 export async function getSessionReport(sessionId: string): Promise<SessionReport> {
