@@ -1,0 +1,152 @@
+/*
+ * 桌面悬浮窗样式。
+ *
+ * 关键：main.css 里 `:root { background: var(--paper) }`（暖白）特异性为 (0,1,0)，
+ * 单用 `html {…}`（0,0,1）覆盖不掉，会导致整个 WebView2 窗口被刷成不透明白底，
+ * 即使 tauri.conf 配了 `transparent:true` 也会看起来是「白色圆角框」。
+ * 这里用同级 `:root` + `!important` 强制透明，保证只有深色半透明字幕面板可见。
+ */
+:root,
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100vh;
+  background: transparent !important;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.desktop-overlay-shell {
+  width: min(100vw, 860px);
+  min-width: 0;
+  padding: 8px 10px;
+  background: transparent;
+  cursor: move;
+}
+
+.desktop-overlay-shell.pinned {
+  cursor: default;
+}
+
+.desktop-caption-drag-layer {
+  width: 100%;
+  min-width: 0;
+  cursor: move;
+}
+
+/* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。外层 main 负责拖动。 */
+.overlay-launcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(11, 12, 15, 0.82);
+  backdrop-filter: blur(12px);
+  padding: 8px 10px;
+  box-shadow: none;
+  cursor: move;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.overlay-launcher-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--stage-dst, #f4ede0);
+  font-weight: 850;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-source-select {
+  flex: 0 1 190px;
+  width: 190px;
+  min-width: 0;
+  max-width: 42vw;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(28, 30, 36, 0.96);
+  padding: 4px 10px;
+  color: var(--stage-dst, #f4ede0);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.overlay-source-select option {
+  background: #1c1e24;
+  color: #f4ede0;
+}
+
+.overlay-start {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid rgba(224, 164, 88, 0.6);
+  border-radius: 8px;
+  background: rgba(224, 164, 88, 0.92);
+  padding: 5px 16px;
+  color: #1b1205;
+  font-weight: 850;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.overlay-start:hover:not(:disabled) {
+  background: #e7b06a;
+}
+
+.overlay-start:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.overlay-close {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0;
+  color: var(--stage-src, #c8c0b3);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overlay-close:hover {
+  border-color: rgba(226, 118, 112, 0.42);
+  color: #f0aaa6;
+}
+
+.desktop-overlay-error {
+  margin-top: 8px;
+  border: 1px solid rgba(226, 118, 112, 0.35);
+  border-radius: 8px;
+  background: rgba(20, 22, 26, 0.94);
+  padding: 14px;
+  color: #f0aaa6;
+  font-size: 13px;
+}

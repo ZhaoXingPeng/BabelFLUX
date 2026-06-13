@@ -1,0 +1,45 @@
+# OS and editor
+.DS_Store
+.ipynb_checkpoints/
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+node_modules
+dist/
+dist
+build/
+build
+.next/
+.next
+
+# Logs and env
+*.log
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+!backend/.env.example
+
+# Generated artifacts
+coverage/
+tmp/
+temp/
+
+# Rust / Tauri
+target/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

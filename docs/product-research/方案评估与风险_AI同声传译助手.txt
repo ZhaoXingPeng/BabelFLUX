@@ -1,0 +1,100 @@
+AI 同声传译助手（BabelFlux / 巴别流 同传）- 方案评估与风险
+版本：v0.1
+日期：2026-06-05
+
+一、评估范围与结论
+本文件对现有方案文档（docs/product-research/用户痛点与落地方案、docs/architecture/技术栈选型）与已合并的前后端脚手架（backend/、frontend/）做一次一致性与风险自检，目的是在进入功能开发前暴露问题。
+
+总体结论：
+方案的产品判断与技术路线整体成立且有差异化，不需要推翻重做。但文档与代码之间存在若干“规格不一致”，若不先统一，进入编码后会直接产生联调 bug；同时有几处范围与可行性风险需要在排期上正视。下面按“先确认优势、再列问题”的顺序展开。
+
+二、方案优势（确认成立的判断）
+1. 问题定义抓得准：把“源语言字幕同步”而非“翻译准不准”作为第一性问题，并用 source_sync_state（可感知、可恢复、可解释）承载，是与平台自带字幕、讯飞同传等同质化产品的真正差异点。
+2. MVP 取舍务实：mock-first 保证 Demo 稳定；中文 TTS 后置；输入方式分 P0/P1/P2；这些都符合 3 天周期。
+3. 架构判断正确：后端统一模型网关（前端不接触密钥）、统一 WebSocket 事件协议、RevisionEvent/SessionReport 由应用层维护而非依赖模型原生输出。
+4. 差异化叙事清晰：跨平台、字幕同步可见、术语一致、可修正历史、最终报告，主线明确。
+5. 数据模型较完整：Session/TranscriptSegment/TranslationSegment/RevisionEvent/GlossaryItem/SessionReport 已成体系。
+
+三、规格一致性问题（需统一，否则编码必踩坑）
+这一类是本次评估最需要先处理的问题，因为它们会直接落到代码里。
+
+1. 字幕状态词不一致
+现象：
+痛点文档第十二节与 MVP 清单使用 temporary / final / revised；
+代码（backend/app/models/events.py、frontend/src/types/events.ts）使用 partial / final / revised。
+影响：
+文档说 temporary，代码说 partial，同一个概念两个词，后续接真实 ASR 时容易混淆。
+建议：
+统一为一套。推荐代码侧采用 partial（与多数 ASR 的 partial/final 习惯一致），并回改文档用词。
+
+2. source_sync_state 枚举不一致（最需要统一，这是招牌功能）
+现象：
+痛点文档第六/第十节定义 listening / syncing / lagging / missing / recovered（5 态）；
+代码定义 synced / lagging / missing / idle（4 态）。
+差异：
+synced 与 syncing 不同词；idle 与 listening 不同；代码缺少 recovered。
+影响：
+同步状态是产品核心卖点，前后端、文档三处定义不一致会导致状态机实现分歧。
+建议：
+以文档的 5 态为准（listening/syncing/lagging/missing/recovered），同时在代码内统一，并在前端为每个状态定义颜色（青绿/琥珀/红橙等）。
+
+3. 实时纠偏时间窗自相矛盾
+现象：
+架构文档第十七节写“最近 3 到 5 条字幕，或最近 10 到 20 秒窗口”；
+痛点文档第十三节写“最近 3 至 5 条，或最近 20 至 40 秒”。
+影响：
+这是要写进纠偏模块的参数，必须取唯一值。
+建议：
+统一为一个区间（例如“最近 3–5 条或最近 20–40 秒”，二选一并在两份文档对齐）。
+
+4. WebSocket 事件协议：文档与代码的范围/命名不一致
+现象：
+架构文档第九/第十六节的下行事件包含 tts_audio、session_report；
+后端当前仅发 session_started / source_sync_state / transcript_segment / translation_segment / revision_event / error；
+前端 ServerEvent 含 session_report，但不含 tts_audio。
+影响：
+属于“尚未实现”的可以接受，但三处各写各的，缺少单一契约。
+建议：
+见第七节——用一份事件 schema 作为单一事实源。
+
+四、范围与可行性风险
+1. MVP“必须包含”偏大
+痛点文档第七节把 术语表 CRUD、双语导出、历史修正、最终报告 都列为“必须”。对 3 天且前端经验有限的情况风险偏高。
+建议：把“必须”再分一层——“Demo 闭环必需”（会话/双语字幕/三态/mock 纠偏/同步状态）与“加分项”（术语表、导出、真实上传+ASR、最终报告）。
+
+2. 实时延迟预算未验证
+招牌是“实时”（指标：首字幕 1–2s、整句 final 2–5s），但真实链路是 浏览器→FastAPI→DashScope→回传，多一跳代理。mock 阶段无影响，接真实模型时这是最大技术风险。
+建议：尽早对千问实时音视频翻译路径做一次端到端延迟打点 spike，验证代理转发后的延迟预算是否达标。
+
+3. 最终报告依赖 LLM
+SessionReport 需要真实大模型（correction_llm，目前 disabled）。
+建议：Demo 阶段最终报告用 mock 数据生成，保证闭环可演示；真实接入作为加分项。
+
+五、产品定位风险
+叙事与交付物有落差：痛点文档第四节把理想形态描述为“接近浏览器插件/悬浮窗、跨平台弱绑定”，但 MVP 实际交付是“播放上传/演示视频的 Web 工作台”。评“作品完整度”时评委看到的是 Web 应用，不是插件。
+建议：在 README 与答辩中明确把 Web 应用定位为“最终插件形态的同传工作台原型”，让叙事与 Demo 对齐，避免被质疑“说的是插件、做的是网页”。
+
+六、需核实的外部依赖
+架构文档写死了具体模型 ID：qwen3.5-livetranslate-flash-realtime、qwen3-tts-flash-realtime。
+建议：接入前先用 DASHSCOPE_API_KEY 核实这些模型名/端点当前确实可用、可访问，避免按文档实现后发现模型不可用。
+
+七、根因与建议：事件模型单一事实源
+第三节的 1/2/4 与代码 review 中“事件模型未被用于校验”是同一根因：事件结构同时存在于 Python 模型、手写 mock dict、TS 接口三处，没有任何机制保证同步。
+建议（后续单独一个 PR）：
+1. 后端以 backend/app/models/events.py 的 Pydantic 模型为唯一来源，build_mock_events 改为用模型 .model_dump(by_alias=True) 产出，确保发出的事件一定符合模型。
+2. 由模型导出 JSON Schema 或脚本生成前端 TS 类型，避免前后端手写两份。
+3. 统一 partial/temporary 与 source_sync_state 枚举后，文档引用同一份 schema。
+
+八、已落地的修正（关联 PR）
+本轮 review 的若干高置信问题已通过以下 PR 提交（待合并）：
+1. chore: 项目品牌命名为 BabelFlux（巴别流 同传）。
+2. fix: 增强会话错误处理与前后端事件健壮性（前端创建会话失败不再卡死、单条坏帧不再中断字幕流、stop_session 协议对齐、本地 CORS、.env 清理，并补充后端测试）。
+注：第三节的“规格统一”和第七节的“事件单一事实源”尚未在代码中落地，建议作为下一个 PR。
+
+九、结论与下一步
+1. 方案不推翻，按上述统一规格与控制范围即可。
+2. 建议下一步优先级：
+   a. 统一 source_sync_state 枚举与字幕状态词（文档+代码同步），并落地事件单一事实源。
+   b. 对真实实时翻译链路做延迟 spike，验证“实时”指标。
+   c. 按“Demo 闭环必需”优先实现：会话创建、双语字幕、三态、mock 纠偏、同步状态。
+   d. 术语表、导出、上传+ASR、最终报告作为加分项分批接入。

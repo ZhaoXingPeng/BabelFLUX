@@ -1,0 +1,240 @@
+AI 小说转剧本工具 - YAML Schema 设计文档
+版本：v0.1
+日期：2026-06-05
+
+一、文档目标
+本文档定义小说转剧本工具输出的 YAML Schema 初稿，并说明主要字段的设计原因。该 Schema 目标是让 AI 生成的剧本初稿具备稳定结构、可编辑性、可校验性和可扩展性。
+
+二、设计原则
+1. 结构优先
+剧本初稿首先要能被程序解析、校验和编辑，因此字段结构比文学化排版更重要。
+
+2. 引用稳定
+角色、地点和场景使用 id 引用，避免同一角色出现多个称呼导致后续编辑困难。
+
+3. 支持长文本改编
+小说通常跨章节、跨地点、跨时间线，因此 Schema 需要支持 source、acts、scenes 和 content_blocks 多层结构。
+
+4. 保留改编决策
+剧本不是逐句转换，Schema 需要记录改编风格、删改原则、场景目标和冲突，便于作者理解 AI 为什么这样改。
+
+5. 便于二次生成
+每一场、每个内容块都有独立 id，后续可以局部重新生成，而不必重写整部剧本。
+
+三、顶层结构
+建议 YAML 顶层结构如下：
+
+project:
+  id: string
+  title: string
+  version: string
+  language: string
+  target_medium: string
+  created_at: string
+
+source:
+  type: string
+  chapter_range:
+    start: integer
+    end: integer
+  source_title: string
+  source_summary: string
+  adaptation_notes: string
+
+adaptation:
+  genre: string
+  tone: string
+  target_duration_minutes: integer
+  audience: string
+  narrative_pov: string
+  pacing: string
+
+characters:
+  - id: string
+    name: string
+    aliases:
+      - string
+    role: string
+    description: string
+    goal: string
+    relationships:
+      - character_id: string
+        relation: string
+    first_appearance:
+      chapter: integer
+      scene_id: string
+
+locations:
+  - id: string
+    name: string
+    type: string
+    description: string
+    visual_notes: string
+
+acts:
+  - id: string
+    title: string
+    summary: string
+    scenes:
+      - id: string
+        title: string
+        source_chapters:
+          - integer
+        scene_heading:
+          location_id: string
+          time_of_day: string
+          interior_exterior: string
+        purpose: string
+        conflict: string
+        characters:
+          - string
+        beats:
+          - string
+        content:
+          - id: string
+            type: string
+            character_id: string
+            text: string
+            parenthetical: string
+        transition: string
+
+validation_notes:
+  warnings:
+    - string
+  unresolved_items:
+    - string
+
+四、字段说明与设计原因
+1. project
+用于描述剧本项目基本信息。version 便于多次生成和人工修改后追踪版本；target_medium 用于区分影视剧本、短剧、广播剧等不同输出风格。
+
+2. source
+用于记录剧本来源。chapter_range 明确本次改编覆盖的章节范围；source_summary 保留原文概要，便于检查改编是否偏离原作。
+
+3. adaptation
+用于记录改编方向。genre、tone、pacing 会直接影响对白密度、场景长度和动作描写方式，因此应作为结构化字段保存。
+
+4. characters
+用于统一人物信息。id 是后续引用的稳定键；aliases 用于处理小说中昵称、称号、全名混用的问题；relationships 用于维持人物关系一致性。
+
+5. locations
+用于统一地点信息。location_id 可在多个场景复用，避免重复生成地点描述；visual_notes 便于后续转为分镜或美术设定。
+
+6. acts
+用于承载剧本的幕结构。即使短剧也可以使用 acts，只是数量较少。这样可以统一长短内容的组织方式。
+
+7. scenes
+用于表达剧本的基本单位。scene_heading 明确地点、时间和内外景；purpose 与 conflict 用于解释该场在叙事中的作用；beats 用于记录场景节拍。
+
+8. content
+用于存放场景正文。type 建议枚举为 action、dialogue、parenthetical、note。dialogue 类型需要 character_id；action 类型可不填 character_id。
+
+9. transition
+用于记录场景结尾转场方式，例如 CUT_TO、FADE_OUT、MATCH_CUT。MVP 可允许为空。
+
+10. validation_notes
+用于记录系统不确定项，例如人物身份不明、原文时间线冲突、地点未明确等。这样 AI 不需要假装所有问题都已解决。
+
+五、字段约束建议
+1. project.id 必填，建议格式为 script_加短随机字符串。
+2. characters.id 必须唯一，建议格式为 char_001。
+3. locations.id 必须唯一，建议格式为 loc_001。
+4. acts.id 必须唯一，建议格式为 act_001。
+5. scenes.id 必须唯一，建议格式为 scene_001。
+6. content.id 必须唯一，建议格式为 block_001。
+7. dialogue 类型的 content 必须填写 character_id，且必须引用 characters 中存在的 id。
+8. scene_heading.location_id 必须引用 locations 中存在的 id。
+9. source_chapters 至少包含一个章节编号。
+10. scenes.characters 中的每个角色 id 必须引用 characters 中存在的 id。
+
+六、内容块 type 枚举
+1. action
+用于描述可拍摄动作、环境变化、人物行为。
+
+2. dialogue
+用于角色对白，必须绑定 character_id。
+
+3. parenthetical
+用于对白中的简短表演提示，例如“低声”“停顿后”。
+
+4. note
+用于作者或系统备注，不应直接作为正式剧本正文。
+
+5. transition
+用于场景内或场景末尾的转场提示。若项目希望更严格，可只允许 scene.transition 字段承载转场。
+
+七、示例片段
+project:
+  id: script_001
+  title: 示例剧本
+  version: v0.1
+  language: zh-CN
+  target_medium: film
+  created_at: "2026-06-05"
+
+characters:
+  - id: char_001
+    name: 林晚
+    aliases:
+      - 小晚
+    role: protagonist
+    description: 年轻小说编辑，敏感但行动果断。
+    goal: 找出旧手稿背后的真相。
+    relationships: []
+    first_appearance:
+      chapter: 1
+      scene_id: scene_001
+
+locations:
+  - id: loc_001
+    name: 旧书店
+    type: interior
+    description: 狭窄、昏黄、堆满旧书。
+    visual_notes: 书架形成压迫感，柜台上有一盏绿色台灯。
+
+acts:
+  - id: act_001
+    title: 第一幕
+    summary: 林晚收到神秘手稿，开始调查。
+    scenes:
+      - id: scene_001
+        title: 旧书店来信
+        source_chapters:
+          - 1
+        scene_heading:
+          location_id: loc_001
+          time_of_day: night
+          interior_exterior: interior
+        purpose: 引出主线悬念。
+        conflict: 林晚想离开，店主坚持让她读完手稿。
+        characters:
+          - char_001
+        beats:
+          - 林晚进入旧书店避雨。
+          - 店主交给她一份没有署名的手稿。
+        content:
+          - id: block_001
+            type: action
+            character_id: ""
+            text: 雨水顺着林晚的风衣下摆滴落，她推开旧书店的玻璃门。
+            parenthetical: ""
+          - id: block_002
+            type: dialogue
+            character_id: char_001
+            text: 这份手稿是谁留下的？
+            parenthetical: 迟疑
+        transition: CUT_TO
+
+validation_notes:
+  warnings: []
+  unresolved_items: []
+
+八、后续扩展方向
+1. 增加 shots 字段，将剧本进一步拆分为分镜。
+2. 增加 props 字段，记录关键道具。
+3. 增加 timeline 字段，处理非线性叙事。
+4. 增加 source_mapping 字段，将剧本内容块映射回小说原文段落。
+5. 增加 revision_history 字段，记录人工编辑和 AI 局部重写历史。
+
+九、初步结论
+该 Schema 以“可校验、可编辑、可局部再生成”为核心目标。它不会强行模拟传统剧本排版，而是把剧本拆成稳定的数据结构，为后续预览、编辑、分镜、导出和多人协作打基础。

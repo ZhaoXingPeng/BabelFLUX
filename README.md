@@ -1,0 +1,202 @@
+<div align="center">
+
+## DEMO
+
+<iframe
+  src="https://player.bilibili.com/player.html?bvid=BV1cjEh6BEyu&page=1&autoplay=0"
+  width="960"
+  height="540"
+  scrolling="no"
+  border="0"
+  frameborder="no"
+  framespacing="0"
+  allowfullscreen="true"
+></iframe>
+
+<a href="https://www.bilibili.com/video/BV1cjEh6BEyu/">
+  <strong>点击观看 BabelFlux / 巴别流 同传演示视频</strong>
+</a>
+
+https://www.bilibili.com/video/BV1cjEh6BEyu/
+
+</div>
+
+---
+
+![BabelFlux / 巴别流 同传仓库主图](docs/design/babelflux-logo.png)
+
+> BabelFlux / 巴别流 同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
+>
+> 黑客松选题二的完整实现：BabelFlux Web 工作台 + 巴别流 同传桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
+
+---
+
+## 核心特性
+
+| 能力 | 说明 |
+| --- | --- |
+| 实时识别 + 翻译 | 单条 WebSocket 接入 `qwen3.5-livetranslate-flash-realtime`，服务端 VAD 自动断句，边说边出双语字幕 |
+| 实时纠偏（在线） | 传译进行中由 `qwen-flash` 跨句复核，结合后文修正前句的术语/数字/否定/一词多义错误，前端琥珀高亮即时展示 |
+| 完整纠偏（会后） | 结束后 `qwen-plus` 通读全场做全局校正、统一术语、生成摘要；六大领域差异化 PROMPT |
+| 多源输入 | 在线直链、本地视频/音频上传、麦克风、系统音频、屏幕/窗口、浏览器标签页，以及演示模式 |
+| 桌面悬浮窗 | Tauri 透明置顶字幕；可自选音源独立采集，或接管 Web 会话；任意位置拖拽、可调透明度与字号 |
+| 会话报告导出 | 双语终稿 + 校正记录 + 摘要，支持 TXT / SRT / Markdown / JSON 四种格式下载 |
+| 术语表 / 热词 | 术语经引擎 corpus 注入，纠偏与报告全程优先遵循 |
+| 可降级 | 模型不可用时优雅降级（mock 事件流 / 纯实时译文报告），保证演示链路始终可跑 |
+
+---
+
+## 系统架构
+
+三端 + 一条真实模型链路，所有服务可同机部署（演示环境为 Windows 单机）。
+
+![BabelFlux / 巴别流 同传系统架构](docs/design/babelflux-architecture.png)
+
+### 模型链路与选型
+
+> 均经标准端点 `https://dashscope.aliyuncs.com`（HTTP `/api/v1`、WS `/api-ws/v1`）实测连通。
+
+| 环节 | 模型（`.env` 变量） |
+| --- | --- |
+| 实时识别 + 翻译 | `qwen3.5-livetranslate-flash-realtime`（`LIVE_TRANSLATE_MODEL`） |
+| 内嵌 ASR | `qwen3-asr-flash-realtime`（`LIVE_TRANSLATE_ASR_MODEL`） |
+| 实时纠偏（低延迟） | `qwen-flash`（`REALTIME_REVISION_MODEL`） |
+| 会后完整纠偏（强模型） | `qwen-plus`（`FINAL_CORRECTION_MODEL`，可换 `qwen3-max` / `deepseek-v4-pro`） |
+| 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，voice `Cherry`） |
+
+---
+
+## 输入源
+
+后端按会话 `inputMode` 选择音频入口（`backend/app/api/ws.py`）：
+
+| 模式 | 入口 |
+| --- | --- |
+| `url` | 后端用 ffmpeg 从在线直链解码并喂入 |
+| `upload_video` / `upload_audio` | 解码先前上传到 `/sessions/{id}/media` 的本地文件 |
+| `microphone` / `system_audio` / `screen_window` / `browser_audio` | 前端 / 桌面用 AudioWorklet 采集为 16k 单声道 PCM，经 WS 二进制帧推送 |
+| `demo` | `DEMO_MEDIA_PATH` 指向的样例媒体，或 mock 事件流 |
+
+> 采集类音源在浏览器/WebView 内用 `AudioContext({sampleRate:16000})` 原生重采样到 16k，分帧约 100ms 推流；前端在后端管线就绪（收到首个 `source_sync_state`）后才开始推送，避免早期帧丢弃。
+
+---
+
+## 本地启动
+
+> 依赖：Python 3.11+、Node 20.19+、Rust stable（桌面端）、WebView2（Windows）。`ffmpeg` 可放在系统 PATH，也可放在仓库同级 `tools/` 目录，后端会自动递归查找 `ffmpeg.exe` / `ffprobe.exe`。
+
+### 后端
+
+```bash
+cp .env.example .env        # 默认 MODEL_PROVIDER=mock，可零配额跑通全链路
+./scripts/dev-backend.sh    # uvicorn app.main:app  ->  http://localhost:8000
+```
+
+接入**真实模型**：在 `.env` 设 `MODEL_PROVIDER=real` 并填 `DASHSCOPE_API_KEY`。如使用百炼业务空间，再填 `DASHSCOPE_WORKSPACE_ID`。其余模型名已给默认值，通常无需改动。
+
+### 前端
+
+```bash
+cp frontend/.env.example frontend/.env
+./scripts/dev-frontend.sh   # vite  ->  http://localhost:5173
+```
+
+### 桌面悬浮窗
+
+```bash
+cd desktop && npm install
+npm run tauri dev           # 开发态 devUrl 5175；npm run tauri build 出安装包
+```
+
+默认服务地址：
+
+```text
+REST       http://localhost:8000/api
+WebSocket  ws://localhost:8000/api/ws/sessions/{session_id}
+Health     http://localhost:8000/api/health
+```
+
+---
+
+## WebSocket 事件协议
+
+路由 `/api/ws/sessions/{sessionId}`，字段统一 camelCase。
+
+- 客户端到服务端：`start_session`（可携带语种/领域/源覆盖项）、二进制 PCM 帧、`audio_end` / `audio_chunk_end`、`stop_session`、`pause_session` / `resume_session`
+- 服务端到客户端：`session_started`、`source_sync_state`、`transcript_segment`、`translation_segment`、`revision_event`、`session_report{reportId}`、`error`
+
+DashScope 网关也以 REST 暴露，便于单独调试：
+
+```text
+POST /api/models/llm/generate
+POST /api/models/asr/transcriptions
+POST /api/models/tts/speech
+```
+
+---
+
+## 目录结构
+
+```text
+.
+├── backend/                 FastAPI 后端服务
+│   ├── app/api/             health / sessions / model_gateway / ws
+│   ├── app/services/        media / pipeline / revision / report / handoff / providers
+│   ├── scripts/             真实模型链路与在线直链联调脚本
+│   └── tests/               后端单元与契约测试
+├── frontend/                Vue 3 + Vite + Pinia Web 工作台
+│   ├── public/fixtures/     默认测试视频与字幕素材
+│   └── src/                 组件、状态、输入源、字幕视图与报告下载
+├── desktop/                 Tauri v2 桌面悬浮字幕客户端
+├── docs/                    架构、设计、后端联调与项目计划文档
+├── scripts/                 本地启动与检查脚本
+├── tools/                   可选本地工具目录（如 ffmpeg）
+├── .env.example             后端环境变量模板
+└── providers.example.yaml   模型供应商配置示例
+```
+
+---
+
+## 技术栈
+
+| 层级 | 技术 | 为什么选择 |
+| --- | --- | --- |
+| Web 工作台 | Vue 3、Vite、TypeScript、Pinia | 实时同传界面状态多、更新频繁，Vue 组合式 API + Pinia 适合把会话、字幕、报告、输入源拆成清晰状态；Vite 保证开发调试快，TypeScript 降低 WebSocket 事件和报告结构的维护成本。 |
+| 字幕交互 | GSAP、CSS、@vueuse/core、@floating-ui/vue、video.js | 字幕流需要平滑入场、纠偏高亮、悬浮定位和媒体预览控制；这些库覆盖动画、浏览器能力封装、浮层定位与播放器能力，不需要为常见交互重新造轮子。 |
+| 后端服务 | FastAPI、uvicorn、asyncio、pydantic、httpx、websockets、aiofiles、sqlmodel | 同传链路核心是长连接事件流和异步媒体处理，FastAPI + asyncio 能同时处理 WebSocket、模型流、文件解码和报告生成；pydantic 让前后端事件契约保持稳定。 |
+| 媒体解码 | ffmpeg | 上传视频、音频和在线直链格式不可控，ffmpeg 是跨格式解码最稳妥的基础设施，可统一转为 16k 单声道 PCM 喂给实时模型。 |
+| 桌面悬浮窗 | Tauri v2、Vue 3、deep-link、global-shortcut、store 插件 | 桌面端需要轻量、透明置顶、快捷键和 Web 会话接管；Tauri 复用前端技术栈，同时比传统 Electron 包体更小，适合演示和后续分发。 |
+| 模型链路 | 阿里云百炼 DashScope、LiveTranslate、qwen-flash、qwen-plus、qwen-tts | LiveTranslate 提供实时 ASR + 翻译低延迟链路；qwen-flash 用于在线跨句纠偏，qwen-plus 负责会后全局校正，按任务强度拆模型可以兼顾速度、成本和最终质量。 |
+
+这套技术栈的核心取舍是：前端优先保证字幕阅读体验和媒体控制一致性，后端优先保证异步流式链路稳定，模型层则把“实时可用”和“会后更准”拆成两级能力，避免用单一模型承担所有延迟与质量目标。
+
+---
+
+## 测试与验证
+
+```bash
+cd backend && python -m pytest        # 后端单元/契约测试
+cd frontend && npx vue-tsc --noEmit    # 前端类型检查
+cd desktop && npx vue-tsc --noEmit     # 桌面类型检查
+```
+
+链路联调脚本（`backend/scripts/`，需 `PYTHONPATH=. python3`）：
+
+- `prove_realtime_revision.py` —— 用真实模型证明实时纠偏「该纠必纠、干净零误纠」
+- `e2e_online_url.py <直链> [秒]` —— 在线直链端到端：识别/翻译/纠偏/报告 + 四格式下载
+
+实测要点：在线视频/音频直链全链路通过，实时纠偏在真实内容触发（如量词「几位」纠正为「几件」），会后报告四格式 200 可下载。完整实现与联调结论见 [`docs/backend/实现总览与联调备份_AI同声传译.md`](docs/backend/实现总览与联调备份_AI同声传译.md)。
+
+---
+
+## 开发规范
+
+- 主分支 `main` 始终保持可运行 / 可审阅；新功能走独立分支 + PR，单个 PR 只做一件事。
+- PR 描述包含：功能描述、实现思路、测试方式。
+- 分支命名 `feat/* | fix/* | docs/* | chore/*`；提交信息 `feat: … / fix: … / docs: … / chore: …`。
+
+---
+
+## 当前状态
+
+BabelFlux / 巴别流 同传已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告导出齐备。桌面端 deep-link 当前兼容保留 `lingosync://` 协议，便于已注册客户端平滑升级。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放与历史会话管理。
