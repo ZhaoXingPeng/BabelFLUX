@@ -47,6 +47,10 @@ SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
+FINAL_DISPLAY_MAX_SEGMENT_MS = 9500
+SOURCE_CONTINUATION_MAX_GAP_MS = 700
+SOURCE_CONTINUATION_MAX_DURATION_MS = 12_000
+SOURCE_CONTINUATION_MAX_CHARS = 180
 TTS_OUTPUT_SAMPLE_RATE = 24000
 
 ENGLISH_SHORT_SOURCE_WORDS = {
@@ -89,6 +93,27 @@ ENGLISH_SHORT_SOURCE_WORDS = {
     "yes",
     "you",
 }
+
+SOURCE_CONTINUATION_PREFIXES = (
+    "and ",
+    "as ",
+    "because ",
+    "but ",
+    "for ",
+    "if ",
+    "in fact",
+    "of ",
+    "or ",
+    "so ",
+    "that ",
+    "then ",
+    "to ",
+    "which ",
+    "while ",
+    "who ",
+    "whose ",
+    "with ",
+)
 
 
 class InterpretationPipeline:
@@ -387,7 +412,10 @@ class InterpretationPipeline:
             or seg.source_text
             or seg.translation_text
             or seg.response_id is not None
-            or not self._looks_like_source_continuation(text)
+            or not (
+                self._looks_like_source_continuation(text)
+                or self._should_merge_source_root_with_previous(seg, item_id, text, final=True)
+            )
         ):
             return seg
 
@@ -439,6 +467,49 @@ class InterpretationPipeline:
             return True
         match = re.search(r"[A-Za-z]", value)
         return bool(match and value[match.start()].islower())
+
+    def _should_merge_source_root_with_previous(
+        self, seg: SegmentRecord, item_id: str | None, text: str, *, final: bool
+    ) -> bool:
+        if (
+            not final
+            or not item_id
+            or seg.source_text
+            or seg.translation_text
+            or seg.response_id is not None
+        ):
+            return False
+        previous = self._previous_source_root(seg)
+        if previous is None:
+            return False
+        if previous.response_id is not None or previous.translation_text:
+            return False
+        previous_text = self._raw_source_by_root.get(previous.segment_id, previous.source_text)
+        if not previous_text.strip() or self._has_terminal_source_punctuation(previous_text):
+            return False
+        gap_ms = seg.start_ms - previous.end_ms
+        if gap_ms > SOURCE_CONTINUATION_MAX_GAP_MS:
+            return False
+        merged_duration = max(seg.end_ms, self.elapsed_ms, seg.start_ms) - previous.start_ms
+        if merged_duration > SOURCE_CONTINUATION_MAX_DURATION_MS:
+            return False
+        merged_text = f"{previous_text} {text}".strip()
+        if len(merged_text) > SOURCE_CONTINUATION_MAX_CHARS:
+            return False
+        return self._starts_with_source_continuation_cue(text)
+
+    def _starts_with_source_continuation_cue(self, text: str) -> bool:
+        value = re.sub(r"\s+", " ", text.strip()).lower().lstrip("\"'“‘")
+        if not value:
+            return False
+        if value[0] in {"'", "\u2019"}:
+            return True
+        if self._starts_with_lowercase_alpha(value):
+            return True
+        return value.startswith(SOURCE_CONTINUATION_PREFIXES)
+
+    def _has_terminal_source_punctuation(self, text: str) -> bool:
+        return text.rstrip().endswith((".", "!", "?", "。", "！", "？"))
 
     def _merge_source_partial(self, previous: str, text: str) -> str:
         current = text.strip()
@@ -635,7 +706,11 @@ class InterpretationPipeline:
         if not text:
             return
         seg = self._source_segment(item_id)
-        seg = self._merge_source_continuation_if_needed(seg, item_id, text)
+        should_merge_root = self._should_merge_source_root_with_previous(
+            seg, item_id, text, final=final
+        )
+        if self._looks_like_source_continuation(text) or should_merge_root:
+            seg = self._merge_source_continuation_if_needed(seg, item_id, text)
         previous = self._raw_source_by_root.get(seg.segment_id, "")
         display_text = (
             self._collapse_source_repetition(text.strip())
@@ -748,6 +823,13 @@ class InterpretationPipeline:
             return
 
         current_count = self._display_split_count(source_parts, translation_parts)
+        if source_final or translation_final:
+            display_span_ms = root.end_ms - root.start_ms
+            current_count = max(
+                current_count,
+                (display_span_ms + FINAL_DISPLAY_MAX_SEGMENT_MS - 1)
+                // FINAL_DISPLAY_MAX_SEGMENT_MS,
+            )
         source_parts = self._fit_source_parts_to_count(source_parts, current_count)
         translation_parts = self._fit_target_parts_to_count(translation_parts, current_count)
         count = max(previous_count, current_count)
@@ -863,11 +945,15 @@ class InterpretationPipeline:
         if not value:
             return []
 
-        sentence_parts = self._split_source_sentences(value)
-        parts: list[str] = []
-        for sentence in sentence_parts:
-            for part in self._split_source_clauses(sentence):
-                parts.extend(self._split_long_source_part(part))
+        parts = self._split_source_sentences(value)
+        target_count = self._target_source_part_count(value)
+        while len(parts) < target_count or any(
+            self._word_count(part) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT for part in parts
+        ):
+            split_index, replacement = self._best_source_split(parts)
+            if split_index < 0:
+                break
+            parts = [*parts[:split_index], *replacement, *parts[split_index + 1 :]]
         return parts
 
     def _split_source_sentences(self, text: str) -> list[str]:
@@ -883,19 +969,8 @@ class InterpretationPipeline:
         return [part for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part]
 
     def _split_source_clauses(self, text: str) -> list[str]:
-        clauses = self._split_by_regex(text, r"(?<=[,;:])\s+")
-        groups: list[str] = []
-        current = ""
-        for clause in clauses:
-            candidate = f"{current} {clause}".strip() if current else clause
-            if current and self._word_count(candidate) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
-                groups.append(current)
-                current = clause
-            else:
-                current = candidate
-        if current:
-            groups.append(current)
-        return groups
+        first, second = self._find_natural_source_split(text)
+        return [first, second] if first and second else [text]
 
     def _split_long_source_part(self, text: str) -> list[str]:
         words = text.split()
@@ -905,6 +980,61 @@ class InterpretationPipeline:
             " ".join(words[index : index + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT])
             for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
         ]
+
+    def _target_source_part_count(self, text: str) -> int:
+        return max(
+            1,
+            (self._word_count(text) + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT - 1)
+            // SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT,
+        )
+
+    def _best_source_split(self, parts: list[str]) -> tuple[int, list[str]]:
+        best_index = -1
+        best_replacement: list[str] = []
+        best_score: tuple[int, int] | None = None
+        for index, part in enumerate(parts):
+            replacement = self._split_source_clauses(part)
+            if len(replacement) < 2:
+                replacement = self._split_long_source_part(part)
+            if len(replacement) < 2:
+                continue
+            score = (self._word_count(part), len(part))
+            if best_score is None or score > best_score:
+                best_index = index
+                best_replacement = replacement
+                best_score = score
+        return best_index, best_replacement
+
+    def _find_natural_source_split(self, text: str) -> tuple[str, str]:
+        words = text.split()
+        if len(words) <= SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
+            return "", ""
+
+        candidates: list[tuple[int, int, int, int]] = []
+        pattern = re.compile(
+            r"[,;:]\s+|\s+(?:and|as|because|but|for|if|or|so|then|to|which|while|who|whose|with)\s+",
+            re.IGNORECASE,
+        )
+        for match in pattern.finditer(text):
+            split_at = match.end() if match.group(0).strip() in {",", ";", ":"} else match.start()
+            first = text[:split_at].strip()
+            second = text[split_at:].strip()
+            first_words = self._word_count(first)
+            second_words = self._word_count(second)
+            if first_words < 3 or second_words < 3:
+                continue
+            boundary = match.group(0).strip().lower()
+            priority = 2 if boundary in {",", ";", ":"} else 1
+            overflow_penalty = max(0, first_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT) + max(
+                0, second_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT
+            )
+            balance_penalty = abs(first_words - second_words)
+            candidates.append((priority, -overflow_penalty, -balance_penalty, split_at))
+
+        if not candidates:
+            return "", ""
+        split_at = max(candidates)[3]
+        return text[:split_at].strip(), text[split_at:].strip()
 
     def _split_target_display(self, text: str) -> list[str]:
         value = re.sub(r"\s+", "", text.strip())
@@ -958,10 +1088,60 @@ class InterpretationPipeline:
         return min(max(source_count, translation_count), bounded_by_parts)
 
     def _fit_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        parts = self._expand_source_parts_to_count(parts, count)
         return self._fit_parts_to_count(parts, count, separator=" ")
 
     def _fit_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        parts = self._expand_target_parts_to_count(parts, count)
         return self._fit_parts_to_count(parts, count, separator="")
+
+    def _expand_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        expanded = [part for part in parts if part]
+        while len(expanded) < count:
+            index = max(
+                range(len(expanded)),
+                key=lambda item: self._word_count(expanded[item]),
+                default=-1,
+            )
+            if index < 0:
+                break
+            replacement = self._split_source_clauses(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_long_source_part(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_source_part_evenly(expanded[index])
+            if len(replacement) < 2:
+                break
+            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
+        return expanded
+
+    def _expand_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        expanded = [part for part in parts if part]
+        while len(expanded) < count:
+            index = max(range(len(expanded)), key=lambda item: len(expanded[item]), default=-1)
+            if index < 0:
+                break
+            replacement = self._split_long_target_part(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_target_part_evenly(expanded[index])
+            if len(replacement) < 2:
+                break
+            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
+        return expanded
+
+    def _split_source_part_evenly(self, text: str) -> list[str]:
+        words = text.split()
+        if len(words) < 2:
+            return [text]
+        midpoint = len(words) // 2
+        return [" ".join(words[:midpoint]), " ".join(words[midpoint:])]
+
+    def _split_target_part_evenly(self, text: str) -> list[str]:
+        value = text.strip()
+        if len(value) < 2:
+            return [text]
+        midpoint = len(value) // 2
+        return [value[:midpoint], value[midpoint:]]
 
     def _fit_parts_to_count(self, parts: list[str], count: int, *, separator: str) -> list[str]:
         if count <= 0 or len(parts) <= count:
@@ -1038,6 +1218,17 @@ class InterpretationPipeline:
         estimated_segment_ms = FINAL_DISPLAY_SEGMENT_MS if final else PARTIAL_DISPLAY_SEGMENT_MS
         end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * estimated_segment_ms)
         span = max(1, end_ms - root.start_ms)
+        if final and span > FINAL_DISPLAY_MAX_SEGMENT_MS:
+            bounds: list[tuple[int, int]] = []
+            for index in range(count):
+                start = root.start_ms + int(span * index / count)
+                end = (
+                    end_ms
+                    if index == count - 1
+                    else root.start_ms + int(span * (index + 1) / count)
+                )
+                bounds.append((start, max(end, start)))
+            return bounds
         weights = [
             max(self._word_count(source_parts[index]), len(translation_parts[index]) // 3, 1)
             for index in range(count)

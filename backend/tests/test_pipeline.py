@@ -476,6 +476,7 @@ async def test_long_live_translate_turn_is_split_into_readable_display_segments(
         return None
 
     pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._begin_segment("itemA")
     pipeline.elapsed_ms = 34_000
 
     await pipeline._on_source(
@@ -502,6 +503,76 @@ async def test_long_live_translate_turn_is_split_into_readable_display_segments(
         later.start_ms - earlier.start_ms < 10_000
         for earlier, later in zip(record.segments, record.segments[1:], strict=False)
     )
+
+
+@pytest.mark.asyncio
+async def test_semantic_source_continuations_merge_before_translation_binding() -> None:
+    record = SessionRecord(
+        session_id="semantic-continuation", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline.elapsed_ms = 10_000
+    pipeline._begin_segment("itemA")
+    await pipeline._on_source(
+        "She told me that a few didn't quite meet her own mark",
+        "itemA",
+        final=True,
+    )
+
+    pipeline.elapsed_ms = 10_300
+    pipeline._begin_segment("itemB")
+    await pipeline._on_source(
+        "For what she wanted them to be one of the works,",
+        "itemB",
+        final=True,
+    )
+
+    pipeline.elapsed_ms = 10_600
+    pipeline._begin_segment("itemC")
+    await pipeline._on_source("In fact so didn't meet her mark,", "itemC", final=True)
+
+    assert len(record.segments) == 1
+    assert record.segments[0].source_text == (
+        "She told me that a few didn't quite meet her own mark "
+        "For what she wanted them to be one of the works, "
+        "In fact so didn't meet her mark,"
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_display_bounds_split_long_time_span_under_ten_seconds() -> None:
+    record = SessionRecord(session_id="long-span", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._begin_segment("itemA")
+    pipeline.elapsed_ms = 34_000
+
+    await pipeline._on_source(
+        (
+            "I realized that success is a moment, but what we're always celebrating is "
+            "creativity and mastery. But this is the thing: what gets us to convert "
+            "success into mastery?"
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "我意识到成功只是一瞬间，而我们真正持续庆祝的是创造力与精进。但关键在于，是什么让我们将一时的成功转化为持久的精进？",
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) >= 4
+    assert all(segment.end_ms - segment.start_ms <= 10_000 for segment in record.segments)
+    assert all(segment.source_text for segment in record.segments)
+    assert all(segment.translation_text for segment in record.segments)
 
 
 @pytest.mark.asyncio

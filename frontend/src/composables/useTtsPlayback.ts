@@ -8,7 +8,7 @@ export interface TtsAudioSegment {
   sampleRate: number;
 }
 
-const DEFAULT_VOLUME = 0.9;
+const DEFAULT_VOLUME = 0.5;
 
 function base64ToBytes(value: string): Uint8Array {
   const binary = window.atob(value);

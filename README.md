@@ -64,6 +64,14 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 | 会后完整纠偏（强模型） | `qwen-plus`（`FINAL_CORRECTION_MODEL`，可换 `qwen3-max` / `deepseek-v4-pro`） |
 | 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，LiveTranslate voice `Tina`） |
 
+### 界面 03 模型策略
+
+同传设置里的 `03 模型策略` 当前是产品层选项，会随会话 payload 记录为 `modelProfile`，但尚未接入真实 provider 路由或自动换模。真实管线目前按后端环境变量固定选择：实时链路使用 `qwen3.5-livetranslate-flash-realtime` + `qwen3-asr-flash-realtime`；在线纠偏使用 `qwen-flash` 的近 4 句窗口；会后完整纠偏使用 `qwen-plus`。`智能默认`、`快速低延迟`、`高准确`、`成本优先`、`指定供应商` 仍是 UI 占位，`gummy` / `fun_asr` 等 provider 回退未实现。
+
+### 专业领域
+
+专业领域选项已进入后端会话并影响纠偏 prompt。当前支持 `通用`、`技术`、`商务`、`教育`、`医疗`、`法律`、`自定义术语表`；不同领域会改变实时纠偏和会后纠偏的关注点，例如技术领域优先保留 API、框架、模型、论文名，商务领域更谨慎处理公司、职位、货币和指标，医疗/法律领域会保守处理剂量、症状、条款、责任类表述。领域选项不会替换实时识别翻译模型，主要作用在 `backend/app/services/revision.py` 的纠偏提示词与术语处理。
+
 ---
 
 ## 输入源
@@ -110,9 +118,11 @@ npm run tauri dev           # 开发态 devUrl 5175；npm run tauri build 出安
 
 ## 桌面投送
 
-Web 工作台右下角的显示器按钮会生成一次性 handoff token，并通过 `lingosync://` deep link 唤起桌面悬浮窗。handoff 模式只接管 Web 会话的字幕事件，本次会话的音源、结束动作和报告下载仍由 Web 端负责；standalone 模式则在桌面端自选系统音频、屏幕/窗口、标签页或麦克风并独立创建会话。
+Web 工作台右下角的显示器按钮会生成一次性 handoff token（300s TTL），并通过 `lingosync://` deep link 唤起桌面悬浮窗。handoff 模式只接管 Web 会话的字幕事件，本次会话的音源、结束动作和报告下载仍由 Web 端负责；standalone 模式则在桌面端自选系统音频、屏幕/窗口、标签页或麦克风并独立创建会话。
 
 handoff 会话结束后，请回到 Web 工作台等待报告生成，并在报告区下载 TXT / SRT / Markdown / JSON。桌面 standalone 会话结束后，悬浮窗会等待后端报告完成并提供下载按钮。
+
+切换网页上下文时不会复用旧上下文：handoff token 绑定到当前 Web session，桌面端兑换后订阅同一 session 的 WebSocket。用户从中文视频页切到英文视频页、或切换音源来源时，应结束当前会话并重新投送；否则桌面悬浮窗仍显示旧 session 的字幕事件。
 
 默认服务地址：
 

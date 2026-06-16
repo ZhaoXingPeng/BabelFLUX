@@ -662,7 +662,7 @@ export const useSessionStore = defineStore("session", {
     desktopDownloadPromptOpen: false,
     desktopHandoffUrl: null,
     ttsMuted: false,
-    ttsVolume: 0.9,
+    ttsVolume: 0.5,
     ttsErrorMessage: null,
     modeStates: {
       quick: "setup",
@@ -1116,11 +1116,6 @@ export const useSessionStore = defineStore("session", {
 
     handleMediaPlaybackPlayed() {
       if (this.activeMode !== "quick") return;
-
-      if (this.isMediaElementCaptureSource() && !captureStarted) {
-        mediaElement?.pause();
-        return;
-      }
 
       if (this.modeStates.quick === "paused") this.resumeMode("quick");
     },

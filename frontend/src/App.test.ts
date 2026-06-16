@@ -322,6 +322,8 @@ describe("同传工作台 mock 流程", () => {
     const audio = wrapper.find('[data-testid="fixture-audio"]');
     expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
     expect(audio.exists()).toBe(false);
+    await video.trigger("loadedmetadata");
+    expect((video.element as HTMLVideoElement).volume).toBe(0.5);
     expect(mockRuntime.createSession).not.toHaveBeenCalled();
     expect(store.modeStates.quick).toBe("running");
     expect(store.sessionId).toBe("local-test-video-fixture");
@@ -652,7 +654,9 @@ describe("同传工作台 mock 流程", () => {
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
+    const pauseSpy = vi.spyOn(video.element as HTMLVideoElement, "pause").mockImplementation(() => undefined);
     await video.trigger("play");
+    expect(pauseSpy).not.toHaveBeenCalled();
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
@@ -686,6 +690,7 @@ describe("同传工作台 mock 流程", () => {
     store.quickForm.source = "url";
     store.quickInput.url = "https://example.com/demo.mp4";
     store.quickForm.ttsEnabled = true;
+    expect(store.ttsVolume).toBe(0.5);
 
     await store.startMode("quick");
     await flushPromises();

@@ -49,10 +49,12 @@ const emit = defineEmits<{
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
 const suppressPauseEvent = ref(false);
+let pausingFromWatch = false;
 let lastPauseIntentAt = 0;
 let lastPlayIntentAt = 0;
 
 const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
+const DEFAULT_MEDIA_VOLUME = 0.5;
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -90,6 +92,7 @@ function pauseMedia(silent = false) {
   const element = currentMediaElement();
   if (element && !element.paused) {
     suppressPauseEvent.value = silent;
+    pausingFromWatch = silent;
     element.pause();
   }
 }
@@ -101,6 +104,11 @@ function emitPlaybackTime(event: Event) {
 function handlePause(event: Event) {
   if (suppressPauseEvent.value) {
     suppressPauseEvent.value = false;
+    pausingFromWatch = false;
+    return;
+  }
+  if (pausingFromWatch) {
+    pausingFromWatch = false;
     return;
   }
   const element = event.target as HTMLMediaElement;
@@ -123,6 +131,8 @@ function handleTtsVolumeInput(event: Event) {
 }
 
 function handleLoadedMetadata() {
+  const element = currentMediaElement();
+  if (element) element.volume = DEFAULT_MEDIA_VOLUME;
   void emitMediaElement();
   void tryAutoPlay();
 }
