@@ -1,4 +1,6 @@
-from fastapi.testclient import TestClient
+import httpx
+import pytest
+from asgi_test_client import asgi_http_client
 
 from app.api.model_gateway import get_dashscope_client
 from app.core.config import settings
@@ -39,56 +41,59 @@ class FakeDashScopeClient:
         )
 
 
-def _session_token(client: TestClient) -> str:
-    response = client.post("/api/sessions", json={"inputMode": "demo"})
+async def _session_token(client: httpx.AsyncClient) -> str:
+    response = await client.post("/api/sessions", json={"inputMode": "demo"})
     assert response.status_code == 200
     return str(response.json()["wsToken"])
 
 
-def test_model_gateway_auth_rejects_missing_token_when_required() -> None:
+@pytest.mark.asyncio
+async def test_model_gateway_auth_rejects_missing_token_when_required() -> None:
     original = settings.require_model_gateway_auth
     object.__setattr__(settings, "require_model_gateway_auth", True)
     try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/models/strategy/plan",
-            json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
-        )
+        async with asgi_http_client() as client:
+            response = await client.post(
+                "/api/models/strategy/plan",
+                json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
+            )
     finally:
         object.__setattr__(settings, "require_model_gateway_auth", original)
 
     assert response.status_code == 401
 
 
-def test_model_gateway_auth_accepts_session_token_when_required() -> None:
+@pytest.mark.asyncio
+async def test_model_gateway_auth_accepts_session_token_when_required() -> None:
     original = settings.require_model_gateway_auth
     object.__setattr__(settings, "require_model_gateway_auth", True)
     try:
-        client = TestClient(app)
-        token = _session_token(client)
-        response = client.post(
-            "/api/models/strategy/plan",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
-        )
+        async with asgi_http_client() as client:
+            token = await _session_token(client)
+            response = await client.post(
+                "/api/models/strategy/plan",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
+            )
     finally:
         object.__setattr__(settings, "require_model_gateway_auth", original)
 
     assert response.status_code == 200
 
 
-def test_generate_llm_api_response() -> None:
+@pytest.mark.asyncio
+async def test_generate_llm_api_response() -> None:
     app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient()
     try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/models/llm/generate",
-            json={
-                "model": "qwen3.7-plus",
-                "endpoint": "multimodal",
-                "messages": [{"role": "user", "content": "ping"}],
-            },
-        )
+        async with asgi_http_client() as client:
+            response = await client.post(
+                "/api/models/llm/generate",
+                json={
+                    "model": "qwen3.7-plus",
+                    "endpoint": "multimodal",
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+            )
     finally:
         app.dependency_overrides.clear()
 
@@ -97,15 +102,16 @@ def test_generate_llm_api_response() -> None:
     assert response.json()["requestId"] == "req-1"
 
 
-def test_transcribe_audio_api_response() -> None:
+@pytest.mark.asyncio
+async def test_transcribe_audio_api_response() -> None:
     app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient()
     try:
-        client = TestClient(app)
-        response = client.post(
-            "/api/models/asr/transcriptions",
-            files={"audio": ("audio.pcm", b"pcm", "application/octet-stream")},
-            data={"audioFormat": "pcm", "sampleRate": "16000"},
-        )
+        async with asgi_http_client() as client:
+            response = await client.post(
+                "/api/models/asr/transcriptions",
+                files={"audio": ("audio.pcm", b"pcm", "application/octet-stream")},
+                data={"audioFormat": "pcm", "sampleRate": "16000"},
+            )
     finally:
         app.dependency_overrides.clear()
 
@@ -115,11 +121,12 @@ def test_transcribe_audio_api_response() -> None:
     assert payload["segments"][0]["isFinal"] is True
 
 
-def test_synthesize_speech_api_response() -> None:
+@pytest.mark.asyncio
+async def test_synthesize_speech_api_response() -> None:
     app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient()
     try:
-        client = TestClient(app)
-        response = client.post("/api/models/tts/speech", json={"text": "测试成功。"})
+        async with asgi_http_client() as client:
+            response = await client.post("/api/models/tts/speech", json={"text": "测试成功。"})
     finally:
         app.dependency_overrides.clear()
 
@@ -130,24 +137,25 @@ def test_synthesize_speech_api_response() -> None:
     assert payload["sampleRate"] == 24000
 
 
-def test_strategy_plan_api_response() -> None:
-    client = TestClient(app)
-    response = client.post(
-        "/api/models/strategy/plan",
-        json={
-            "sourceLanguage": "en",
-            "targetLanguage": "zh",
-            "domain": "技术",
-            "ttsEnabled": True,
-            "glossary": [
-                {
-                    "sourceTerm": "near win",
-                    "targetTerm": "差一点成功",
-                    "priority": 10,
-                }
-            ],
-        },
-    )
+@pytest.mark.asyncio
+async def test_strategy_plan_api_response() -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/models/strategy/plan",
+            json={
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+                "domain": "技术",
+                "ttsEnabled": True,
+                "glossary": [
+                    {
+                        "sourceTerm": "near win",
+                        "targetTerm": "差一点成功",
+                        "priority": 10,
+                    }
+                ],
+            },
+        )
 
     assert response.status_code == 200
     payload = response.json()
