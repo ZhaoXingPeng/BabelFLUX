@@ -627,6 +627,35 @@ async def test_cjk_sliding_window_partials_are_overlap_merged() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cjk_anchored_partials_replace_unstable_tail() -> None:
+    record = SessionRecord(session_id="cjk-anchor", source_language="zh", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    for text in [
+        "大家好，我的职业是一名英语辅导老师。我的学",
+        "辅导老师。我的学生主要是中学生。",
+        "前段时间一节课上，一个学生。",
+        "上，一个学生告诉我他们年。",
+        "他们学生告诉我，他们年级有一位同学常。",
+        "年级有一位同学长期睡眠不足。",
+        "为了长期睡眠不足，为了做作业，每晚只能睡四五个小时。",
+    ]:
+        await pipeline._on_source(text, "itemA", final=False)
+
+    combined_source = "".join(segment.source_text for segment in record.segments)
+    assert "辅导老师。我的学。辅导老师" not in combined_source
+    assert "上，一个学生。上，一个学生" not in combined_source
+    assert "他们年。他们学生" not in combined_source
+    assert "长期睡眠不足。为了长期睡眠不足" not in combined_source
+    assert "大家好，我的职业是一名英语辅导老师。我的学生主要是中学生。" in combined_source
+    assert "每晚只能睡四五个小时" in combined_source
+
+
+@pytest.mark.asyncio
 async def test_chinese_source_to_english_translation_keeps_spaces_and_splits_readably() -> None:
     record = SessionRecord(session_id="zh-to-en", source_language="zh", target_language="en")
 

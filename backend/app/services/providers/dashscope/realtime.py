@@ -9,7 +9,8 @@ NormalizedEvent，供 services/pipeline.py 编排为统一的前后端 WS 事件
 - input_audio_buffer.append 推送 base64 PCM；服务端 VAD 自动断句。
 - 源识别：conversation.item.input_audio_transcription.text（流式 stash）
           → .completed（整句最终原文）。
-- 翻译：response.text.text（全量快照，随上下文自我精修）→ response.text.done（最终译文）。
+- 翻译：response.text.text / response.audio_transcript.text（全量或增量快照）
+          → response.text.done / response.audio_transcript.done（最终译文）。
 - 音频模态：response.audio.delta（base64 PCM）。
 - VAD：input_audio_buffer.speech_started / speech_stopped。
 """
@@ -35,7 +36,7 @@ from .errors import DashScopeAPIError
 class NormalizedEvent:
     kind: str  # session_ready | speech_started | speech_stopped | source_partial
     #              | source_final | response_created | translation_partial
-    #              | translation_final | audio | response_done | error
+    #              | translation_final | audio | response_done | session_finished | error
     text: str = ""
     audio: bytes = b""
     item_id: str | None = None
@@ -67,6 +68,7 @@ class LiveTranslateSession:
         self.glossary = glossary or {}
         self._connect = websocket_connect or websockets.connect
         self._ws: Any = None
+        self._audio_transcript_by_response: dict[str, str] = {}
 
     # ---- 连接生命周期 ----
     async def connect(self) -> None:
@@ -111,6 +113,11 @@ class LiveTranslateSession:
         """补尾静音，促使 VAD 终结最后一句。"""
         await self.feed(b"\x00" * int(sample_rate * 2 * seconds))
 
+    async def finish(self) -> None:
+        """通知服务端音频输入已结束，确保最后一段被处理。"""
+        if self._ws is not None:
+            await self._send({"type": "session.finish"})
+
     # ---- 输出（归一化事件流）----
     async def events(self) -> AsyncIterator[NormalizedEvent]:
         if self._ws is None:
@@ -129,6 +136,8 @@ class LiveTranslateSession:
         response_id = message.get("response_id")
         if etype in ("session.created", "session.updated"):
             return NormalizedEvent(kind="session_ready", raw=message)
+        if etype == "session.finished":
+            return NormalizedEvent(kind="session_finished", raw=message)
         if etype == "input_audio_buffer.speech_started":
             return NormalizedEvent(kind="speech_started", item_id=item_id, raw=message)
         if etype == "input_audio_buffer.speech_stopped":
@@ -158,7 +167,16 @@ class LiveTranslateSession:
                 response_id=response_id,
                 raw=message,
             )
+        if etype in ("response.audio_transcript.text", "response.audio_transcript.delta"):
+            return NormalizedEvent(
+                kind="translation_partial",
+                text=self._normalize_audio_transcript_partial(message, response_id),
+                response_id=response_id,
+                raw=message,
+            )
         if etype in ("response.text.done", "response.audio_transcript.done"):
+            if response_id:
+                self._audio_transcript_by_response.pop(response_id, None)
             return NormalizedEvent(
                 kind="translation_final",
                 text=message.get("text") or message.get("transcript") or "",
@@ -181,6 +199,35 @@ class LiveTranslateSession:
                 kind="error", text=str(error.get("message") or "LiveTranslate 错误"), raw=message
             )
         return None
+
+    def _normalize_audio_transcript_partial(
+        self, message: dict[str, Any], response_id: str | None
+    ) -> str:
+        value = message.get("text") or message.get("delta") or message.get("transcript") or ""
+        if not value:
+            return ""
+        if message.get("type") == "response.audio_transcript.delta":
+            return self._merge_audio_transcript_partial(response_id, str(value), delta=True)
+        return self._merge_audio_transcript_partial(response_id, str(value), delta=False)
+
+    def _merge_audio_transcript_partial(
+        self, response_id: str | None, value: str, *, delta: bool
+    ) -> str:
+        if not response_id:
+            return value
+        previous = self._audio_transcript_by_response.get(response_id, "")
+        if not previous:
+            merged = value
+        elif delta:
+            merged = f"{previous}{value}"
+        elif value.startswith(previous) or previous in value:
+            merged = value
+        elif previous.endswith(value) or value in previous:
+            merged = previous
+        else:
+            merged = f"{previous}{value}"
+        self._audio_transcript_by_response[response_id] = merged
+        return merged
 
     # ---- 内部工具 ----
     def _session_update_event(self) -> dict[str, Any]:

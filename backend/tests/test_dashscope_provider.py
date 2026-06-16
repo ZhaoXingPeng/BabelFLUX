@@ -78,6 +78,91 @@ def test_live_translate_qwen35_tts_uses_supported_voice_for_legacy_cherry() -> N
     assert event["session"]["voice"] == "Tina"
 
 
+def test_live_translate_normalizes_audio_transcript_partials() -> None:
+    session = LiveTranslateSession(DashScopeConfig(api_key="test-key"), model="m")
+
+    first = session._normalize(
+        {
+            "type": "response.audio_transcript.delta",
+            "response_id": "resp-1",
+            "delta": "你好",
+        }
+    )
+    second = session._normalize(
+        {
+            "type": "response.audio_transcript.delta",
+            "response_id": "resp-1",
+            "delta": "世界",
+        }
+    )
+    final = session._normalize(
+        {
+            "type": "response.audio_transcript.done",
+            "response_id": "resp-1",
+            "transcript": "你好世界",
+        }
+    )
+    finished = session._normalize({"type": "session.finished"})
+
+    assert first is not None
+    assert first.kind == "translation_partial"
+    assert first.text == "你好"
+    assert second is not None
+    assert second.kind == "translation_partial"
+    assert second.text == "你好世界"
+    assert final is not None
+    assert final.kind == "translation_final"
+    assert final.text == "你好世界"
+    assert finished is not None
+    assert finished.kind == "session_finished"
+
+
+def test_live_translate_audio_transcript_text_partials_replace_snapshots() -> None:
+    session = LiveTranslateSession(DashScopeConfig(api_key="test-key"), model="m")
+
+    first = session._normalize(
+        {
+            "type": "response.audio_transcript.text",
+            "response_id": "resp-1",
+            "text": "你好",
+        }
+    )
+    second = session._normalize(
+        {
+            "type": "response.audio_transcript.text",
+            "response_id": "resp-1",
+            "text": "你好世界",
+        }
+    )
+
+    assert first is not None
+    assert first.text == "你好"
+    assert second is not None
+    assert second.text == "你好世界"
+
+
+@pytest.mark.asyncio
+async def test_live_translate_finish_sends_session_finish_event() -> None:
+    websocket = FakeWebSocket([])
+
+    async def connect(_url: str, **_kwargs: Any) -> FakeWebSocket:
+        return websocket
+
+    session = LiveTranslateSession(
+        DashScopeConfig(api_key="test-key", workspace_id="workspace-1"),
+        model="qwen3.5-livetranslate-flash-realtime",
+        websocket_connect=connect,
+    )
+
+    await session.connect()
+    await session.finish()
+
+    sent_events = [
+        json.loads(message)["type"] for message in websocket.sent if isinstance(message, str)
+    ]
+    assert sent_events == ["session.update", "session.finish"]
+
+
 @pytest.mark.asyncio
 async def test_llm_multimodal_request_and_response_are_normalized() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:

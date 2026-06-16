@@ -165,6 +165,7 @@ class InterpretationPipeline:
         self._client_sent_audio_ms: int | None = None
         self._last_media_progress_sync_at = 0.0
         self._review_tasks: set[asyncio.Task[Any]] = set()
+        self._session_finished = False
         self._glossary_phrases = {
             str(t.get("sourceTerm")): str(t.get("targetTerm"))
             for t in record.glossary
@@ -206,6 +207,7 @@ class InterpretationPipeline:
                     await session.feed(frame)
                     await self._maybe_emit_media_progress()
             await session.feed_silence(2.5)
+            await session.finish()
             await self._drain(consumer)
         finally:
             consumer.cancel()
@@ -242,6 +244,7 @@ class InterpretationPipeline:
                 await session.feed(frame)
                 await self._emit_client_clock_sync_if_due()
             await session.feed_silence(2.0)
+            await session.finish()
             await self._drain(consumer)
         finally:
             consumer.cancel()
@@ -297,6 +300,8 @@ class InterpretationPipeline:
         grace = STOP_DRAIN_GRACE_S if self._stopped else DRAIN_GRACE_S
         deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
+            if self._session_finished:
+                break
             if consumer.done():
                 break
             if time.monotonic() - self._last_event_at > grace:
@@ -307,6 +312,8 @@ class InterpretationPipeline:
         kind = ev.kind
         if kind == "speech_started":
             self._begin_segment(ev.item_id)
+        elif kind == "session_finished":
+            self._session_finished = True
         elif kind == "source_partial":
             await self._on_source(ev.text, ev.item_id, final=False)
         elif kind == "source_final":
@@ -601,7 +608,40 @@ class InterpretationPipeline:
         for size in range(max_size, 2, -1):
             if prior_value[-size:] == current_value[:size]:
                 return f"{prior_value}{current_value[size:]}"
+        anchored = self._merge_cjk_anchored_prefix(prior_value, current_value)
+        if anchored is not None:
+            return anchored
         return None
+
+    def _merge_cjk_anchored_prefix(self, prior_value: str, current_value: str) -> str | None:
+        # CJK ASR partials often slide back to a phrase that appeared shortly before the
+        # previous tail, e.g. "...辅导老师。我的学" -> "辅导老师。我的学生...".
+        # Treat the repeated phrase as an anchor and replace the unstable tail. The anchor
+        # may be a few characters into the new window when ASR prepends a noisy fragment.
+        search_start = max(0, len(prior_value) - 96)
+        tail = prior_value[search_start:]
+        best_score: tuple[int, int] | None = None
+        best_result: str | None = None
+        max_current_start = min(12, max(0, len(current_value) - 4))
+        for current_start in range(max_current_start + 1):
+            max_size = min(len(current_value) - current_start, 36)
+            for size in range(max_size, 3, -1):
+                anchor = current_value[current_start : current_start + size]
+                if not self._contains_cjk(anchor):
+                    continue
+                index = tail.rfind(anchor)
+                if index < 0:
+                    continue
+                absolute_index = search_start + index
+                replaced_tail = prior_value[absolute_index:]
+                if len(replaced_tail) < 2 or len(replaced_tail) > 96:
+                    continue
+                score = (size, -current_start)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_result = f"{prior_value[:absolute_index]}{current_value[current_start:]}"
+                break
+        return best_result
 
     def _looks_unstable_source_word(self, word: str) -> bool:
         value = self._normalize_source_word(word)
@@ -692,18 +732,46 @@ class InterpretationPipeline:
         if len(clauses) < 2:
             return text
 
+        bodies = [clause.rstrip("，,、；;。！？!?").strip() for clause in clauses]
+        normalized_bodies = [re.sub(r"[\s，,、；;。！？!?]", "", body) for body in bodies]
+        skip_indices: set[int] = set()
+        for index, body in enumerate(normalized_bodies):
+            if not body:
+                continue
+            nearby_start = max(0, index - 3)
+            nearby_end = min(len(normalized_bodies), index + 4)
+            for other_index in range(nearby_start, nearby_end):
+                if other_index == index:
+                    continue
+                other = normalized_bodies[other_index]
+                if not other or len(other) <= len(body):
+                    continue
+                if len(body) >= 3 and body in other:
+                    skip_indices.add(index)
+                    break
+                if len(body) == 2 and (other.startswith(body) or other.endswith(body)):
+                    skip_indices.add(index)
+                    break
+
         kept: list[str] = []
-        for clause in clauses:
-            body = clause.rstrip("，,、；;。！？!?").strip()
+        for index, clause in enumerate(clauses):
+            if index in skip_indices:
+                continue
+            body = bodies[index]
             if not body:
                 kept.append(clause)
                 continue
+            normalized_body = normalized_bodies[index]
             if kept:
                 previous = kept[-1]
-                previous_body = previous.rstrip("，,、；;。！？!?").strip()
-                if len(body) >= 4 and body in previous_body:
+                previous_body = re.sub(
+                    r"[\s，,、；;。！？!?]",
+                    "",
+                    previous.rstrip("，,、；;。！？!?").strip(),
+                )
+                if len(normalized_body) >= 4 and normalized_body in previous_body:
                     continue
-                if len(previous_body) >= 4 and previous_body in body:
+                if len(previous_body) >= 4 and previous_body in normalized_body:
                     kept[-1] = clause
                     continue
             kept.append(clause)
