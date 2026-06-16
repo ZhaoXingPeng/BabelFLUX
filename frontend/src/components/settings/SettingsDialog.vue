@@ -104,7 +104,7 @@ const emit = defineEmits<{
           <label class="settings-toggle">
             <span>
               <span class="form-label">语音播报</span>
-              <small class="field-hint">开启后播报中文译文，默认关闭</small>
+              <small class="field-hint">开启后播报目标译文，默认关闭</small>
             </span>
             <input v-model="form.ttsEnabled" type="checkbox" />
           </label>

@@ -25,7 +25,7 @@ const translationFollow = useStickyFollow(translationList, () => signature.value
     <section>
       <header>
         <span>Source</span>
-        <strong>源文 EN</strong>
+        <strong>源文</strong>
       </header>
       <div ref="sourceList" class="stream-list">
         <article
@@ -45,7 +45,7 @@ const translationFollow = useStickyFollow(translationList, () => signature.value
     <section>
       <header>
         <span>Translation</span>
-        <strong>译文 ZH</strong>
+        <strong>译文</strong>
       </header>
       <div ref="translationList" class="stream-list">
         <article

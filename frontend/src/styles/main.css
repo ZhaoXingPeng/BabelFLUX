@@ -1254,17 +1254,17 @@ a:focus-visible {
   z-index: 20;
   display: grid;
   place-items: center;
-  padding: 24px;
-  overflow: auto;
+  padding: 12px;
+  overflow: hidden;
   background: rgba(15, 17, 20, 0.72);
   -webkit-backdrop-filter: blur(10px) saturate(120%);
   backdrop-filter: blur(10px) saturate(120%);
 }
 
 .settings-dialog {
-  width: min(100%, 720px);
-  max-height: calc(100dvh - 48px);
-  overflow: auto;
+  width: min(100%, 760px);
+  max-height: calc(100dvh - 24px);
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--paper);
@@ -1278,7 +1278,7 @@ a:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 20px;
+  padding: 12px 16px;
 }
 
 .settings-header {
@@ -1289,7 +1289,7 @@ a:focus-visible {
 .report-panel h2 {
   margin: 4px 0 0;
   font-family: "Fraunces", "Source Han Serif SC", serif;
-  font-size: 26px;
+  font-size: 23px;
   font-weight: 600;
 }
 
@@ -1333,9 +1333,9 @@ a:focus-visible {
 
 .settings-group {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   background: var(--paper);
-  padding: 18px 20px;
+  padding: 12px 16px;
 }
 
 .settings-group-title {
@@ -1347,7 +1347,7 @@ a:focus-visible {
 .settings-group-title span {
   color: var(--accent);
   font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 800;
 }
 
@@ -1371,7 +1371,7 @@ a:focus-visible {
   border: 1px solid rgba(47, 93, 80, 0.2);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.62);
-  padding: 12px 14px;
+  padding: 9px 12px;
 }
 
 .settings-toggle input {
@@ -1383,10 +1383,10 @@ a:focus-visible {
 .field-hint,
 .source-select > small {
   display: block;
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .language-pair-field {
@@ -1399,11 +1399,11 @@ a:focus-visible {
 .language-pair-field label {
   position: relative;
   display: grid;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid rgba(47, 93, 80, 0.26);
   border-radius: 8px;
   background: #fffdf8;
-  padding: 12px;
+  padding: 8px 10px;
 }
 
 .language-pair-field label span {
@@ -1415,13 +1415,13 @@ a:focus-visible {
 }
 
 .language-pair-field .select-trigger {
-  min-height: 34px;
+  min-height: 30px;
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0 50px 0 0;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
 }
 
@@ -1449,7 +1449,7 @@ a:focus-visible {
   display: inline-grid;
   place-items: center;
   width: 42px;
-  min-height: 42px;
+  min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f7f1e8;
@@ -1474,7 +1474,7 @@ a:focus-visible {
 
 .form-label {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   color: var(--ink-soft);
   font-size: 12px;
   font-weight: 800;
@@ -1482,11 +1482,11 @@ a:focus-visible {
 
 .form-control {
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   border: 1px solid #d7d0c2;
   border-radius: 8px;
   background: #fffdf8;
-  padding: 8px 10px;
+  padding: 6px 10px;
   color: var(--ink);
 }
 
@@ -1506,11 +1506,11 @@ a:focus-visible {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   border: 1px solid #d7d0c2;
   border-radius: 8px;
   background: #fffdf8;
-  padding: 8px 10px;
+  padding: 6px 10px;
   color: var(--ink);
   text-align: left;
   transition:
@@ -1749,7 +1749,7 @@ a:focus-visible {
   border: 1px solid #d7d0c2;
   border-radius: 8px;
   background: #fffdf8;
-  padding: 10px;
+  padding: 8px;
 }
 
 .file-picker {
@@ -1799,11 +1799,11 @@ a:focus-visible {
 
 .source-prep-status {
   display: block;
-  margin-top: 7px;
+  margin-top: 5px;
   overflow-wrap: anywhere;
   color: var(--ink-soft);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 
 .source-prep-status.ready {

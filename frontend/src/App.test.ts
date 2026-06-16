@@ -41,7 +41,11 @@ const mockRuntime = vi.hoisted(() => ({
   handlersBySession: new Map<string, SocketHandlers>(),
   sockets: [] as Array<{ sessionId: string; socket: MockSocket }>,
   audioSources: [] as MockAudioSource[],
-  audioGain: { gain: { value: 0 }, connect: vi.fn() }
+  audioGain: { gain: { value: 0 }, connect: vi.fn() },
+  speechSpeak: vi.fn(),
+  speechCancel: vi.fn(),
+  speechPause: vi.fn(),
+  speechResume: vi.fn()
 }));
 
 vi.mock("./api/client", () => ({
@@ -273,6 +277,24 @@ describe("同传工作台 mock 流程", () => {
       close = vi.fn().mockResolvedValue(undefined);
     }
     vi.stubGlobal("AudioContext", MockAudioContext);
+    class MockSpeechSynthesisUtterance {
+      text: string;
+      lang = "";
+      volume = 1;
+      rate = 1;
+      onerror: (() => void) | null = null;
+
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+    vi.stubGlobal("SpeechSynthesisUtterance", MockSpeechSynthesisUtterance);
+    vi.stubGlobal("speechSynthesis", {
+      speak: mockRuntime.speechSpeak,
+      cancel: mockRuntime.speechCancel,
+      pause: mockRuntime.speechPause,
+      resume: mockRuntime.speechResume
+    });
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
@@ -287,6 +309,10 @@ describe("同传工作台 mock 流程", () => {
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.routerPush.mockReset();
     mockRuntime.routerReplace.mockReset();
+    mockRuntime.speechSpeak.mockReset();
+    mockRuntime.speechCancel.mockReset();
+    mockRuntime.speechPause.mockReset();
+    mockRuntime.speechResume.mockReset();
     mockRuntime.handlersBySession.clear();
     mockRuntime.sockets = [];
     mockRuntime.createSessionSocket.mockImplementation(buildSocket);
@@ -306,14 +332,14 @@ describe("同传工作台 mock 流程", () => {
     vi.unstubAllGlobals();
   });
 
-  it("默认测试视频字幕滞后音频约 1.5s 逐句产出，并在约 13s 触发上下文纠偏", async () => {
+  it("默认测试视频字幕滞后音频约 1s 逐句产出，并在约 23s 触发上下文纠偏", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
     expect(wrapper.find('[data-testid="fixture-video"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="fixture-audio"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("同声传译设置");
-    expect(wrapper.text()).toContain("video.mp4 / voice.m4a / en.txt / ch.txt 已就绪");
+    expect(wrapper.text()).toContain("video.mp4 / voice.mp3 / source.zh.txt / target.en.txt 已就绪");
 
     await findButton(wrapper, "开始同传").trigger("click");
     await flushPromises();
@@ -339,26 +365,25 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(store.activeSegmentId).toBe("fixture-seg-001");
-    expect(wrapper.text()).toContain("我感到很幸运");
-    expect(wrapper.text()).not.toContain("她告诉我");
+    expect(wrapper.text()).toContain("我今天就是要站出来");
+    expect(wrapper.text()).not.toContain("大家好");
 
-    // 播放到 14s：第 10 秒那句滞后产出后，在约 13s 完成上下文纠偏（near win 时段不再纠偏）
-    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 14 });
+    // 播放到 24s：第 17 秒那句滞后产出后，在约 23s 完成上下文纠偏
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 24 });
     await video.trigger("timeupdate");
     await nextTick();
 
-    expect(store.activeSegmentId).toBe("fixture-seg-004");
+    expect(store.activeSegmentId).toBe("fixture-seg-008");
     expect(store.revisions).toHaveLength(1);
-    expect(wrapper.text()).toContain("有几幅作品没能完全达到她自己的标准");
+    expect(wrapper.text()).toContain("long been sleep-deprived");
     expect(wrapper.text()).toContain("已修正");
-    expect(wrapper.text()).not.toContain("杰作");
 
-    // 播放到 01:14：字幕滞后约 1.5s，活动段为有效进度(约 72.5s)所在句；同步文案仍按真实进度显示
+    // 播放到 01:14：字幕滞后约 1s，活动段为有效进度所在句；同步文案仍按真实进度显示
     Object.defineProperty(video.element, "currentTime", { configurable: true, value: 74 });
     await video.trigger("timeupdate");
     await nextTick();
 
-    expect(store.activeSegmentId).toBe("fixture-seg-025");
+    expect(store.activeSegmentId).toBe("fixture-seg-030");
     expect(store.sourceSyncState.message).toContain("01:14");
   });
 
@@ -419,7 +444,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(store.modeStates.quick).toBe("report");
     expect(store.report).not.toBeNull();
-    expect(store.report?.durationText).toBe("02:16");
+    expect(store.report?.durationText).toBe("02:56");
     expect(wrapper.text()).toContain("同传报告");
   });
 
@@ -758,6 +783,30 @@ describe("同传工作台 mock 流程", () => {
 
     store.setTtsMuted(true);
     expect(mockRuntime.audioGain.gain.value).toBe(0);
+  });
+
+  it("uses browser speech synthesis for local demo TTS and mutes original media", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+    store.quickForm.ttsEnabled = true;
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    expect(video.attributes("muted")).toBeDefined();
+    expect(wrapper.find(".tts-controls").exists()).toBe(false);
+    expect(mockRuntime.createSession).not.toHaveBeenCalled();
+
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 3 });
+    await video.trigger("timeupdate");
+    await nextTick();
+
+    expect(mockRuntime.speechSpeak).toHaveBeenCalledTimes(1);
+    const utterance = mockRuntime.speechSpeak.mock.calls[0][0] as { text: string; lang: string; volume: number };
+    expect(utterance.text).toContain("students are facing");
+    expect(utterance.lang).toBe("en-US");
+    expect(utterance.volume).toBe(0.5);
   });
 
   it("keeps long backend paragraphs in one paired segment card", async () => {
@@ -1109,8 +1158,8 @@ describe("同传工作台 mock 流程", () => {
       "local-test-video-fixture",
       expect.objectContaining({
         source: "fixture-video",
-        sourceLanguage: "en",
-        targetLanguage: "zh",
+        sourceLanguage: "zh",
+        targetLanguage: "en",
         displayMode: "bilingual"
       })
     );

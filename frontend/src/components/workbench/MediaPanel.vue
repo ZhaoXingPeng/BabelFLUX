@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { SourceSyncState } from "../../types/events";
 import Icon from "../icons/Icon.vue";
 import type {
@@ -57,6 +57,12 @@ let initializedMediaElement: HTMLMediaElement | null = null;
 
 const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
 const DEFAULT_MEDIA_VOLUME = 0.5;
+const hasNativeMediaControls = computed(
+  () =>
+    (props.mediaKind === "video" && Boolean(props.mediaUrl)) ||
+    (props.mediaKind === "audio" && Boolean(props.audioUrl))
+);
+const showTtsControls = computed(() => props.form.ttsEnabled && !hasNativeMediaControls.value);
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -203,6 +209,7 @@ watch(
           controls
           playsinline
           autoplay
+          :muted="form.ttsEnabled"
           preload="metadata"
           data-testid="fixture-video"
           @loadedmetadata="handleLoadedMetadata"
@@ -225,6 +232,7 @@ watch(
           :src="audioUrl"
           controls
           autoplay
+          :muted="form.ttsEnabled"
           preload="metadata"
           data-testid="fixture-audio"
           @loadedmetadata="handleLoadedMetadata"
@@ -258,7 +266,7 @@ watch(
         <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
-        <div v-if="form.ttsEnabled" class="tts-controls">
+        <div v-if="showTtsControls" class="tts-controls">
           <button
             class="stage-button icon-stage-button"
             type="button"
