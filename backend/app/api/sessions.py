@@ -54,6 +54,7 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
+    ws_token: str = Field(alias="wsToken")
     status: str
 
 
@@ -118,7 +119,8 @@ def _register_session(req: CreateSessionRequest) -> str:
 @router.post("", response_model=CreateSessionResponse, response_model_by_alias=True)
 def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = _register_session(req)
-    return CreateSessionResponse(sessionId=session_id, status="created")
+    ws_token = handoff_tokens.issue_ws_token(session_id, purpose="session")
+    return CreateSessionResponse(sessionId=session_id, wsToken=ws_token, status="created")
 
 
 @router.post(

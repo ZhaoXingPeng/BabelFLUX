@@ -46,13 +46,18 @@ MAX_PCM_QUEUE_FRAMES = MAX_PCM_QUEUE_AUDIO_MS // PCM_FRAME_MS
 async def session_socket(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     ws_token = websocket.query_params.get("token")
-    if ws_token and not handoff_tokens.validate_ws_token(session_id, ws_token):
-        await websocket.send_json({"type": "error", "message": "Invalid handoff WebSocket token"})
+    if not ws_token:
+        await websocket.send_json({"type": "error", "message": "Missing WebSocket token"})
         await websocket.close(code=4401)
         return
 
-    if ws_token:
+    if handoff_tokens.validate_ws_token(session_id, ws_token, purpose="handoff"):
         await _serve_handoff_socket(websocket, session_id)
+        return
+
+    if not handoff_tokens.validate_ws_token(session_id, ws_token, purpose="session"):
+        await websocket.send_json({"type": "error", "message": "Invalid WebSocket token"})
+        await websocket.close(code=4401)
         return
 
     record = session_store.get_or_create(session_id)

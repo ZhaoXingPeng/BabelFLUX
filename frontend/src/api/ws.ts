@@ -11,6 +11,7 @@ interface SessionSocketHandlers {
 
 interface SessionSocketOptions {
   autoStart?: boolean;
+  token?: string;
 }
 
 export function createSessionSocket(
@@ -18,7 +19,9 @@ export function createSessionSocket(
   handlers: SessionSocketHandlers,
   options: SessionSocketOptions = {}
 ): WebSocket {
-  const socket = new WebSocket(`${WS_BASE_URL}/ws/sessions/${sessionId}`);
+  const url = new URL(`${WS_BASE_URL}/ws/sessions/${sessionId}`);
+  if (options.token) url.searchParams.set("token", options.token);
+  const socket = new WebSocket(url.toString());
 
   socket.addEventListener("open", () => {
     handlers.onOpen?.();

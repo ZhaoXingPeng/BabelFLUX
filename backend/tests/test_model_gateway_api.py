@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.api.model_gateway import get_dashscope_client
+from app.core.config import settings
 from app.main import app
 from app.services.providers.dashscope import ASRResult, ASRSegment, LLMResult, TTSResult
 
@@ -36,6 +37,44 @@ class FakeDashScopeClient:
             events=["session.created", "response.done", "session.finished"],
             session_id="session-1",
         )
+
+
+def _session_token(client: TestClient) -> str:
+    response = client.post("/api/sessions", json={"inputMode": "demo"})
+    assert response.status_code == 200
+    return str(response.json()["wsToken"])
+
+
+def test_model_gateway_auth_rejects_missing_token_when_required() -> None:
+    original = settings.require_model_gateway_auth
+    object.__setattr__(settings, "require_model_gateway_auth", True)
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/models/strategy/plan",
+            json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
+        )
+    finally:
+        object.__setattr__(settings, "require_model_gateway_auth", original)
+
+    assert response.status_code == 401
+
+
+def test_model_gateway_auth_accepts_session_token_when_required() -> None:
+    original = settings.require_model_gateway_auth
+    object.__setattr__(settings, "require_model_gateway_auth", True)
+    try:
+        client = TestClient(app)
+        token = _session_token(client)
+        response = client.post(
+            "/api/models/strategy/plan",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"sourceLanguage": "en", "targetLanguage": "zh", "domain": "技术"},
+        )
+    finally:
+        object.__setattr__(settings, "require_model_gateway_auth", original)
+
+    assert response.status_code == 200
 
 
 def test_generate_llm_api_response() -> None:

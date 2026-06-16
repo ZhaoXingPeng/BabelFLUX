@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     final_correction_timeout_seconds: float = 120.0
     tts_model: str = "qwen3-tts-flash-realtime"
     tts_voice: str = "Cherry"
+    require_model_gateway_auth: bool = False
+    allowed_media_hosts: str = ""
 
     # demo 模式下若指向存在的媒体文件，则用真实管线跑该样例；为空则回退到演示事件流。
     demo_media_path: str = ""

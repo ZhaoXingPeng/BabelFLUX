@@ -1245,7 +1245,7 @@ export const useSessionStore = defineStore("session", {
           if (!this.isCurrentStart(mode, requestId)) return false;
         }
 
-        this.connectSocket(session.sessionId, mode, requestId);
+        this.connectSocket(session.sessionId, session.wsToken, mode, requestId);
         return true;
       } catch (error) {
         if (!this.isCurrentStart(mode, requestId)) return false;
@@ -1502,7 +1502,7 @@ export const useSessionStore = defineStore("session", {
       this.playbackMs = playbackMs;
     },
 
-    connectSocket(sessionId: string, mode: ProductMode, requestId: number) {
+    connectSocket(sessionId: string, wsToken: string, mode: ProductMode, requestId: number) {
       socket?.close();
       // 判定本次会话是否需要前端实时采集音频（麦克风/标签页/屏幕/系统音频）。
       const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
@@ -1536,7 +1536,7 @@ export const useSessionStore = defineStore("session", {
             if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
           }
         },
-        { autoStart: true }
+        { autoStart: true, token: wsToken }
       );
       socket = connection;
     },

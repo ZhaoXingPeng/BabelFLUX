@@ -106,7 +106,7 @@ async function setSource(wrapper: VueWrapper, sourceKey: string) {
 function buildSocket(
   sessionId: string,
   handlers: SocketHandlers,
-  options: { autoStart?: boolean } = {}
+  options: { autoStart?: boolean; token?: string } = {}
 ): MockSocket {
   let socket!: MockSocket;
   const wrappedHandlers: SocketHandlers = {
@@ -433,7 +433,11 @@ describe("同传工作台 mock 流程", () => {
   });
 
   it("从快速同传配置走完开始、事件和结束报告", async () => {
-    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "ui-session-1", status: "created" });
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "ui-session-1",
+      wsToken: "w_ui",
+      status: "created"
+    });
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -506,7 +510,7 @@ describe("同传工作台 mock 流程", () => {
   });
 
   it("启动中重置时旧的创建请求不会连接旧 WebSocket", async () => {
-    const quickRequest = deferred<{ sessionId: string; status: string }>();
+    const quickRequest = deferred<{ sessionId: string; wsToken: string; status: string }>();
     mockRuntime.createSession.mockReturnValueOnce(quickRequest.promise);
     mountApp();
     const store = useSessionStore();
@@ -516,7 +520,7 @@ describe("同传工作台 mock 流程", () => {
     const quickStart = store.startMode("quick");
     store.resetMode("quick");
 
-    quickRequest.resolve({ sessionId: "stale-quick", status: "created" });
+    quickRequest.resolve({ sessionId: "stale-quick", wsToken: "w_stale", status: "created" });
     await quickStart;
 
     expect(mockRuntime.handlersBySession.has("stale-quick")).toBe(false);
@@ -564,7 +568,11 @@ describe("同传工作台 mock 流程", () => {
   });
 
   it("upload video source uses media-element PCM streaming and keeps a local preview", async () => {
-    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "upload-video-session", status: "created" });
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "upload-video-session",
+      wsToken: "w_upload",
+      status: "created"
+    });
     const wrapper = mountApp();
     const store = useSessionStore();
 
@@ -601,7 +609,7 @@ describe("同传工作台 mock 流程", () => {
     expect(mockRuntime.createSessionSocket).toHaveBeenCalledWith(
       "upload-video-session",
       expect.any(Object),
-      { autoStart: true }
+      { autoStart: true, token: "w_upload" }
     );
 
     store.handleMediaPlaybackPaused();
@@ -879,7 +887,11 @@ describe("同传工作台 mock 流程", () => {
   });
 
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {
-    mockRuntime.createSession.mockResolvedValueOnce({ sessionId: "url-session", status: "created" });
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "url-session",
+      wsToken: "w_url",
+      status: "created"
+    });
     const wrapper = mountApp();
     const store = useSessionStore();
 

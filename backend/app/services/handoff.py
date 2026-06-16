@@ -6,6 +6,7 @@ from secrets import token_urlsafe
 from typing import Literal
 
 DisplayMode = Literal["bilingual", "translation-only", "floating", "compact"]
+WebSocketTokenPurpose = Literal["session", "handoff"]
 
 
 class HandoffTokenError(ValueError):
@@ -40,7 +41,7 @@ class ClaimedHandoff:
 class HandoffTokenStore:
     def __init__(self) -> None:
         self._tickets: dict[str, HandoffTicket] = {}
-        self._ws_tokens: dict[str, tuple[str, datetime]] = {}
+        self._ws_tokens: dict[str, tuple[str, datetime, WebSocketTokenPurpose]] = {}
 
     def issue(
         self,
@@ -80,8 +81,11 @@ class HandoffTokenStore:
         self._cleanup()
         self._tickets[token] = replace(ticket, used=True)
 
-        ws_token = f"w_{token_urlsafe(24)}"
-        self._ws_tokens[ws_token] = (ticket.session_id, ticket.expires_at)
+        ws_token = self.issue_ws_token(
+            ticket.session_id,
+            expires_at=ticket.expires_at,
+            purpose="handoff",
+        )
         return ClaimedHandoff(
             session_id=ticket.session_id,
             ws_token=ws_token,
@@ -92,13 +96,43 @@ class HandoffTokenStore:
             expires_at=ticket.expires_at,
         )
 
-    def validate_ws_token(self, session_id: str, token: str) -> bool:
+    def issue_ws_token(
+        self,
+        session_id: str,
+        *,
+        ttl_seconds: int = 24 * 60 * 60,
+        expires_at: datetime | None = None,
+        purpose: WebSocketTokenPurpose = "session",
+    ) -> str:
+        self._cleanup()
+        ws_token = f"w_{token_urlsafe(24)}"
+        expiry = expires_at or datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        self._ws_tokens[ws_token] = (session_id, expiry, purpose)
+        return ws_token
+
+    def validate_ws_token(
+        self,
+        session_id: str,
+        token: str,
+        *,
+        purpose: WebSocketTokenPurpose | None = None,
+    ) -> bool:
         self._cleanup()
         value = self._ws_tokens.get(token)
         if value is None:
             return False
-        token_session_id, expires_at = value
+        token_session_id, expires_at, token_purpose = value
+        if purpose is not None and token_purpose != purpose:
+            return False
         return token_session_id == session_id and expires_at > datetime.now(UTC)
+
+    def validate_any_session_token(self, token: str) -> bool:
+        self._cleanup()
+        value = self._ws_tokens.get(token)
+        if value is None:
+            return False
+        _, expires_at, purpose = value
+        return purpose == "session" and expires_at > datetime.now(UTC)
 
     def reset(self) -> None:
         self._tickets.clear()
@@ -113,7 +147,7 @@ class HandoffTokenStore:
             del self._tickets[token]
 
         expired_ws_tokens = [
-            token for token, (_, expires_at) in self._ws_tokens.items() if expires_at <= now
+            token for token, (_, expires_at, _) in self._ws_tokens.items() if expires_at <= now
         ]
         for token in expired_ws_tokens:
             del self._ws_tokens[token]

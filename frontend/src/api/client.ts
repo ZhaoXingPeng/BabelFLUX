@@ -27,6 +27,7 @@ export interface CreateSessionPayload {
 
 export interface CreateSessionResponse {
   sessionId: string;
+  wsToken: string;
   status: string;
 }
 
