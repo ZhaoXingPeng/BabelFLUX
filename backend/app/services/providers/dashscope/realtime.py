@@ -199,8 +199,13 @@ class LiveTranslateSession:
             "translation": translation,
         }
         if self.tts_enabled:
-            session["voice"] = self.voice
+            session["voice"] = self._compatible_voice()
         return {"type": "session.update", "session": session}
+
+    def _compatible_voice(self) -> str:
+        if self.model.startswith("qwen3.5-livetranslate") and self.voice == "Cherry":
+            return "Tina"
+        return self.voice
 
     async def _send(self, event: dict[str, Any]) -> None:
         if self._ws is None:

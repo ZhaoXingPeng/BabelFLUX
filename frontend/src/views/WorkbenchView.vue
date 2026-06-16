@@ -51,6 +51,9 @@ const {
   sourceSyncState,
   status,
   targetLanguages,
+  ttsErrorMessage,
+  ttsMuted,
+  ttsVolume,
   transcriptPairs,
   currentPair,
   wsConnected
@@ -150,6 +153,9 @@ function toggleFloatingCaptions() {
         :desktop-launch-state="desktopLaunchState"
         :desktop-launch-message="desktopLaunchMessage"
         :selected-display-mode="selectedDisplayMode"
+        :tts-muted="ttsMuted"
+        :tts-volume="ttsVolume"
+        :tts-error-message="ttsErrorMessage"
         @end="sessionStore.askEnd('quick')"
         @reset="sessionStore.resetMode('quick')"
         @open-desktop="sessionStore.openDesktopFloating"
@@ -159,6 +165,8 @@ function toggleFloatingCaptions() {
         @playback-pause="sessionStore.handleMediaPlaybackPaused"
         @playback-play="sessionStore.handleMediaPlaybackPlayed"
         @ended="sessionStore.handleFixtureEnded"
+        @update-tts-muted="sessionStore.setTtsMuted"
+        @update-tts-volume="sessionStore.setTtsVolume"
       />
       <SubtitleColumn
         v-if="selectedDisplayMode !== '悬浮字幕'"

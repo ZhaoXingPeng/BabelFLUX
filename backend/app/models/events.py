@@ -19,6 +19,12 @@ class SubtitleSegment(BaseModel):
     status: Literal["partial", "final", "revised"]
 
 
+class AudioSegment(BaseModel):
+    segment_id: str = Field(alias="segmentId")
+    audio_base64: str = Field(alias="audioBase64")
+    sample_rate: int = Field(alias="sampleRate")
+
+
 class RevisionEvent(BaseModel):
     revision_id: str = Field(alias="revisionId")
     target_segment_ids: list[str] = Field(alias="targetSegmentIds")

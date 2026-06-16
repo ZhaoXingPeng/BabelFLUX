@@ -43,7 +43,7 @@ def test_strategy_enables_audio_and_tts_provider_when_requested() -> None:
 
     session = plan.live_translate_session["event"]["session"]
     assert session["modalities"] == ["text", "audio"]
-    assert session["voice"] == "Cherry"
+    assert session["voice"] == "Tina"
     assert plan.tts_provider == QWEN_TTS_PROVIDER
 
 

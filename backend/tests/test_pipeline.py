@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import base64
 import json
 from types import SimpleNamespace
 
@@ -106,6 +107,98 @@ def _translation_text_for_response(record: SessionRecord, response_id: str) -> s
     return "".join(
         s.translation_text for s in record.segments if s.response_id == response_id
     ).strip()
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_delta_emits_audio_segment_for_paired_response() -> None:
+    audio_bytes = b"\x01\x02\x03\x04"
+    messages = [
+        {"type": "session.created"},
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "itemA",
+            "transcript": "Hello world.",
+        },
+        {"type": "response.created", "response": {"id": "resp1"}},
+        {"type": "response.text.done", "response_id": "resp1", "text": "你好，世界。"},
+        {
+            "type": "response.audio.delta",
+            "response_id": "resp1",
+            "delta": base64.b64encode(audio_bytes).decode("ascii"),
+        },
+    ]
+    record = SessionRecord(
+        session_id="tts-audio", source_language="en", target_language="zh", tts_enabled=True
+    )
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._reviser.enabled = False
+
+    session = LiveTranslateSession(
+        _dummy_config(),
+        model="m",
+        tts_enabled=True,
+        websocket_connect=lambda *_a, **_k: _async_return(FakeWS(messages)),
+    )
+    await session.connect()
+    await pipeline._consume(session)
+
+    audio_event = next(event for event in events if event["type"] == "audio_segment")
+    assert audio_event == {
+        "type": "audio_segment",
+        "segmentId": record.segments[0].segment_id,
+        "audioBase64": base64.b64encode(audio_bytes).decode("ascii"),
+        "sampleRate": 24000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_delta_waits_until_response_is_paired() -> None:
+    audio_bytes = b"\x05\x06"
+    messages = [
+        {"type": "session.created"},
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "itemA",
+            "transcript": "Hello world.",
+        },
+        {"type": "response.created", "response": {"id": "resp1"}},
+        {
+            "type": "response.audio.delta",
+            "response_id": "resp1",
+            "delta": base64.b64encode(audio_bytes).decode("ascii"),
+        },
+        {"type": "response.text.done", "response_id": "resp1", "text": "你好，世界。"},
+    ]
+    record = SessionRecord(
+        session_id="tts-audio-first", source_language="en", target_language="zh", tts_enabled=True
+    )
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._reviser.enabled = False
+
+    session = LiveTranslateSession(
+        _dummy_config(),
+        model="m",
+        tts_enabled=True,
+        websocket_connect=lambda *_a, **_k: _async_return(FakeWS(messages)),
+    )
+    await session.connect()
+    await pipeline._consume(session)
+
+    audio_event = next(event for event in events if event["type"] == "audio_segment")
+    assert audio_event["segmentId"] == record.segments[0].segment_id
+    assert audio_event["audioBase64"] == base64.b64encode(audio_bytes).decode("ascii")
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import {
   type AudioCaptureSession,
   type CaptureSourceKind
 } from "../composables/useAudioCapture";
+import { createTtsPlayback } from "../composables/useTtsPlayback";
 import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
   RevisionEvent,
@@ -54,6 +55,10 @@ let pendingMediaElementCapture = false;
 let pendingMediaReadyState: SourceSyncState | null = null;
 let mediaElement: HTMLMediaElement | null = null;
 let captureStarted = false;
+let handleTtsPlaybackError: ((message: string) => void) | null = null;
+let ttsPlayback = createTtsPlayback({
+  onError: (message) => handleTtsPlaybackError?.(message)
+});
 let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
 const sampledOutputLatencySegmentIds = new Set<string>();
@@ -211,6 +216,9 @@ interface SessionState {
   desktopLaunchMessage: string;
   desktopDownloadPromptOpen: boolean;
   desktopHandoffUrl: string | null;
+  ttsMuted: boolean;
+  ttsVolume: number;
+  ttsErrorMessage: string | null;
   modeStates: Record<ProductMode, RuntimeState>;
   quickForm: QuickFormState;
   floatingForm: FloatingFormState;
@@ -653,6 +661,9 @@ export const useSessionStore = defineStore("session", {
     desktopLaunchMessage: "等待投送到桌面悬浮窗",
     desktopDownloadPromptOpen: false,
     desktopHandoffUrl: null,
+    ttsMuted: false,
+    ttsVolume: 0.9,
+    ttsErrorMessage: null,
     modeStates: {
       quick: "setup",
       floating: "setup"
@@ -663,7 +674,8 @@ export const useSessionStore = defineStore("session", {
       sourceLanguage: "英语",
       targetLanguage: "中文",
       modelProfile: "智能默认",
-      source: testVideoFixture.key
+      source: testVideoFixture.key,
+      ttsEnabled: false
     },
     floatingForm: {
       domain: "通用",
@@ -671,6 +683,7 @@ export const useSessionStore = defineStore("session", {
       targetLanguage: "中文",
       modelProfile: "快速低延迟",
       source: "browser-tab",
+      ttsEnabled: false,
       style: "双语字幕",
       size: "标准",
       opacity: "90%",
@@ -840,6 +853,12 @@ export const useSessionStore = defineStore("session", {
   },
 
   actions: {
+    ensureTtsErrorHandler() {
+      handleTtsPlaybackError = (message: string) => {
+        this.ttsErrorMessage = message;
+      };
+    },
+
     selectMode(mode: ProductMode) {
       this.productMode = mode;
     },
@@ -1199,7 +1218,8 @@ export const useSessionStore = defineStore("session", {
         sourceKey,
         sourceFileName: input.fileName || undefined,
         sourceUrl: sourceKey === "url" ? input.url.trim() : undefined,
-        sourcePermission: input.permissionState
+        sourcePermission: input.permissionState,
+        ttsEnabled: form.ttsEnabled
       };
     },
 
@@ -1212,11 +1232,19 @@ export const useSessionStore = defineStore("session", {
     },
 
     async startConfiguredSession(mode: ProductMode, requestId: number): Promise<boolean> {
+      this.ensureTtsErrorHandler();
       this.stopSession("idle");
       this.resetSessionData();
       if (mode === "quick") this.applyQuickLocalFilePreview();
       this.status = "connecting";
       this.errorMessage = null;
+      this.ttsErrorMessage = null;
+      if ((mode === "quick" ? this.quickForm : this.floatingForm).ttsEnabled) {
+        void ttsPlayback.unlock().catch((error: unknown) => {
+          this.ttsErrorMessage =
+            error instanceof Error ? error.message : "语音播报初始化失败";
+        });
+      }
 
       if (mode === "quick" && this.quickForm.source === testVideoFixture.key) {
         this.startTestVideoFixtureSession(requestId);
@@ -1244,6 +1272,7 @@ export const useSessionStore = defineStore("session", {
 
     stopSession(nextStatus: SessionStatus = "stopped") {
       void this.stopCapture();
+      ttsPlayback.stop();
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1272,6 +1301,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     resetSessionData() {
+      this.resetTtsPlayback();
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       mediaElement = null;
@@ -1293,6 +1323,27 @@ export const useSessionStore = defineStore("session", {
       this.report = null;
       this.reportLoading = false;
       this.reportError = null;
+    },
+
+    setTtsMuted(muted: boolean) {
+      this.ttsMuted = muted;
+      ttsPlayback.setMuted(muted);
+    },
+
+    setTtsVolume(volume: number) {
+      this.ttsVolume = Math.min(1, Math.max(0, volume));
+      ttsPlayback.setVolume(this.ttsVolume);
+    },
+
+    resetTtsPlayback() {
+      ttsPlayback.stop();
+      this.ttsErrorMessage = null;
+      ttsPlayback.setVolume(this.ttsVolume);
+      ttsPlayback.setMuted(this.ttsMuted);
+    },
+
+    handleTtsError(message: string) {
+      this.ttsErrorMessage = message;
     },
 
     loadTestVideoFixturePreview() {
@@ -1569,6 +1620,19 @@ export const useSessionStore = defineStore("session", {
         return;
       }
 
+      if (event.type === "audio_segment") {
+        if (liveEventsLocked) return;
+        this.ensureTtsErrorHandler();
+        const form = this.activeMode === "floating" ? this.floatingForm : this.quickForm;
+        if (!form.ttsEnabled) return;
+        void ttsPlayback.enqueue({
+          segmentId: event.segmentId,
+          audioBase64: event.audioBase64,
+          sampleRate: event.sampleRate
+        });
+        return;
+      }
+
       if (event.type === "revision_event") {
         if (liveEventsLocked) return;
         this.revisions = [event.revision, ...this.revisions].slice(0, 20);
@@ -1584,6 +1648,7 @@ export const useSessionStore = defineStore("session", {
         this.modeStates[mode] = "report";
         this.status = "stopped";
         this.activeMode = null;
+        ttsPlayback.stop();
         void this.loadReport();
         return;
       }

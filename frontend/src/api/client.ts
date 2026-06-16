@@ -21,6 +21,7 @@ export interface CreateSessionPayload {
   sourceFileName?: string;
   sourceUrl?: string;
   sourcePermission?: "idle" | "requesting" | "granted" | "denied";
+  ttsEnabled?: boolean;
 }
 
 export interface CreateSessionResponse {

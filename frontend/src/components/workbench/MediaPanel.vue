@@ -27,6 +27,9 @@ const props = defineProps<{
   desktopLaunchState: DesktopLaunchState;
   desktopLaunchMessage: string;
   selectedDisplayMode: string;
+  ttsMuted: boolean;
+  ttsVolume: number;
+  ttsErrorMessage: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,6 +42,8 @@ const emit = defineEmits<{
   playbackPause: [];
   playbackPlay: [];
   ended: [];
+  updateTtsMuted: [muted: boolean];
+  updateTtsVolume: [volume: number];
 }>();
 
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -111,6 +116,10 @@ function handlePlay() {
   if (now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
   lastPlayIntentAt = now;
   emit("playbackPlay");
+}
+
+function handleTtsVolumeInput(event: Event) {
+  emit("updateTtsVolume", Number((event.target as HTMLInputElement).value));
 }
 
 function handleLoadedMetadata() {
@@ -213,9 +222,31 @@ watch(
         <span>{{ runtimeStatus }}</span>
         <span>{{ source.channel }}</span>
         <span>{{ sourceSyncState.message }}</span>
+        <span v-if="ttsErrorMessage">{{ ttsErrorMessage }}</span>
         <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
+        <div v-if="form.ttsEnabled" class="tts-controls">
+          <button
+            class="stage-button icon-stage-button"
+            type="button"
+            :aria-label="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            :title="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            @click="emit('updateTtsMuted', !ttsMuted)"
+          >
+            <Icon :name="ttsMuted ? 'volume-x' : 'volume-2'" :size="17" />
+          </button>
+          <input
+            class="tts-volume"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            :value="ttsVolume"
+            aria-label="语音播报音量"
+            @input="handleTtsVolumeInput"
+          />
+        </div>
         <button
           class="stage-button icon-stage-button"
           type="button"

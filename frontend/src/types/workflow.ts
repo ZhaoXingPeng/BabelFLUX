@@ -54,6 +54,7 @@ export interface QuickFormState {
   targetLanguage: string;
   modelProfile: string;
   source: string;
+  ttsEnabled: boolean;
 }
 
 export interface FloatingFormState {
@@ -62,6 +63,7 @@ export interface FloatingFormState {
   targetLanguage: string;
   modelProfile: string;
   source: string;
+  ttsEnabled: boolean;
   style: string;
   size: string;
   opacity: string;

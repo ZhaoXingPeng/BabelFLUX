@@ -101,6 +101,13 @@ const emit = defineEmits<{
             <span class="form-label">模型选择</span>
             <SelectField v-model="form.modelProfile" name="model-profile" label="模型选择" :options="modelProfiles" />
           </label>
+          <label class="settings-toggle">
+            <span>
+              <span class="form-label">语音播报</span>
+              <small class="field-hint">开启后播报中文译文，默认关闭</small>
+            </span>
+            <input v-model="form.ttsEnabled" type="checkbox" />
+          </label>
           <p class="settings-note">使用后端模型策略统一路由，前端不接触供应商密钥。</p>
         </section>
       </div>

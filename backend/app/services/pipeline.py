@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -22,7 +23,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
-from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
+from app.models.events import AudioSegment, RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.media import iter_pcm_frames
 from app.services.providers.dashscope import (
     DashScopeClient,
@@ -46,6 +47,7 @@ SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
+TTS_OUTPUT_SAMPLE_RATE = 24000
 
 ENGLISH_SHORT_SOURCE_WORDS = {
     "a",
@@ -121,6 +123,7 @@ class InterpretationPipeline:
         self._display_count_by_root: dict[str, int] = {}
         self._raw_source_by_root: dict[str, str] = {}
         self._raw_translation_by_root: dict[str, str] = {}
+        self._pending_audio_by_response: dict[str, list[bytes]] = {}
         self._continuation_items: set[str] = set()
         self._noise_roots: set[str] = set()
         self._source_final_roots: set[str] = set()
@@ -128,6 +131,7 @@ class InterpretationPipeline:
         self._display_final_roots: set[str] = set()
         self._last_partial_emit: dict[str, float] = {}
         self._last_emitted_segment: dict[str, tuple[str, str, int, int]] = {}
+        self._tts_sample_rate = TTS_OUTPUT_SAMPLE_RATE
         self._last_event_at = time.monotonic()
         self._last_sync_emit_at = 0.0
         self._client_playback_ms: int | None = None
@@ -288,6 +292,8 @@ class InterpretationPipeline:
             seg = await self._on_translation(ev.text, ev.response_id, final=True)
             if seg is not None:
                 await self._on_segment_complete(seg)
+        elif kind == "audio":
+            await self._on_audio(ev)
         elif kind == "error":
             await self._emit_error(ev.text)
 
@@ -418,6 +424,8 @@ class InterpretationPipeline:
         self._source_final_roots.discard(seg.segment_id)
         self._translation_final_roots.discard(seg.segment_id)
         self._display_final_roots.discard(seg.segment_id)
+        if seg.response_id:
+            self._pending_audio_by_response.pop(seg.response_id, None)
         self.record._by_id.pop(seg.segment_id, None)
         self.record.segments = [
             existing for existing in self.record.segments if existing.segment_id != seg.segment_id
@@ -665,7 +673,34 @@ class InterpretationPipeline:
                 seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._translation_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
+        await self._flush_pending_audio(response_id)
         return seg
+
+    async def _on_audio(self, ev: Any) -> None:
+        if not ev.audio or not ev.response_id:
+            return
+        root = self._by_response.get(ev.response_id)
+        if root is None:
+            self._pending_audio_by_response.setdefault(ev.response_id, []).append(ev.audio)
+            return
+        await self._emit_audio(root, ev.audio)
+
+    async def _flush_pending_audio(self, response_id: str | None) -> None:
+        if not response_id:
+            return
+        root = self._by_response.get(response_id)
+        if root is None:
+            return
+        for audio in self._pending_audio_by_response.pop(response_id, []):
+            await self._emit_audio(root, audio)
+
+    async def _emit_audio(self, root: SegmentRecord, audio: bytes) -> None:
+        segment = AudioSegment(
+            segmentId=root.segment_id,
+            audioBase64=base64.b64encode(audio).decode("ascii"),
+            sampleRate=self._tts_sample_rate,
+        )
+        await self.emit({"type": "audio_segment", **segment.model_dump(by_alias=True)})
 
     async def _emit_display_segments(self, root: SegmentRecord) -> None:
         # LiveTranslate VAD can keep several semantic clauses in one turn, and source/target

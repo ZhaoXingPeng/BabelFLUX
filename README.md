@@ -62,7 +62,7 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 | 内嵌 ASR | `qwen3-asr-flash-realtime`（`LIVE_TRANSLATE_ASR_MODEL`） |
 | 实时纠偏（低延迟） | `qwen-flash`（`REALTIME_REVISION_MODEL`） |
 | 会后完整纠偏（强模型） | `qwen-plus`（`FINAL_CORRECTION_MODEL`，可换 `qwen3-max` / `deepseek-v4-pro`） |
-| 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，voice `Cherry`） |
+| 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，LiveTranslate voice `Tina`） |
 
 ---
 

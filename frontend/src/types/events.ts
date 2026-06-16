@@ -29,11 +29,19 @@ export interface RevisionEvent {
   confidence: number;
 }
 
+export interface AudioSegmentEvent {
+  type: "audio_segment";
+  segmentId: string;
+  audioBase64: string;
+  sampleRate: number;
+}
+
 export type ServerEvent =
   | { type: "session_started"; sessionId: string }
   | { type: "source_sync_state"; state: SourceSyncState }
   | { type: "transcript_segment"; segment: SubtitleSegment }
   | { type: "translation_segment"; segment: SubtitleSegment }
+  | AudioSegmentEvent
   | { type: "revision_event"; revision: RevisionEvent }
   | { type: "session_report"; reportId: string }
   | { type: "error"; message: string };

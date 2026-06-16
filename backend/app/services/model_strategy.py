@@ -82,7 +82,7 @@ def build_live_translate_session(request: StrategyPlanRequest) -> dict[str, obje
         "translation": translation,
     }
     if request.tts_enabled:
-        session["voice"] = "Cherry"
+        session["voice"] = "Tina"
     return {
         "model": "qwen3.5-livetranslate-flash-realtime",
         "event": {"type": "session.update", "session": session},
