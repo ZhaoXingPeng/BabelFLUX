@@ -47,6 +47,7 @@ SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT = 28
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
+CJK_LANGUAGE_PREFIXES = ("zh", "ja", "ko", "yue")
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
 FINAL_DISPLAY_MAX_SEGMENT_MS = 9500
@@ -54,6 +55,9 @@ SOURCE_CONTINUATION_MAX_GAP_MS = 700
 SOURCE_CONTINUATION_MAX_DURATION_MS = 12_000
 SOURCE_CONTINUATION_MAX_CHARS = 180
 TTS_OUTPUT_SAMPLE_RATE = 24000
+PREFLIGHT_AUDIO_MS = 2000
+PREFLIGHT_FRAME_MS = 40
+PREFLIGHT_MAX_WAIT_S = 4.0
 
 ENGLISH_SHORT_SOURCE_WORDS = {
     "a",
@@ -166,6 +170,8 @@ class InterpretationPipeline:
         self._last_media_progress_sync_at = 0.0
         self._review_tasks: set[asyncio.Task[Any]] = set()
         self._session_finished = False
+        self._language_alignment_checked = False
+        self._session: LiveTranslateSession | None = None
         self._glossary_phrases = {
             str(t.get("sourceTerm")): str(t.get("targetTerm"))
             for t in record.glossary
@@ -178,11 +184,12 @@ class InterpretationPipeline:
     # ---------- 对外入口 ----------
     async def run_media(self, source: str) -> None:
         self.record.status = "running"
+        await self._preflight_media_language(source)
         await self._emit_sync("syncing", 0, "正在连接同传引擎…")
         session = LiveTranslateSession(
             self._config,
             model=self.settings.live_translate_model,
-            source_language=self.record.source_language,
+            source_language=self._initial_provider_source_language(),
             target_language=self.record.target_language,
             asr_model=self.settings.live_translate_asr_model,
             tts_enabled=self.record.tts_enabled,
@@ -190,6 +197,7 @@ class InterpretationPipeline:
             glossary=self._glossary_phrases or None,
             websocket_connect=self._ws_connect,
         )
+        self._session = session
         await session.connect()
         consumer = asyncio.create_task(self._consume(session))
         try:
@@ -212,17 +220,22 @@ class InterpretationPipeline:
         finally:
             consumer.cancel()
             await session.close()
+            self._session = None
             await self._await_reviews()
         self.record.duration_ms = self.elapsed_ms
 
     async def run_pcm_stream(self, queue: asyncio.Queue[bytes | None]) -> None:
         """前端采集音频经 WS 二进制流喂入；queue 收到 None 表示结束。"""
         self.record.status = "running"
+        await self._emit_sync("ready", 0, "同传引擎就绪，等待音频播放")
+        prefix_frames, prefix_ended = await self._preflight_pcm_language(queue)
+        if self._stopped:
+            return
         await self._emit_sync("syncing", 0, "正在连接同传引擎…")
         session = LiveTranslateSession(
             self._config,
             model=self.settings.live_translate_model,
-            source_language=self.record.source_language,
+            source_language=self._initial_provider_source_language(),
             target_language=self.record.target_language,
             asr_model=self.settings.live_translate_asr_model,
             tts_enabled=self.record.tts_enabled,
@@ -230,11 +243,18 @@ class InterpretationPipeline:
             glossary=self._glossary_phrases or None,
             websocket_connect=self._ws_connect,
         )
+        self._session = session
         await session.connect()
         consumer = asyncio.create_task(self._consume(session))
         try:
-            await self._emit_sync("ready", 0, "同传引擎就绪，等待音频播放")
-            while not self._stopped:
+            await self._emit_sync("syncing", 0, "同传进行中")
+            for frame in prefix_frames:
+                if self._stopped:
+                    break
+                self._on_progress(self.elapsed_ms + int(len(frame) / 2 / 16000 * 1000))
+                await session.feed(frame)
+                await self._emit_client_clock_sync_if_due()
+            while not self._stopped and not prefix_ended:
                 await self._wait_if_paused()
                 frame = await queue.get()
                 if frame is None:
@@ -249,6 +269,7 @@ class InterpretationPipeline:
         finally:
             consumer.cancel()
             await session.close()
+            self._session = None
             await self._await_reviews()
         self.record.duration_ms = self.elapsed_ms
 
@@ -267,6 +288,100 @@ class InterpretationPipeline:
         self._client_sent_audio_ms = max(0, sent_audio_ms)
 
     # ---------- 内部 ----------
+    def _initial_provider_source_language(self) -> str:
+        if self.record.source_language != "auto":
+            return self.record.source_language
+        if self.record.target_language in {"zh", "en"}:
+            return self._opposite_language(self.record.target_language)
+        return "en"
+
+    async def _preflight_media_language(self, source: str) -> None:
+        if not self._should_preflight_language():
+            return
+        await self._emit_sync("syncing", 0, "正在自动检测源语言…")
+        sample = bytearray()
+        needed = int(16000 * 2 * PREFLIGHT_AUDIO_MS / 1000)
+        frames = iter_pcm_frames(source, realtime=False, frame_ms=PREFLIGHT_FRAME_MS)
+        async with aclosing(frames) as stream:
+            async for frame in stream:
+                sample.extend(frame)
+                if len(sample) >= needed:
+                    break
+        if sample:
+            await self._detect_language_from_pcm(bytes(sample))
+
+    async def _preflight_pcm_language(
+        self,
+        queue: asyncio.Queue[bytes | None],
+    ) -> tuple[list[bytes], bool]:
+        if not self._should_preflight_language():
+            return [], False
+        await self._emit_sync("ready", 0, "正在自动检测源语言")
+        frames: list[bytes] = []
+        total_ms = 0
+        ended = False
+        deadline = time.monotonic() + PREFLIGHT_MAX_WAIT_S
+        while not self._stopped and total_ms < PREFLIGHT_AUDIO_MS:
+            timeout = max(0.05, deadline - time.monotonic())
+            try:
+                frame = await asyncio.wait_for(queue.get(), timeout=timeout)
+            except TimeoutError:
+                break
+            if frame is None:
+                ended = True
+                break
+            frames.append(frame)
+            total_ms += int(len(frame) / 2 / 16000 * 1000)
+        sample = b"".join(frames)
+        if sample:
+            await self._detect_language_from_pcm(sample)
+        return frames, ended
+
+    def _should_preflight_language(self) -> bool:
+        return self.record.source_language == "auto" and self.record.target_language in {"zh", "en"}
+
+    async def _detect_language_from_pcm(self, audio: bytes) -> None:
+        if not audio:
+            return
+        source_hint = self._initial_provider_source_language()
+        session = LiveTranslateSession(
+            self._config,
+            model=self.settings.live_translate_model,
+            source_language=source_hint,
+            target_language=self.record.target_language,
+            asr_model=self.settings.live_translate_asr_model,
+            tts_enabled=False,
+            voice=self.settings.tts_voice,
+            glossary=self._glossary_phrases or None,
+            websocket_connect=self._ws_connect,
+        )
+        source_snapshots: list[str] = []
+        try:
+            await session.connect()
+            await session.feed(audio)
+            await session.feed_silence(1.0)
+            await session.finish()
+            events = session.events()
+            deadline = time.monotonic() + PREFLIGHT_MAX_WAIT_S
+            while time.monotonic() < deadline:
+                timeout = max(0.05, deadline - time.monotonic())
+                try:
+                    ev = await asyncio.wait_for(anext(events), timeout=timeout)
+                except (TimeoutError, StopAsyncIteration):
+                    break
+                if ev.kind in {"source_partial", "source_final"} and ev.text:
+                    source_snapshots.append(ev.text)
+                    inferred = self._infer_source_language(" ".join(source_snapshots[-3:]))
+                    if inferred is not None:
+                        self._lock_language_pair(inferred)
+                        break
+                if ev.kind in {"session_finished", "error"}:
+                    break
+        except Exception:  # noqa: BLE001 - 预检失败不阻塞主链路
+            return
+        finally:
+            await session.close()
+
     async def _wait_if_paused(self) -> float:
         if self._pause_event.is_set():
             return 0.0
@@ -820,6 +935,7 @@ class InterpretationPipeline:
     async def _on_source(self, text: str, item_id: str | None, *, final: bool) -> None:
         if not text:
             return
+        await self._maybe_align_languages(text)
         seg = self._source_segment(item_id)
         should_merge_root = self._should_merge_source_root_with_previous(
             seg, item_id, text, final=final
@@ -897,27 +1013,25 @@ class InterpretationPipeline:
         # punctuation counts often differ. Split both sides into readable display chunks first,
         # then align them by proportional order so the report and subtitle cards do not collapse
         # long turns into one dense paragraph.
-        source_text = re.sub(
-            r"\s+",
-            " ",
-            self._raw_source_by_root.get(root.segment_id, "").strip(),
+        source_text = self._normalize_display_text(
+            self._raw_source_by_root.get(root.segment_id, ""),
+            self.record.source_language,
         )
         raw_translation_text = self._raw_translation_by_root.get(root.segment_id, "").strip()
-        translation_text = (
-            re.sub(r"\s+", "", raw_translation_text)
-            if self._contains_cjk(raw_translation_text)
-            else re.sub(r"\s+", " ", raw_translation_text)
+        translation_text = self._normalize_display_text(
+            raw_translation_text,
+            self.record.target_language,
         )
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
         has_bilingual_text = bool(source_text and translation_text)
         source_split = (
-            self._split_source_display(source_text)
+            self._split_source_display(source_text, self.record.source_language)
             if has_bilingual_text
             else ([source_text] if source_text else [])
         )
         translation_split = (
-            self._split_target_display(translation_text)
+            self._split_target_display(translation_text, self.record.target_language)
             if has_bilingual_text
             else ([translation_text] if translation_text else [])
         )
@@ -946,8 +1060,16 @@ class InterpretationPipeline:
                 (display_span_ms + FINAL_DISPLAY_MAX_SEGMENT_MS - 1)
                 // FINAL_DISPLAY_MAX_SEGMENT_MS,
             )
-        source_parts = self._fit_source_parts_to_count(source_parts, current_count)
-        translation_parts = self._fit_target_parts_to_count(translation_parts, current_count)
+        source_parts = self._fit_source_parts_to_count(
+            source_parts,
+            current_count,
+            self.record.source_language,
+        )
+        translation_parts = self._fit_target_parts_to_count(
+            translation_parts,
+            current_count,
+            self.record.target_language,
+        )
         count = max(previous_count, current_count)
         self._display_count_by_root[root.segment_id] = count
 
@@ -955,8 +1077,8 @@ class InterpretationPipeline:
         preserve_split = previous_count > 1 and (
             len(source_parts) < previous_count or len(translation_parts) < previous_count
         )
-        source_separator = "" if self._contains_cjk("".join(source_parts)) else " "
-        translation_separator = "" if self._contains_cjk("".join(translation_parts)) else " "
+        source_separator = self._join_separator(source_parts)
+        translation_separator = self._join_separator(translation_parts)
         source_display = self._align_parts(
             source_parts,
             count,
@@ -971,6 +1093,14 @@ class InterpretationPipeline:
             previous=[child.translation_text for child in existing_children],
             preserve_existing=preserve_split,
         )
+        source_display = [
+            self._normalize_display_text(part, self.record.source_language)
+            for part in source_display
+        ]
+        translation_display = [
+            self._normalize_display_text(part, self.record.target_language)
+            for part in translation_display
+        ]
         display_final = (not source_parts or source_final) and (
             not translation_parts or translation_final
         )
@@ -1044,6 +1174,56 @@ class InterpretationPipeline:
         if display_final:
             self._display_final_roots.add(root.segment_id)
 
+    async def _maybe_align_languages(self, text: str) -> None:
+        if self._language_alignment_checked:
+            return
+        if self.record.source_language not in {"auto", "zh", "en"}:
+            self._language_alignment_checked = True
+            return
+        if self.record.target_language not in {"zh", "en"}:
+            self._language_alignment_checked = True
+            return
+
+        sample = self._normalize_display_text(text, "auto")
+        if not sample:
+            return
+        inferred_source = self._infer_source_language(sample)
+        if inferred_source is None:
+            return
+
+        self._lock_language_pair(inferred_source)
+        self._language_alignment_checked = True
+
+    def _infer_source_language(self, sample: str) -> str | None:
+        latin_words = self._latin_word_count(sample)
+        cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", sample))
+        if self._contains_cjk(sample) and self._contains_latin_word(sample):
+            if self._is_latin_dominant(sample):
+                return "en"
+            if cjk_chars >= 3:
+                return "zh"
+            return None
+        if cjk_chars >= 3:
+            return "zh"
+        if latin_words >= 3:
+            return "en"
+        return None
+
+    def _suggest_language_pair(self, inferred_source: str) -> tuple[str, str]:
+        target_language = self.record.target_language
+        if target_language == inferred_source and inferred_source in {"zh", "en"}:
+            target_language = self._opposite_language(inferred_source)
+        return inferred_source, target_language
+
+    def _lock_language_pair(self, inferred_source: str) -> None:
+        source_language, target_language = self._suggest_language_pair(inferred_source)
+        self.record.source_language = source_language
+        self.record.target_language = target_language
+        self._reviser.update_languages(source_language, target_language)
+
+    def _opposite_language(self, language: str) -> str:
+        return "zh" if language == "en" else "en"
+
     def _display_children(self, root: SegmentRecord, count: int) -> list[SegmentRecord]:
         children = self._children_by_root.setdefault(root.segment_id, [root])
         while len(children) < count:
@@ -1058,11 +1238,11 @@ class InterpretationPipeline:
             children.append(child)
         return children[:count]
 
-    def _split_source_display(self, text: str) -> list[str]:
-        value = re.sub(r"\s+", " ", text.strip())
+    def _split_source_display(self, text: str, language: str | None = None) -> list[str]:
+        value = self._normalize_display_text(text, language)
         if not value:
             return []
-        if self._contains_cjk(value):
+        if self._should_use_cjk_display(value, language):
             return self._split_cjk_display(value, SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT)
 
         parts = self._split_latin_display(value, SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
@@ -1091,10 +1271,10 @@ class InterpretationPipeline:
         return self._split_by_regex(value, r"(?<=[.!?])\s+")
 
     def _split_target_sentences(self, text: str) -> list[str]:
-        value = re.sub(r"\s+", "", text.strip())
+        value = self._normalize_display_text(text, "zh")
         if not value:
             return []
-        return [part for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part]
+        return [part.strip() for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part.strip()]
 
     def _split_source_clauses(self, text: str) -> list[str]:
         first, second = self._find_natural_source_split(text)
@@ -1164,24 +1344,66 @@ class InterpretationPipeline:
         split_at = max(candidates)[3]
         return text[:split_at].strip(), text[split_at:].strip()
 
-    def _split_target_display(self, text: str) -> list[str]:
-        raw = text.strip()
+    def _split_target_display(self, text: str, language: str | None = None) -> list[str]:
+        raw = self._normalize_display_text(text, language)
         if not raw:
             return []
-        if not self._contains_cjk(raw):
+        if not self._should_use_cjk_display(raw, language):
             return self._split_latin_display(raw, TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT)
 
-        value = re.sub(r"\s+", "", raw)
-        if not value:
-            return []
-
-        return self._split_cjk_display(value, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
+        return self._split_cjk_display(raw, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
 
     def _contains_cjk(self, text: str) -> bool:
         return bool(re.search(r"[\u4e00-\u9fff]", text))
 
+    def _contains_latin_word(self, text: str) -> bool:
+        return bool(re.search(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text))
+
+    def _latin_word_count(self, text: str) -> int:
+        return len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text))
+
+    def _is_cjk_language(self, language: str | None) -> bool:
+        if not language or language == "auto":
+            return False
+        normalized = language.lower()
+        return normalized.startswith(CJK_LANGUAGE_PREFIXES)
+
+    def _is_latin_dominant(self, text: str) -> bool:
+        latin_words = self._latin_word_count(text)
+        cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+        return latin_words >= 3 and latin_words * 2 >= cjk_chars
+
+    def _should_use_cjk_display(self, text: str, language: str | None = None) -> bool:
+        if not self._contains_cjk(text):
+            return False
+        if self._is_cjk_language(language):
+            return True
+        if not language or language == "auto":
+            return not self._is_latin_dominant(text)
+        return False
+
+    def _normalize_display_text(self, text: str, language: str | None = None) -> str:
+        value = re.sub(r"\s+", " ", text.strip())
+        if not value:
+            return ""
+        if not self._should_use_cjk_display(value, language):
+            return value
+
+        value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
+        value = re.sub(r"\s+([，。！？；：、,.!?;:])", r"\1", value)
+        value = re.sub(r"(?<=[，。！？；：、])\s+(?=[\u4e00-\u9fff])", "", value)
+        value = re.sub(r"([（《“\"'(\[])\s+", r"\1", value)
+        value = re.sub(r"\s+([））》”\"')\]])", r"\1", value)
+        return value.strip()
+
+    def _join_separator(self, parts: list[str]) -> str:
+        text = " ".join(parts)
+        if self._contains_cjk(text) and not self._contains_latin_word(text):
+            return ""
+        return " "
+
     def _split_cjk_display(self, text: str, max_chars: int) -> list[str]:
-        value = re.sub(r"\s+", "", text.strip())
+        value = self._normalize_display_text(text, "zh")
         if not value:
             return []
 
@@ -1234,17 +1456,32 @@ class InterpretationPipeline:
         bounded_by_parts = max(min(source_count, translation_count), readable_count)
         return min(max(source_count, translation_count), bounded_by_parts)
 
-    def _fit_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
-        parts = self._expand_source_parts_to_count(parts, count)
-        separator = "" if self._contains_cjk("".join(parts)) else " "
+    def _fit_source_parts_to_count(
+        self,
+        parts: list[str],
+        count: int,
+        language: str | None = None,
+    ) -> list[str]:
+        parts = self._expand_source_parts_to_count(parts, count, language)
+        separator = self._join_separator(parts)
         return self._fit_parts_to_count(parts, count, separator=separator)
 
-    def _fit_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
-        parts = self._expand_target_parts_to_count(parts, count)
-        separator = "" if self._contains_cjk("".join(parts)) else " "
+    def _fit_target_parts_to_count(
+        self,
+        parts: list[str],
+        count: int,
+        language: str | None = None,
+    ) -> list[str]:
+        parts = self._expand_target_parts_to_count(parts, count, language)
+        separator = self._join_separator(parts)
         return self._fit_parts_to_count(parts, count, separator=separator)
 
-    def _expand_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+    def _expand_source_parts_to_count(
+        self,
+        parts: list[str],
+        count: int,
+        language: str | None = None,
+    ) -> list[str]:
         expanded = [part for part in parts if part]
         while len(expanded) < count:
             index = max(
@@ -1254,7 +1491,7 @@ class InterpretationPipeline:
             )
             if index < 0:
                 break
-            if self._contains_cjk(expanded[index]):
+            if self._should_use_cjk_display(expanded[index], language):
                 replacement = self._split_long_cjk_part(
                     expanded[index],
                     SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT,
@@ -1272,21 +1509,27 @@ class InterpretationPipeline:
             expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
         return expanded
 
-    def _expand_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+    def _expand_target_parts_to_count(
+        self,
+        parts: list[str],
+        count: int,
+        language: str | None = None,
+    ) -> list[str]:
         expanded = [part for part in parts if part]
         while len(expanded) < count:
             index = max(range(len(expanded)), key=lambda item: len(expanded[item]), default=-1)
             if index < 0:
                 break
+            use_cjk = self._should_use_cjk_display(expanded[index], language)
             replacement = (
                 self._split_long_target_part(expanded[index])
-                if self._contains_cjk(expanded[index])
+                if use_cjk
                 else self._split_long_source_part(expanded[index])
             )
             if len(replacement) < 2:
                 replacement = (
                     self._split_target_part_evenly(expanded[index])
-                    if self._contains_cjk(expanded[index])
+                    if use_cjk
                     else self._split_source_part_evenly(expanded[index])
                 )
             if len(replacement) < 2:

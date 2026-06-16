@@ -83,9 +83,8 @@ class ClaimHandoffResponse(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
-def _normalize_source_language(code: str) -> str:
-    # LiveTranslate 的 ASR 需要明确语种；auto 暂以英语兜底（演示素材以英文为主）。
-    return "en" if code in ("auto", "", None) else code
+def _normalize_source_language(code: str | None) -> str:
+    return code or "auto"
 
 
 def _register_session(req: CreateSessionRequest) -> str:

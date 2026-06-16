@@ -8,6 +8,7 @@ from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
 from app.services.providers.mock import build_mock_events
 from app.services.session_events import session_event_hub
+from app.services.session_store import session_store
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +52,21 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_create_session_preserves_auto_source_language() -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/sessions",
+            json={"inputMode": "browser_audio", "sourceLanguage": "auto", "targetLanguage": "zh"},
+        )
+
+    assert response.status_code == 200
+    record = session_store.get(response.json()["sessionId"])
+    assert record is not None
+    assert record.source_language == "auto"
+    assert record.target_language == "zh"
 
 
 @pytest.mark.asyncio

@@ -151,6 +151,15 @@ const defaultSourceInputState: SourceInputState = {
 
 const fileSourceKeys = new Set(["video-file", "audio-file"]);
 const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
+const autoDetectSourceKeys = new Set([
+  "video-file",
+  "audio-file",
+  "url",
+  "microphone",
+  "browser-tab",
+  "screen-window",
+  "system-audio"
+]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
   [testVideoFixture.key]: "demo",
@@ -923,8 +932,14 @@ export const useSessionStore = defineStore("session", {
       this.quickForm.source = source.key;
       this.quickInput = { ...defaultSourceInputState };
       if (source.key === testVideoFixture.key) {
+        this.quickForm.sourceLanguage = "中文";
+        this.quickForm.targetLanguage = "英语";
         this.loadTestVideoFixturePreview();
       } else if (!this.activeMode) {
+        if (autoDetectSourceKeys.has(source.key)) {
+          this.quickForm.sourceLanguage = "自动检测";
+          if (this.quickForm.targetLanguage === "英语") this.quickForm.targetLanguage = "中文";
+        }
         this.clearLocalMediaPreview();
       }
     },

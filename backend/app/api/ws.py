@@ -345,8 +345,7 @@ def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:
     """允许 start_session 携带少量覆盖项（语种/领域/源），增强健壮性。"""
     if payload.get("sourceLanguage"):
-        lang = payload["sourceLanguage"]
-        record.source_language = "en" if lang == "auto" else lang
+        record.source_language = payload["sourceLanguage"]
     if payload.get("targetLanguage"):
         record.target_language = payload["targetLanguage"]
     if payload.get("domain"):

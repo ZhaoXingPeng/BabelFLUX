@@ -5,6 +5,7 @@ import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
+import { testVideoFixture } from "./fixtures/testVideo";
 import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
 
@@ -542,7 +543,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(mockRuntime.createSession).toHaveBeenCalledWith({
       inputMode: "browser_audio",
-      sourceLanguage: "en",
+      sourceLanguage: "auto",
       targetLanguage: "ja",
       productMode: "quick",
       sessionName: "季度发布会同传",
@@ -741,6 +742,29 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(store.activeSegmentId).toBe("upload-seg-1");
+  });
+
+  it("切换到上传类声源时会自动启用源语言自动检测", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await setSource(wrapper, "video-file");
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("自动检测");
+    expect(store.quickForm.targetLanguage).toBe("中文");
+
+    await setSource(wrapper, "url");
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("自动检测");
+    expect(store.quickForm.targetLanguage).toBe("中文");
+
+    await setSource(wrapper, testVideoFixture.key);
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("中文");
+    expect(store.quickForm.targetLanguage).toBe("英语");
   });
 
   it("sends ttsEnabled and plays backend audio segments when voice broadcast is enabled", async () => {
