@@ -38,7 +38,7 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 | 实时识别 + 翻译 | 单条 WebSocket 接入 `qwen3.5-livetranslate-flash-realtime`，服务端 VAD 自动断句，边说边出双语字幕 |
 | 实时纠偏（在线） | 传译进行中由 `qwen-flash` 跨句复核，结合后文修正前句的术语/数字/否定/一词多义错误，前端琥珀高亮即时展示 |
 | 完整纠偏（会后） | 结束后 `qwen-plus` 通读全场做全局校正、统一术语、生成摘要；六大领域差异化 PROMPT |
-| 多源输入 | 在线直链、本地视频/音频上传、麦克风、系统音频、屏幕/窗口、浏览器标签页，以及演示模式 |
+| 多源输入 | 在线直链、本地视频/音频（浏览器播放采集）、麦克风、系统音频、屏幕/窗口、浏览器标签页，以及演示模式 |
 | 桌面悬浮窗 | Tauri 透明置顶字幕；可自选音源独立采集，或接管 Web 会话；任意位置拖拽、可调透明度与字号 |
 | 会话报告导出 | 双语终稿 + 校正记录 + 摘要，支持 TXT / SRT / Markdown / JSON 四种格式下载 |
 | 术语表 / 热词 | 术语经引擎 corpus 注入，纠偏与报告全程优先遵循 |
@@ -62,7 +62,15 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 | 内嵌 ASR | `qwen3-asr-flash-realtime`（`LIVE_TRANSLATE_ASR_MODEL`） |
 | 实时纠偏（低延迟） | `qwen-flash`（`REALTIME_REVISION_MODEL`） |
 | 会后完整纠偏（强模型） | `qwen-plus`（`FINAL_CORRECTION_MODEL`，可换 `qwen3-max` / `deepseek-v4-pro`） |
-| 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，voice `Cherry`） |
+| 语音合成（可选） | `qwen3-tts-flash-realtime`（`TTS_MODEL`，LiveTranslate voice `Tina`） |
+
+### 界面 03 模型策略
+
+同传设置里的 `03 模型策略` 当前是产品层选项，会随会话 payload 记录为 `modelProfile`，但尚未接入真实 provider 路由或自动换模。真实管线目前按后端环境变量固定选择：实时链路使用 `qwen3.5-livetranslate-flash-realtime` + `qwen3-asr-flash-realtime`；在线纠偏使用 `qwen-flash` 的近 4 句窗口；会后完整纠偏使用 `qwen-plus`。`智能默认`、`快速低延迟`、`高准确`、`成本优先`、`指定供应商` 仍是 UI 占位，`gummy` / `fun_asr` 等 provider 回退未实现。
+
+### 专业领域
+
+专业领域选项已进入后端会话并影响纠偏 prompt。当前支持 `通用`、`技术`、`商务`、`教育`、`医疗`、`法律`、`自定义术语表`；不同领域会改变实时纠偏和会后纠偏的关注点，例如技术领域优先保留 API、框架、模型、论文名，商务领域更谨慎处理公司、职位、货币和指标，医疗/法律领域会保守处理剂量、症状、条款、责任类表述。领域选项不会替换实时识别翻译模型，主要作用在 `backend/app/services/revision.py` 的纠偏提示词与术语处理。
 
 ---
 
@@ -73,8 +81,8 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 | 模式 | 入口 |
 | --- | --- |
 | `url` | 后端用 ffmpeg 从在线直链解码并喂入 |
-| `upload_video` / `upload_audio` | 解码先前上传到 `/sessions/{id}/media` 的本地文件 |
 | `microphone` / `system_audio` / `screen_window` / `browser_audio` | 前端 / 桌面用 AudioWorklet 采集为 16k 单声道 PCM，经 WS 二进制帧推送 |
+| `media_element_audio` | 本地视频/音频在浏览器播放，前端采集媒体元素音频为 PCM 后推送 |
 | `demo` | `DEMO_MEDIA_PATH` 指向的样例媒体，或 mock 事件流 |
 
 > 采集类音源在浏览器/WebView 内用 `AudioContext({sampleRate:16000})` 原生重采样到 16k，分帧约 100ms 推流；前端在后端管线就绪（收到首个 `source_sync_state`）后才开始推送，避免早期帧丢弃。
@@ -107,6 +115,14 @@ cp frontend/.env.example frontend/.env
 cd desktop && npm install
 npm run tauri dev           # 开发态 devUrl 5175；npm run tauri build 出安装包
 ```
+
+## 桌面投送
+
+Web 工作台右下角的显示器按钮会生成一次性 handoff token（300s TTL），并通过 `lingosync://` deep link 唤起桌面悬浮窗。handoff 模式只接管 Web 会话的字幕事件，本次会话的音源、结束动作和报告下载仍由 Web 端负责；standalone 模式则在桌面端自选系统音频、屏幕/窗口、标签页或麦克风并独立创建会话。
+
+handoff 会话结束后，请回到 Web 工作台等待报告生成，并在报告区下载 TXT / SRT / Markdown / JSON。桌面 standalone 会话结束后，悬浮窗会等待后端报告完成并提供下载按钮。
+
+切换网页上下文时不会复用旧上下文：handoff token 绑定到当前 Web session，桌面端兑换后订阅同一 session 的 WebSocket。用户从中文视频页切到英文视频页、或切换音源来源时，应结束当前会话并重新投送；否则桌面悬浮窗仍显示旧 session 的字幕事件。
 
 默认服务地址：
 
@@ -163,8 +179,8 @@ POST /api/models/tts/speech
 | --- | --- | --- |
 | Web 工作台 | Vue 3、Vite、TypeScript、Pinia | 实时同传界面状态多、更新频繁，Vue 组合式 API + Pinia 适合把会话、字幕、报告、输入源拆成清晰状态；Vite 保证开发调试快，TypeScript 降低 WebSocket 事件和报告结构的维护成本。 |
 | 字幕交互 | GSAP、CSS、@vueuse/core、@floating-ui/vue、video.js | 字幕流需要平滑入场、纠偏高亮、悬浮定位和媒体预览控制；这些库覆盖动画、浏览器能力封装、浮层定位与播放器能力，不需要为常见交互重新造轮子。 |
-| 后端服务 | FastAPI、uvicorn、asyncio、pydantic、httpx、websockets、aiofiles、sqlmodel | 同传链路核心是长连接事件流和异步媒体处理，FastAPI + asyncio 能同时处理 WebSocket、模型流、文件解码和报告生成；pydantic 让前后端事件契约保持稳定。 |
-| 媒体解码 | ffmpeg | 上传视频、音频和在线直链格式不可控，ffmpeg 是跨格式解码最稳妥的基础设施，可统一转为 16k 单声道 PCM 喂给实时模型。 |
+| 后端服务 | FastAPI、uvicorn、asyncio、pydantic、httpx、websockets、aiofiles | 同传链路核心是长连接事件流和异步媒体处理，FastAPI + asyncio 能同时处理 WebSocket、模型流、文件解码和报告生成；pydantic 让前后端事件契约保持稳定。 |
+| 媒体解码 | ffmpeg | 在线直链格式不可控，ffmpeg 是跨格式解码最稳妥的基础设施，可统一转为 16k 单声道 PCM 喂给实时模型。 |
 | 桌面悬浮窗 | Tauri v2、Vue 3、deep-link、global-shortcut、store 插件 | 桌面端需要轻量、透明置顶、快捷键和 Web 会话接管；Tauri 复用前端技术栈，同时比传统 Electron 包体更小，适合演示和后续分发。 |
 | 模型链路 | 阿里云百炼 DashScope、LiveTranslate、qwen-flash、qwen-plus、qwen-tts | LiveTranslate 提供实时 ASR + 翻译低延迟链路；qwen-flash 用于在线跨句纠偏，qwen-plus 负责会后全局校正，按任务强度拆模型可以兼顾速度、成本和最终质量。 |
 

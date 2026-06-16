@@ -5,8 +5,6 @@ export type DesktopDisplayMode = "bilingual" | "translation-only" | "floating" |
 export interface CreateSessionPayload {
   inputMode:
     | "demo"
-    | "upload_video"
-    | "upload_audio"
     | "url"
     | "microphone"
     | "browser_audio"
@@ -23,6 +21,7 @@ export interface CreateSessionPayload {
   sourceFileName?: string;
   sourceUrl?: string;
   sourcePermission?: "idle" | "requesting" | "granted" | "denied";
+  ttsEnabled?: boolean;
 }
 
 export interface CreateSessionResponse {
@@ -99,29 +98,6 @@ export async function claimSessionHandoff(token: string): Promise<ClaimHandoffRe
     throw new Error(`Claim handoff failed: ${response.status}`);
   }
 
-  return response.json();
-}
-
-export interface UploadMediaResponse {
-  mediaId: string;
-  fileName: string;
-  sizeBytes: number;
-}
-
-/** 上传本地媒体字节到会话（upload_video / upload_audio 模式必需，须在 start_session 之前完成）。 */
-export async function uploadSessionMedia(
-  sessionId: string,
-  file: File
-): Promise<UploadMediaResponse> {
-  const body = new FormData();
-  body.append("file", file);
-  const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/media`, {
-    method: "POST",
-    body
-  });
-  if (!response.ok) {
-    throw new Error(`Upload media failed: ${response.status}`);
-  }
   return response.json();
 }
 

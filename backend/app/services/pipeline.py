@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -22,7 +23,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
-from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
+from app.models.events import AudioSegment, RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.media import iter_pcm_frames
 from app.services.providers.dashscope import (
     DashScopeClient,
@@ -42,10 +43,15 @@ DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.25
 SYNC_LAG_WARN_MS = 600
-SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 14
+SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
+FINAL_DISPLAY_MAX_SEGMENT_MS = 9500
+SOURCE_CONTINUATION_MAX_GAP_MS = 700
+SOURCE_CONTINUATION_MAX_DURATION_MS = 12_000
+SOURCE_CONTINUATION_MAX_CHARS = 180
+TTS_OUTPUT_SAMPLE_RATE = 24000
 
 ENGLISH_SHORT_SOURCE_WORDS = {
     "a",
@@ -88,6 +94,27 @@ ENGLISH_SHORT_SOURCE_WORDS = {
     "you",
 }
 
+SOURCE_CONTINUATION_PREFIXES = (
+    "and ",
+    "as ",
+    "because ",
+    "but ",
+    "for ",
+    "if ",
+    "in fact",
+    "of ",
+    "or ",
+    "so ",
+    "that ",
+    "then ",
+    "to ",
+    "which ",
+    "while ",
+    "who ",
+    "whose ",
+    "with ",
+)
+
 
 class InterpretationPipeline:
     def __init__(
@@ -121,6 +148,7 @@ class InterpretationPipeline:
         self._display_count_by_root: dict[str, int] = {}
         self._raw_source_by_root: dict[str, str] = {}
         self._raw_translation_by_root: dict[str, str] = {}
+        self._pending_audio_by_response: dict[str, list[bytes]] = {}
         self._continuation_items: set[str] = set()
         self._noise_roots: set[str] = set()
         self._source_final_roots: set[str] = set()
@@ -128,6 +156,7 @@ class InterpretationPipeline:
         self._display_final_roots: set[str] = set()
         self._last_partial_emit: dict[str, float] = {}
         self._last_emitted_segment: dict[str, tuple[str, str, int, int]] = {}
+        self._tts_sample_rate = TTS_OUTPUT_SAMPLE_RATE
         self._last_event_at = time.monotonic()
         self._last_sync_emit_at = 0.0
         self._client_playback_ms: int | None = None
@@ -288,6 +317,8 @@ class InterpretationPipeline:
             seg = await self._on_translation(ev.text, ev.response_id, final=True)
             if seg is not None:
                 await self._on_segment_complete(seg)
+        elif kind == "audio":
+            await self._on_audio(ev)
         elif kind == "error":
             await self._emit_error(ev.text)
 
@@ -381,7 +412,10 @@ class InterpretationPipeline:
             or seg.source_text
             or seg.translation_text
             or seg.response_id is not None
-            or not self._looks_like_source_continuation(text)
+            or not (
+                self._looks_like_source_continuation(text)
+                or self._should_merge_source_root_with_previous(seg, item_id, text, final=True)
+            )
         ):
             return seg
 
@@ -418,6 +452,8 @@ class InterpretationPipeline:
         self._source_final_roots.discard(seg.segment_id)
         self._translation_final_roots.discard(seg.segment_id)
         self._display_final_roots.discard(seg.segment_id)
+        if seg.response_id:
+            self._pending_audio_by_response.pop(seg.response_id, None)
         self.record._by_id.pop(seg.segment_id, None)
         self.record.segments = [
             existing for existing in self.record.segments if existing.segment_id != seg.segment_id
@@ -431,6 +467,49 @@ class InterpretationPipeline:
             return True
         match = re.search(r"[A-Za-z]", value)
         return bool(match and value[match.start()].islower())
+
+    def _should_merge_source_root_with_previous(
+        self, seg: SegmentRecord, item_id: str | None, text: str, *, final: bool
+    ) -> bool:
+        if (
+            not final
+            or not item_id
+            or seg.source_text
+            or seg.translation_text
+            or seg.response_id is not None
+        ):
+            return False
+        previous = self._previous_source_root(seg)
+        if previous is None:
+            return False
+        if previous.response_id is not None or previous.translation_text:
+            return False
+        previous_text = self._raw_source_by_root.get(previous.segment_id, previous.source_text)
+        if not previous_text.strip() or self._has_terminal_source_punctuation(previous_text):
+            return False
+        gap_ms = seg.start_ms - previous.end_ms
+        if gap_ms > SOURCE_CONTINUATION_MAX_GAP_MS:
+            return False
+        merged_duration = max(seg.end_ms, self.elapsed_ms, seg.start_ms) - previous.start_ms
+        if merged_duration > SOURCE_CONTINUATION_MAX_DURATION_MS:
+            return False
+        merged_text = f"{previous_text} {text}".strip()
+        if len(merged_text) > SOURCE_CONTINUATION_MAX_CHARS:
+            return False
+        return self._starts_with_source_continuation_cue(text)
+
+    def _starts_with_source_continuation_cue(self, text: str) -> bool:
+        value = re.sub(r"\s+", " ", text.strip()).lower().lstrip("\"'“‘")
+        if not value:
+            return False
+        if value[0] in {"'", "\u2019"}:
+            return True
+        if self._starts_with_lowercase_alpha(value):
+            return True
+        return value.startswith(SOURCE_CONTINUATION_PREFIXES)
+
+    def _has_terminal_source_punctuation(self, text: str) -> bool:
+        return text.rstrip().endswith((".", "!", "?", "。", "！", "？"))
 
     def _merge_source_partial(self, previous: str, text: str) -> str:
         current = text.strip()
@@ -532,6 +611,10 @@ class InterpretationPipeline:
         return result
 
     def _collapse_source_repetition_once(self, text: str) -> str:
+        cjk_collapsed = self._collapse_cjk_repetition_once(text)
+        if cjk_collapsed != text:
+            return cjk_collapsed
+
         words = text.split()
         deduped = self._collapse_adjacent_source_duplicates(words)
         if deduped != words:
@@ -565,6 +648,20 @@ class InterpretationPipeline:
                 if normalized[index : index + size] == prefix:
                     return " ".join(words[index:])
         return text
+
+    def _collapse_text_repetition(self, text: str) -> str:
+        result = text
+        for _ in range(4):
+            collapsed = self._collapse_cjk_repetition_once(result)
+            if collapsed == result:
+                return result
+            result = collapsed
+        return result
+
+    def _collapse_cjk_repetition_once(self, text: str) -> str:
+        if not re.search(r"[\u4e00-\u9fff]", text):
+            return text
+        return re.sub(r"([\u4e00-\u9fff]{3,24})(?:[，,、\s]*\1)+", r"\1", text)
 
     def _collapse_adjacent_source_duplicates(self, words: list[str]) -> list[str]:
         result: list[str] = []
@@ -609,7 +706,11 @@ class InterpretationPipeline:
         if not text:
             return
         seg = self._source_segment(item_id)
-        seg = self._merge_source_continuation_if_needed(seg, item_id, text)
+        should_merge_root = self._should_merge_source_root_with_previous(
+            seg, item_id, text, final=final
+        )
+        if self._looks_like_source_continuation(text) or should_merge_root:
+            seg = self._merge_source_continuation_if_needed(seg, item_id, text)
         previous = self._raw_source_by_root.get(seg.segment_id, "")
         display_text = (
             self._collapse_source_repetition(text.strip())
@@ -633,7 +734,7 @@ class InterpretationPipeline:
     ) -> SegmentRecord | None:
         if not text:
             return None
-        display_text = text.strip()
+        display_text = self._collapse_text_repetition(text.strip())
         seg = self._bind_response(response_id, display_text)
         previous = self._raw_translation_by_root.get(seg.segment_id, "")
         self._raw_translation_by_root[seg.segment_id] = display_text
@@ -647,13 +748,40 @@ class InterpretationPipeline:
                 seg.end_ms = max(self.elapsed_ms, seg.start_ms)
             self._translation_final_roots.add(seg.segment_id)
         await self._emit_display_segments(seg)
+        await self._flush_pending_audio(response_id)
         return seg
 
+    async def _on_audio(self, ev: Any) -> None:
+        if not ev.audio or not ev.response_id:
+            return
+        root = self._by_response.get(ev.response_id)
+        if root is None:
+            self._pending_audio_by_response.setdefault(ev.response_id, []).append(ev.audio)
+            return
+        await self._emit_audio(root, ev.audio)
+
+    async def _flush_pending_audio(self, response_id: str | None) -> None:
+        if not response_id:
+            return
+        root = self._by_response.get(response_id)
+        if root is None:
+            return
+        for audio in self._pending_audio_by_response.pop(response_id, []):
+            await self._emit_audio(root, audio)
+
+    async def _emit_audio(self, root: SegmentRecord, audio: bytes) -> None:
+        segment = AudioSegment(
+            segmentId=root.segment_id,
+            audioBase64=base64.b64encode(audio).decode("ascii"),
+            sampleRate=self._tts_sample_rate,
+        )
+        await self.emit({"type": "audio_segment", **segment.model_dump(by_alias=True)})
+
     async def _emit_display_segments(self, root: SegmentRecord) -> None:
-        # Split paired bilingual text only at sentence level, and only when both
-        # sides produce the same number of sentences. Clause/length splitting per
-        # language creates false pairings because English and Chinese boundaries
-        # rarely line up exactly.
+        # LiveTranslate VAD can keep several semantic clauses in one turn, and source/target
+        # punctuation counts often differ. Split both sides into readable display chunks first,
+        # then align them by proportional order so the report and subtitle cards do not collapse
+        # long turns into one dense paragraph.
         source_text = re.sub(
             r"\s+",
             " ",
@@ -666,33 +794,44 @@ class InterpretationPipeline:
         )
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
-        source_sentences = self._split_source_sentences(source_text)
-        translation_sentences = self._split_target_sentences(translation_text)
+        has_bilingual_text = bool(source_text and translation_text)
+        source_split = (
+            self._split_source_display(source_text)
+            if has_bilingual_text
+            else ([source_text] if source_text else [])
+        )
+        translation_split = (
+            self._split_target_display(translation_text)
+            if has_bilingual_text
+            else ([translation_text] if translation_text else [])
+        )
         previous_count = self._display_count_by_root.get(root.segment_id, 1)
         keep_existing_split = previous_count > 1 and (
-            len(source_sentences) > 1 or len(translation_sentences) > 1
+            len(source_split) > 1 or len(translation_split) > 1
         )
-        if len(source_sentences) > 1 and len(source_sentences) == len(translation_sentences):
-            source_parts = source_sentences
-            translation_parts = translation_sentences
-        elif keep_existing_split:
-            source_parts = (
-                source_sentences
-                if len(source_sentences) > 1
-                else ([source_text] if source_text else [])
-            )
+        if keep_existing_split:
+            source_parts = source_split if source_split else ([source_text] if source_text else [])
             translation_parts = (
-                translation_sentences
-                if len(translation_sentences) > 1
+                translation_split
+                if translation_split
                 else ([translation_text] if translation_text else [])
             )
         else:
-            source_parts = [source_text] if source_text else []
-            translation_parts = [translation_text] if translation_text else []
+            source_parts = source_split
+            translation_parts = translation_split
         if not source_parts and not translation_parts:
             return
 
-        current_count = max(len(source_parts), len(translation_parts), 1)
+        current_count = self._display_split_count(source_parts, translation_parts)
+        if source_final or translation_final:
+            display_span_ms = root.end_ms - root.start_ms
+            current_count = max(
+                current_count,
+                (display_span_ms + FINAL_DISPLAY_MAX_SEGMENT_MS - 1)
+                // FINAL_DISPLAY_MAX_SEGMENT_MS,
+            )
+        source_parts = self._fit_source_parts_to_count(source_parts, current_count)
+        translation_parts = self._fit_target_parts_to_count(translation_parts, current_count)
         count = max(previous_count, current_count)
         self._display_count_by_root[root.segment_id] = count
 
@@ -806,11 +945,15 @@ class InterpretationPipeline:
         if not value:
             return []
 
-        sentence_parts = self._split_source_sentences(value)
-        parts: list[str] = []
-        for sentence in sentence_parts:
-            for part in self._split_source_clauses(sentence):
-                parts.extend(self._split_long_source_part(part))
+        parts = self._split_source_sentences(value)
+        target_count = self._target_source_part_count(value)
+        while len(parts) < target_count or any(
+            self._word_count(part) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT for part in parts
+        ):
+            split_index, replacement = self._best_source_split(parts)
+            if split_index < 0:
+                break
+            parts = [*parts[:split_index], *replacement, *parts[split_index + 1 :]]
         return parts
 
     def _split_source_sentences(self, text: str) -> list[str]:
@@ -826,19 +969,8 @@ class InterpretationPipeline:
         return [part for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part]
 
     def _split_source_clauses(self, text: str) -> list[str]:
-        clauses = self._split_by_regex(text, r"(?<=[,;:])\s+")
-        groups: list[str] = []
-        current = ""
-        for clause in clauses:
-            candidate = f"{current} {clause}".strip() if current else clause
-            if current and self._word_count(candidate) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
-                groups.append(current)
-                current = clause
-            else:
-                current = candidate
-        if current:
-            groups.append(current)
-        return groups
+        first, second = self._find_natural_source_split(text)
+        return [first, second] if first and second else [text]
 
     def _split_long_source_part(self, text: str) -> list[str]:
         words = text.split()
@@ -849,15 +981,69 @@ class InterpretationPipeline:
             for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
         ]
 
+    def _target_source_part_count(self, text: str) -> int:
+        return max(
+            1,
+            (self._word_count(text) + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT - 1)
+            // SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT,
+        )
+
+    def _best_source_split(self, parts: list[str]) -> tuple[int, list[str]]:
+        best_index = -1
+        best_replacement: list[str] = []
+        best_score: tuple[int, int] | None = None
+        for index, part in enumerate(parts):
+            replacement = self._split_source_clauses(part)
+            if len(replacement) < 2:
+                replacement = self._split_long_source_part(part)
+            if len(replacement) < 2:
+                continue
+            score = (self._word_count(part), len(part))
+            if best_score is None or score > best_score:
+                best_index = index
+                best_replacement = replacement
+                best_score = score
+        return best_index, best_replacement
+
+    def _find_natural_source_split(self, text: str) -> tuple[str, str]:
+        words = text.split()
+        if len(words) <= SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
+            return "", ""
+
+        candidates: list[tuple[int, int, int, int]] = []
+        pattern = re.compile(
+            r"[,;:]\s+|\s+(?:and|as|because|but|for|if|or|so|then|to|which|while|who|whose|with)\s+",
+            re.IGNORECASE,
+        )
+        for match in pattern.finditer(text):
+            split_at = match.end() if match.group(0).strip() in {",", ";", ":"} else match.start()
+            first = text[:split_at].strip()
+            second = text[split_at:].strip()
+            first_words = self._word_count(first)
+            second_words = self._word_count(second)
+            if first_words < 3 or second_words < 3:
+                continue
+            boundary = match.group(0).strip().lower()
+            priority = 2 if boundary in {",", ";", ":"} else 1
+            overflow_penalty = max(0, first_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT) + max(
+                0, second_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT
+            )
+            balance_penalty = abs(first_words - second_words)
+            candidates.append((priority, -overflow_penalty, -balance_penalty, split_at))
+
+        if not candidates:
+            return "", ""
+        split_at = max(candidates)[3]
+        return text[:split_at].strip(), text[split_at:].strip()
+
     def _split_target_display(self, text: str) -> list[str]:
         value = re.sub(r"\s+", "", text.strip())
         if not value:
             return []
 
-        raw_parts = re.findall(r"[^，,；;：:。！？]+[，,；;：:。！？]?", value)
         groups: list[str] = []
-        for raw in raw_parts:
-            groups.extend(self._split_long_target_part(raw))
+        for sentence in self._split_target_sentences(value):
+            groups.extend(self._split_long_target_part(sentence))
         return [part for part in groups if part]
 
     def _split_long_target_part(self, text: str) -> list[str]:
@@ -883,6 +1069,91 @@ class InterpretationPipeline:
                 for index in range(0, len(value), TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
             ]
         return parts
+
+    def _display_split_count(self, source_parts: list[str], translation_parts: list[str]) -> int:
+        source_count = len(source_parts)
+        translation_count = len(translation_parts)
+        if not source_count:
+            return max(translation_count, 1)
+        if not translation_count:
+            return max(source_count, 1)
+        source_chars = len(" ".join(source_parts))
+        translation_chars = len("".join(translation_parts))
+        readable_count = max(
+            1,
+            (source_chars + 139) // 140,
+            (translation_chars + 79) // 80,
+        )
+        bounded_by_parts = max(min(source_count, translation_count), readable_count)
+        return min(max(source_count, translation_count), bounded_by_parts)
+
+    def _fit_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        parts = self._expand_source_parts_to_count(parts, count)
+        return self._fit_parts_to_count(parts, count, separator=" ")
+
+    def _fit_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        parts = self._expand_target_parts_to_count(parts, count)
+        return self._fit_parts_to_count(parts, count, separator="")
+
+    def _expand_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        expanded = [part for part in parts if part]
+        while len(expanded) < count:
+            index = max(
+                range(len(expanded)),
+                key=lambda item: self._word_count(expanded[item]),
+                default=-1,
+            )
+            if index < 0:
+                break
+            replacement = self._split_source_clauses(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_long_source_part(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_source_part_evenly(expanded[index])
+            if len(replacement) < 2:
+                break
+            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
+        return expanded
+
+    def _expand_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        expanded = [part for part in parts if part]
+        while len(expanded) < count:
+            index = max(range(len(expanded)), key=lambda item: len(expanded[item]), default=-1)
+            if index < 0:
+                break
+            replacement = self._split_long_target_part(expanded[index])
+            if len(replacement) < 2:
+                replacement = self._split_target_part_evenly(expanded[index])
+            if len(replacement) < 2:
+                break
+            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
+        return expanded
+
+    def _split_source_part_evenly(self, text: str) -> list[str]:
+        words = text.split()
+        if len(words) < 2:
+            return [text]
+        midpoint = len(words) // 2
+        return [" ".join(words[:midpoint]), " ".join(words[midpoint:])]
+
+    def _split_target_part_evenly(self, text: str) -> list[str]:
+        value = text.strip()
+        if len(value) < 2:
+            return [text]
+        midpoint = len(value) // 2
+        return [value[:midpoint], value[midpoint:]]
+
+    def _fit_parts_to_count(self, parts: list[str], count: int, *, separator: str) -> list[str]:
+        if count <= 0 or len(parts) <= count:
+            return parts
+        groups: list[str] = []
+        for index in range(count):
+            start = (len(parts) * index) // count
+            end = (len(parts) * (index + 1)) // count
+            if end <= start:
+                end = start + 1
+            groups.append(separator.join(parts[start:end]).strip())
+        return groups
 
     def _split_by_regex(self, text: str, pattern: str) -> list[str]:
         return [part.strip() for part in re.split(pattern, text) if part.strip()]
@@ -947,6 +1218,17 @@ class InterpretationPipeline:
         estimated_segment_ms = FINAL_DISPLAY_SEGMENT_MS if final else PARTIAL_DISPLAY_SEGMENT_MS
         end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * estimated_segment_ms)
         span = max(1, end_ms - root.start_ms)
+        if final and span > FINAL_DISPLAY_MAX_SEGMENT_MS:
+            bounds: list[tuple[int, int]] = []
+            for index in range(count):
+                start = root.start_ms + int(span * index / count)
+                end = (
+                    end_ms
+                    if index == count - 1
+                    else root.start_ms + int(span * (index + 1) / count)
+                )
+                bounds.append((start, max(end, start)))
+            return bounds
         weights = [
             max(self._word_count(source_parts[index]), len(translation_parts[index]) // 3, 1)
             for index in range(count)

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import base64
 import json
 from types import SimpleNamespace
 
@@ -106,6 +107,98 @@ def _translation_text_for_response(record: SessionRecord, response_id: str) -> s
     return "".join(
         s.translation_text for s in record.segments if s.response_id == response_id
     ).strip()
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_delta_emits_audio_segment_for_paired_response() -> None:
+    audio_bytes = b"\x01\x02\x03\x04"
+    messages = [
+        {"type": "session.created"},
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "itemA",
+            "transcript": "Hello world.",
+        },
+        {"type": "response.created", "response": {"id": "resp1"}},
+        {"type": "response.text.done", "response_id": "resp1", "text": "你好，世界。"},
+        {
+            "type": "response.audio.delta",
+            "response_id": "resp1",
+            "delta": base64.b64encode(audio_bytes).decode("ascii"),
+        },
+    ]
+    record = SessionRecord(
+        session_id="tts-audio", source_language="en", target_language="zh", tts_enabled=True
+    )
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._reviser.enabled = False
+
+    session = LiveTranslateSession(
+        _dummy_config(),
+        model="m",
+        tts_enabled=True,
+        websocket_connect=lambda *_a, **_k: _async_return(FakeWS(messages)),
+    )
+    await session.connect()
+    await pipeline._consume(session)
+
+    audio_event = next(event for event in events if event["type"] == "audio_segment")
+    assert audio_event == {
+        "type": "audio_segment",
+        "segmentId": record.segments[0].segment_id,
+        "audioBase64": base64.b64encode(audio_bytes).decode("ascii"),
+        "sampleRate": 24000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_tts_audio_delta_waits_until_response_is_paired() -> None:
+    audio_bytes = b"\x05\x06"
+    messages = [
+        {"type": "session.created"},
+        {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "itemA",
+            "transcript": "Hello world.",
+        },
+        {"type": "response.created", "response": {"id": "resp1"}},
+        {
+            "type": "response.audio.delta",
+            "response_id": "resp1",
+            "delta": base64.b64encode(audio_bytes).decode("ascii"),
+        },
+        {"type": "response.text.done", "response_id": "resp1", "text": "你好，世界。"},
+    ]
+    record = SessionRecord(
+        session_id="tts-audio-first", source_language="en", target_language="zh", tts_enabled=True
+    )
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._reviser.enabled = False
+
+    session = LiveTranslateSession(
+        _dummy_config(),
+        model="m",
+        tts_enabled=True,
+        websocket_connect=lambda *_a, **_k: _async_return(FakeWS(messages)),
+    )
+    await session.connect()
+    await pipeline._consume(session)
+
+    audio_event = next(event for event in events if event["type"] == "audio_segment")
+    assert audio_event["segmentId"] == record.segments[0].segment_id
+    assert audio_event["audioBase64"] == base64.b64encode(audio_bytes).decode("ascii")
 
 
 @pytest.mark.asyncio
@@ -353,7 +446,7 @@ async def test_display_segments_keep_source_and_translation_paired() -> None:
 
 
 @pytest.mark.asyncio
-async def test_display_segments_keep_mismatched_sentence_counts_together() -> None:
+async def test_display_segments_split_mismatched_sentence_counts_for_readability() -> None:
     record = SessionRecord(session_id="paired-tail", source_language="en", target_language="zh")
 
     async def emit(_ev: dict) -> None:
@@ -368,9 +461,144 @@ async def test_display_segments_keep_mismatched_sentence_counts_together() -> No
     )
     await pipeline._on_translation("第一句。第二句。", "responseA", final=True)
 
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == "First sentence."
+    assert record.segments[0].translation_text == "第一句。"
+    assert record.segments[1].source_text == "Second sentence. Third sentence."
+    assert record.segments[1].translation_text == "第二句。"
+
+
+@pytest.mark.asyncio
+async def test_long_live_translate_turn_is_split_into_readable_display_segments() -> None:
+    record = SessionRecord(session_id="long-turn", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._begin_segment("itemA")
+    pipeline.elapsed_ms = 34_000
+
+    await pipeline._on_source(
+        (
+            "One of the works, in fact, so didn't meet her mark, she had set it out in the "
+            "trash in her studio, and her neighbor had taken it because she saw its value."
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        (
+            "事实上，其中一件作品甚至远未达到她的标准，以至于她把它扔进了工作室的垃圾桶，"
+            "结果被邻居捡走了，因为邻居看出了它的价值。"
+        ),
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) >= 3
+    assert all(len(segment.source_text) < 150 for segment in record.segments)
+    assert all(len(segment.translation_text) < 80 for segment in record.segments)
+    assert all(
+        later.start_ms - earlier.start_ms < 10_000
+        for earlier, later in zip(record.segments, record.segments[1:], strict=False)
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_source_continuations_merge_before_translation_binding() -> None:
+    record = SessionRecord(
+        session_id="semantic-continuation", source_language="en", target_language="zh"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline.elapsed_ms = 10_000
+    pipeline._begin_segment("itemA")
+    await pipeline._on_source(
+        "She told me that a few didn't quite meet her own mark",
+        "itemA",
+        final=True,
+    )
+
+    pipeline.elapsed_ms = 10_300
+    pipeline._begin_segment("itemB")
+    await pipeline._on_source(
+        "For what she wanted them to be one of the works,",
+        "itemB",
+        final=True,
+    )
+
+    pipeline.elapsed_ms = 10_600
+    pipeline._begin_segment("itemC")
+    await pipeline._on_source("In fact so didn't meet her mark,", "itemC", final=True)
+
     assert len(record.segments) == 1
-    assert record.segments[0].source_text == "First sentence. Second sentence. Third sentence."
-    assert record.segments[0].translation_text == "第一句。第二句。"
+    assert record.segments[0].source_text == (
+        "She told me that a few didn't quite meet her own mark "
+        "For what she wanted them to be one of the works, "
+        "In fact so didn't meet her mark,"
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_display_bounds_split_long_time_span_under_ten_seconds() -> None:
+    record = SessionRecord(session_id="long-span", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline._begin_segment("itemA")
+    pipeline.elapsed_ms = 34_000
+
+    await pipeline._on_source(
+        (
+            "I realized that success is a moment, but what we're always celebrating is "
+            "creativity and mastery. But this is the thing: what gets us to convert "
+            "success into mastery?"
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "我意识到成功只是一瞬间，而我们真正持续庆祝的是创造力与精进。但关键在于，是什么让我们将一时的成功转化为持久的精进？",
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) >= 4
+    assert all(segment.end_ms - segment.start_ms <= 10_000 for segment in record.segments)
+    assert all(segment.source_text for segment in record.segments)
+    assert all(segment.translation_text for segment in record.segments)
+
+
+@pytest.mark.asyncio
+async def test_cjk_repetition_is_collapsed_for_source_and_translation() -> None:
+    record = SessionRecord(session_id="cjk-repeat", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "从最黑暗的深处走来，从最黑暗的深处走来，黑暗的深处走来。",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "从最黑暗的深处走来，从最黑暗的深处走来，黑暗的深处走来。",
+        "responseA",
+        final=True,
+    )
+
+    combined_source = "".join(segment.source_text for segment in record.segments)
+    combined_translation = "".join(segment.translation_text for segment in record.segments)
+    assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_source
+    assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_translation
 
 
 @pytest.mark.asyncio
@@ -418,13 +646,18 @@ async def test_lowercase_source_continuation_does_not_shift_following_translatio
         final=True,
     )
 
-    assert len(record.segments) == 2
-    assert "the trash in her studio" in record.segments[0].source_text
-    assert "on her. the trash" not in record.segments[0].source_text
-    assert record.segments[1].source_text == (
+    item_a_segments = [segment for segment in record.segments if segment.item_id == "itemA"]
+    item_c_segments = [segment for segment in record.segments if segment.item_id == "itemC"]
+    combined_item_a_source = " ".join(segment.source_text for segment in item_a_segments)
+
+    assert len(record.segments) >= 3
+    assert "the trash in her studio" in combined_item_a_source
+    assert "on her. the trash" not in combined_item_a_source
+    assert len(item_c_segments) == 1
+    assert item_c_segments[0].source_text == (
         "In that moment, my view of success and creativity changed."
     )
-    assert record.segments[1].translation_text == "在那一刻，我对成功和创造力的看法发生了改变。"
+    assert item_c_segments[0].translation_text == "在那一刻，我对成功和创造力的看法发生了改变。"
 
 
 @pytest.mark.asyncio

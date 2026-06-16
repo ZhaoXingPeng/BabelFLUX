@@ -61,6 +61,21 @@ def test_live_translate_session_update_declares_low_latency_pcm_rate() -> None:
 
     assert event["session"]["input_audio_format"] == "pcm"
     assert event["session"]["sample_rate"] == 16000
+    assert event["session"]["output_audio_format"] == "pcm"
+
+
+def test_live_translate_qwen35_tts_uses_supported_voice_for_legacy_cherry() -> None:
+    session = LiveTranslateSession(
+        DashScopeConfig(api_key="test-key"),
+        model="qwen3.5-livetranslate-flash-realtime",
+        tts_enabled=True,
+        voice="Cherry",
+    )
+
+    event = session._session_update_event()
+
+    assert event["session"]["modalities"] == ["text", "audio"]
+    assert event["session"]["voice"] == "Tina"
 
 
 @pytest.mark.asyncio

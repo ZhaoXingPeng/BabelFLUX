@@ -36,6 +36,7 @@ class RealtimeRevisionPolicy(StrategyModel):
 
 
 class StrategyPlanResponse(StrategyModel):
+    disclaimer: str
     primary_provider: str = Field(alias="primaryProvider")
     fallback_providers: list[str] = Field(alias="fallbackProviders")
     asr_only_provider: str = Field(alias="asrOnlyProvider")
@@ -45,4 +46,3 @@ class StrategyPlanResponse(StrategyModel):
     gummy_config: dict[str, Any] = Field(alias="gummyConfig")
     realtime_revision_policy: RealtimeRevisionPolicy = Field(alias="realtimeRevisionPolicy")
     final_correction_prompt: str = Field(alias="finalCorrectionPrompt")
-

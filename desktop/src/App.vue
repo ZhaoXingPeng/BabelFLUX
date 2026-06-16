@@ -622,6 +622,9 @@ onUnmounted(() => {
         desktop
         @close="closeOverlayWindow"
       />
+      <p v-if="mode === 'handoff'" class="handoff-report-hint">
+        本次会话由 Web 端发起，报告请在 Web 端下载
+      </p>
     </div>
 
     <p v-if="errorMessage" class="desktop-overlay-error">{{ errorMessage }}</p>

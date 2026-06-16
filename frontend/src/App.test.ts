@@ -22,25 +22,33 @@ interface MockSocket {
   close: () => void;
 }
 
+interface MockAudioSource {
+  start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  connect: ReturnType<typeof vi.fn>;
+  addEventListener: ReturnType<typeof vi.fn>;
+  buffer: unknown;
+}
+
 const mockRuntime = vi.hoisted(() => ({
   createSession: vi.fn(),
   getSessionReport: vi.fn(),
   issueSessionHandoff: vi.fn(),
   reportDownloadUrl: vi.fn(),
-  uploadSessionMedia: vi.fn(),
   createSessionSocket: vi.fn(),
   routerPush: vi.fn(),
   routerReplace: vi.fn(),
   handlersBySession: new Map<string, SocketHandlers>(),
-  sockets: [] as Array<{ sessionId: string; socket: MockSocket }>
+  sockets: [] as Array<{ sessionId: string; socket: MockSocket }>,
+  audioSources: [] as MockAudioSource[],
+  audioGain: { gain: { value: 0 }, connect: vi.fn() }
 }));
 
 vi.mock("./api/client", () => ({
   createSession: mockRuntime.createSession,
   getSessionReport: mockRuntime.getSessionReport,
   issueSessionHandoff: mockRuntime.issueSessionHandoff,
-  reportDownloadUrl: mockRuntime.reportDownloadUrl,
-  uploadSessionMedia: mockRuntime.uploadSessionMedia
+  reportDownloadUrl: mockRuntime.reportDownloadUrl
 }));
 
 vi.mock("./api/ws", () => ({
@@ -239,6 +247,32 @@ const completedCorrectionReport: SessionReport = {
 describe("同传工作台 mock 流程", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", { OPEN: 1 });
+    mockRuntime.audioSources = [];
+    mockRuntime.audioGain = { gain: { value: 0 }, connect: vi.fn() };
+    class MockAudioContext {
+      state = "running";
+      currentTime = 0;
+      destination = {};
+      createGain = vi.fn(() => mockRuntime.audioGain);
+      createBuffer = vi.fn((_channels: number, length: number, sampleRate: number) => ({
+        duration: length / sampleRate,
+        getChannelData: () => new Float32Array(length)
+      }));
+      createBufferSource = vi.fn(() => {
+        const source: MockAudioSource = {
+          start: vi.fn(),
+          stop: vi.fn(),
+          connect: vi.fn(),
+          addEventListener: vi.fn(),
+          buffer: null
+        };
+        mockRuntime.audioSources.push(source);
+        return source;
+      });
+      resume = vi.fn().mockResolvedValue(undefined);
+      close = vi.fn().mockResolvedValue(undefined);
+    }
+    vi.stubGlobal("AudioContext", MockAudioContext);
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
@@ -250,7 +284,6 @@ describe("同传工作台 mock 流程", () => {
     mockRuntime.getSessionReport.mockReset();
     mockRuntime.issueSessionHandoff.mockReset();
     mockRuntime.reportDownloadUrl.mockReset();
-    mockRuntime.uploadSessionMedia.mockReset();
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.routerPush.mockReset();
     mockRuntime.routerReplace.mockReset();
@@ -289,6 +322,8 @@ describe("同传工作台 mock 流程", () => {
     const audio = wrapper.find('[data-testid="fixture-audio"]');
     expect(video.attributes("src")).toBe("/fixtures/test-video/video.mp4");
     expect(audio.exists()).toBe(false);
+    await video.trigger("loadedmetadata");
+    expect((video.element as HTMLVideoElement).volume).toBe(0.5);
     expect(mockRuntime.createSession).not.toHaveBeenCalled();
     expect(store.modeStates.quick).toBe("running");
     expect(store.sessionId).toBe("local-test-video-fixture");
@@ -463,7 +498,8 @@ describe("同传工作台 mock 流程", () => {
       sourceKey: "browser-tab",
       sourceFileName: undefined,
       sourceUrl: undefined,
-      sourcePermission: "granted"
+      sourcePermission: "granted",
+      ttsEnabled: false
     });
     expect(store.modeStates.quick).toBe("running");
 
@@ -596,7 +632,6 @@ describe("同传工作台 mock 流程", () => {
         sourceFileName: "demo.mp4"
       })
     );
-    expect(mockRuntime.uploadSessionMedia).not.toHaveBeenCalled();
     expect(store.mediaUrl).toBe("blob:preview-demo.mp4");
     expect(store.audioUrl).toBeNull();
     const video = wrapper.find('[data-testid="fixture-video"]');
@@ -619,7 +654,9 @@ describe("同传工作台 mock 流程", () => {
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
+    const pauseSpy = vi.spyOn(video.element as HTMLVideoElement, "pause").mockImplementation(() => undefined);
     await video.trigger("play");
+    expect(pauseSpy).not.toHaveBeenCalled();
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
@@ -640,6 +677,48 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(store.activeSegmentId).toBe("upload-seg-1");
+  });
+
+  it("sends ttsEnabled and plays backend audio segments when voice broadcast is enabled", async () => {
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "tts-session",
+      wsToken: "w_tts",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.quickForm.source = "url";
+    store.quickInput.url = "https://example.com/demo.mp4";
+    store.quickForm.ttsEnabled = true;
+    expect(store.ttsVolume).toBe(0.5);
+
+    await store.startMode("quick");
+    await flushPromises();
+
+    expect(mockRuntime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputMode: "url",
+        sourceUrl: "https://example.com/demo.mp4",
+        ttsEnabled: true
+      })
+    );
+
+    mockRuntime.handlersBySession.get("tts-session")?.onEvent({
+      type: "audio_segment",
+      segmentId: "seg-tts",
+      audioBase64: "AQIDBA==",
+      sampleRate: 24000
+    });
+    await flushPromises();
+
+    expect(mockRuntime.audioSources).toHaveLength(1);
+    expect(mockRuntime.audioSources[0].start).toHaveBeenCalled();
+
+    store.setTtsVolume(0.35);
+    expect(mockRuntime.audioGain.gain.value).toBe(0.35);
+
+    store.setTtsMuted(true);
+    expect(mockRuntime.audioGain.gain.value).toBe(0);
   });
 
   it("keeps long backend paragraphs in one paired segment card", async () => {

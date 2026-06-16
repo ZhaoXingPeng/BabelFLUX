@@ -27,6 +27,9 @@ const props = defineProps<{
   desktopLaunchState: DesktopLaunchState;
   desktopLaunchMessage: string;
   selectedDisplayMode: string;
+  ttsMuted: boolean;
+  ttsVolume: number;
+  ttsErrorMessage: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,11 +42,19 @@ const emit = defineEmits<{
   playbackPause: [];
   playbackPlay: [];
   ended: [];
+  updateTtsMuted: [muted: boolean];
+  updateTtsVolume: [volume: number];
 }>();
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
-let suppressPauseEvent = false;
+const suppressPauseEvent = ref(false);
+let pausingFromWatch = false;
+let lastPauseIntentAt = 0;
+let lastPlayIntentAt = 0;
+
+const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
+const DEFAULT_MEDIA_VOLUME = 0.5;
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -80,7 +91,8 @@ async function tryAutoPlay() {
 function pauseMedia(silent = false) {
   const element = currentMediaElement();
   if (element && !element.paused) {
-    suppressPauseEvent = silent;
+    suppressPauseEvent.value = silent;
+    pausingFromWatch = silent;
     element.pause();
   }
 }
@@ -90,19 +102,37 @@ function emitPlaybackTime(event: Event) {
 }
 
 function handlePause(event: Event) {
-  if (suppressPauseEvent) {
-    suppressPauseEvent = false;
+  if (suppressPauseEvent.value) {
+    suppressPauseEvent.value = false;
+    pausingFromWatch = false;
+    return;
+  }
+  if (pausingFromWatch) {
+    pausingFromWatch = false;
     return;
   }
   const element = event.target as HTMLMediaElement;
-  if (!element.ended) emit("playbackPause");
+  const now = window.performance.now();
+  if (!element.ended && now - lastPauseIntentAt > PLAYBACK_INTENT_DEBOUNCE_MS) {
+    lastPauseIntentAt = now;
+    emit("playbackPause");
+  }
 }
 
 function handlePlay() {
+  const now = window.performance.now();
+  if (now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
+  lastPlayIntentAt = now;
   emit("playbackPlay");
 }
 
+function handleTtsVolumeInput(event: Event) {
+  emit("updateTtsVolume", Number((event.target as HTMLInputElement).value));
+}
+
 function handleLoadedMetadata() {
+  const element = currentMediaElement();
+  if (element) element.volume = DEFAULT_MEDIA_VOLUME;
   void emitMediaElement();
   void tryAutoPlay();
 }
@@ -121,7 +151,7 @@ watch(
     if (canAutoPlay()) {
       void tryAutoPlay();
     } else {
-      pauseMedia();
+      pauseMedia(true);
     }
   },
   { flush: "post", immediate: true }
@@ -202,9 +232,31 @@ watch(
         <span>{{ runtimeStatus }}</span>
         <span>{{ source.channel }}</span>
         <span>{{ sourceSyncState.message }}</span>
+        <span v-if="ttsErrorMessage">{{ ttsErrorMessage }}</span>
         <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
+        <div v-if="form.ttsEnabled" class="tts-controls">
+          <button
+            class="stage-button icon-stage-button"
+            type="button"
+            :aria-label="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            :title="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            @click="emit('updateTtsMuted', !ttsMuted)"
+          >
+            <Icon :name="ttsMuted ? 'volume-x' : 'volume-2'" :size="17" />
+          </button>
+          <input
+            class="tts-volume"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            :value="ttsVolume"
+            aria-label="语音播报音量"
+            @input="handleTtsVolumeInput"
+          />
+        </div>
         <button
           class="stage-button icon-stage-button"
           type="button"
