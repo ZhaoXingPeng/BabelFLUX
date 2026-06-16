@@ -362,6 +362,34 @@ describe("同传工作台 mock 流程", () => {
     expect(store.sourceSyncState.message).toContain("01:14");
   });
 
+  it("默认测试视频手动暂停后不会被同步状态变化自动拉起播放", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await findButton(wrapper, "开始同传").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    const playSpy = vi.spyOn(video.element as HTMLVideoElement, "play").mockResolvedValue(undefined);
+
+    Object.defineProperty(video.element, "paused", { configurable: true, value: false });
+    await video.trigger("pause");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("paused");
+    const playCallsAfterPause = playSpy.mock.calls.length;
+
+    store.sourceSyncState = {
+      status: "syncing",
+      lagMs: 0,
+      message: "本地素材同步 00:12"
+    };
+    await nextTick();
+    await flushPromises();
+
+    expect(playSpy.mock.calls.length).toBe(playCallsAfterPause);
+  });
+
   it.each(["关闭设置", "取消"])("开始前点击%s会返回初始界面", async (buttonLabel) => {
     const wrapper = mountApp();
     const store = useSessionStore();
@@ -647,10 +675,6 @@ describe("同传工作台 mock 流程", () => {
       { autoStart: true, token: "w_upload" }
     );
 
-    store.handleMediaPlaybackPaused();
-    expect(store.modeStates.quick).toBe("running");
-    expect(mockRuntime.sockets[0].socket.sent).not.toContain(JSON.stringify({ type: "pause_session" }));
-
     expect(
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
@@ -661,6 +685,21 @@ describe("同传工作台 mock 流程", () => {
       mockRuntime.sockets[0].socket.sent.filter((message) => message === JSON.stringify({ type: "start_session" }))
     ).toHaveLength(1);
     expect(store.sourceSyncState.status).not.toBe("ready");
+
+    Object.defineProperty(video.element, "paused", { configurable: true, value: false });
+    await video.trigger("pause");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("paused");
+    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "pause_session" }));
+    pauseSpy.mockClear();
+
+    await video.trigger("play");
+    await nextTick();
+
+    expect(store.modeStates.quick).toBe("running");
+    expect(mockRuntime.sockets[0].socket.sent).toContain(JSON.stringify({ type: "resume_session" }));
+    expect(pauseSpy).not.toHaveBeenCalled();
 
     store.syncPlayback(5);
     mockRuntime.handlersBySession.get("upload-video-session")?.onEvent({

@@ -49,9 +49,11 @@ const emit = defineEmits<{
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
 const suppressPauseEvent = ref(false);
+const userPaused = ref(false);
 let pausingFromWatch = false;
-let lastPauseIntentAt = 0;
-let lastPlayIntentAt = 0;
+let lastPauseIntentAt = Number.NEGATIVE_INFINITY;
+let lastPlayIntentAt = Number.NEGATIVE_INFINITY;
+let initializedMediaElement: HTMLMediaElement | null = null;
 
 const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
 const DEFAULT_MEDIA_VOLUME = 0.5;
@@ -74,13 +76,15 @@ function canAutoPlay() {
 
 async function emitMediaElement() {
   await nextTick();
-  emit("mediaReady", currentMediaElement());
+  const element = currentMediaElement();
+  applyMediaDefaults(element);
+  emit("mediaReady", element);
 }
 
 async function tryAutoPlay() {
   await nextTick();
   const element = currentMediaElement();
-  if (!element || !canAutoPlay() || !element.paused) return;
+  if (!element || !canAutoPlay() || !element.paused || userPaused.value) return;
   try {
     await element.play();
   } catch {
@@ -115,14 +119,22 @@ function handlePause(event: Event) {
   const now = window.performance.now();
   if (!element.ended && now - lastPauseIntentAt > PLAYBACK_INTENT_DEBOUNCE_MS) {
     lastPauseIntentAt = now;
+    userPaused.value = true;
     emit("playbackPause");
   }
 }
 
+function applyMediaDefaults(element: HTMLMediaElement | null) {
+  if (!element || initializedMediaElement === element) return;
+  element.volume = DEFAULT_MEDIA_VOLUME;
+  initializedMediaElement = element;
+}
+
 function handlePlay() {
   const now = window.performance.now();
-  if (now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
+  if (!userPaused.value && now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
   lastPlayIntentAt = now;
+  userPaused.value = false;
   emit("playbackPlay");
 }
 
@@ -132,7 +144,7 @@ function handleTtsVolumeInput(event: Event) {
 
 function handleLoadedMetadata() {
   const element = currentMediaElement();
-  if (element) element.volume = DEFAULT_MEDIA_VOLUME;
+  applyMediaDefaults(element);
   void emitMediaElement();
   void tryAutoPlay();
 }
@@ -143,13 +155,23 @@ watch(
     props.mediaUrl,
     props.audioUrl,
     props.mediaKind,
-    props.sourceSyncState.status,
-    props.sourceSyncState.message
+    props.source.key
   ],
-  () => {
+  (values, oldValues) => {
+    const [state, mediaUrl, audioUrl, mediaKind, sourceKey] = values;
+    const [oldState, oldMediaUrl, oldAudioUrl, oldMediaKind, oldSourceKey] = oldValues ?? [];
+    const mediaChanged =
+      mediaUrl !== oldMediaUrl ||
+      audioUrl !== oldAudioUrl ||
+      mediaKind !== oldMediaKind ||
+      sourceKey !== oldSourceKey;
+    if (mediaChanged || state === "setup" || state === "report" || oldState === "setup") {
+      userPaused.value = false;
+      initializedMediaElement = null;
+    }
     void emitMediaElement();
-    if (canAutoPlay()) {
-      void tryAutoPlay();
+    if (state === "running") {
+      if (canAutoPlay()) void tryAutoPlay();
     } else {
       pauseMedia(true);
     }
