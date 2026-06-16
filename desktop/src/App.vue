@@ -349,7 +349,10 @@ async function startStandalone() {
       message: kind === "system_audio" ? "正在读取 Windows 系统音频" : "正在连接同传引擎…"
     };
     socket?.close();
-    socket = connectDesktopSession(`/api/ws/sessions/${session.sessionId}`, applyEvent);
+    socket = connectDesktopSession(
+      `/api/ws/sessions/${session.sessionId}?token=${encodeURIComponent(session.wsToken)}`,
+      applyEvent
+    );
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "无法创建悬浮同传会话";
     status.value = { status: "missing", lagMs: 0, message: errorMessage.value };

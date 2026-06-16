@@ -28,6 +28,7 @@ def test_create_session() -> None:
     payload = response.json()
     assert payload["status"] == "created"
     assert payload["sessionId"]
+    assert payload["wsToken"].startswith("w_")
 
 
 def test_create_session_accepts_configured_frontend_payload() -> None:
@@ -53,9 +54,12 @@ def test_create_session_accepts_configured_frontend_payload() -> None:
 
 def test_mock_websocket_stream() -> None:
     client = TestClient(app)
-    session_id = "test-session"
+    created = client.post("/api/sessions", json={"inputMode": "demo"}).json()
+    session_id = created["sessionId"]
 
-    with client.websocket_connect(f"/api/ws/sessions/{session_id}") as websocket:
+    with client.websocket_connect(
+        f"/api/ws/sessions/{session_id}?token={created['wsToken']}"
+    ) as websocket:
         assert websocket.receive_json() == {
             "type": "session_started",
             "sessionId": session_id,
@@ -74,9 +78,12 @@ def test_mock_websocket_stream() -> None:
 
 def test_mock_websocket_report_includes_emitted_segments() -> None:
     client = TestClient(app)
-    session_id = "test-session-report"
+    created = client.post("/api/sessions", json={"inputMode": "demo"}).json()
+    session_id = created["sessionId"]
 
-    with client.websocket_connect(f"/api/ws/sessions/{session_id}") as websocket:
+    with client.websocket_connect(
+        f"/api/ws/sessions/{session_id}?token={created['wsToken']}"
+    ) as websocket:
         websocket.receive_json()
         websocket.send_json({"type": "start_session"})
         while True:
@@ -99,8 +106,11 @@ def test_mock_websocket_report_includes_emitted_segments() -> None:
 
 def test_mock_websocket_pause_and_resume() -> None:
     client = TestClient(app)
+    created = client.post("/api/sessions", json={"inputMode": "demo"}).json()
 
-    with client.websocket_connect("/api/ws/sessions/test-session") as websocket:
+    with client.websocket_connect(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
         websocket.receive_json()
 
         websocket.send_json({"type": "pause_session"})
@@ -169,7 +179,26 @@ def test_issue_and_claim_session_handoff_token_once() -> None:
     assert reused.status_code == 409
 
 
-def test_handoff_websocket_token_is_validated_when_present() -> None:
+def test_primary_websocket_requires_session_token() -> None:
+    client = TestClient(app)
+    created = client.post("/api/sessions", json={"inputMode": "demo"}).json()
+
+    with client.websocket_connect(f"/api/ws/sessions/{created['sessionId']}") as websocket:
+        assert websocket.receive_json() == {
+            "type": "error",
+            "message": "Missing WebSocket token",
+        }
+
+    with client.websocket_connect(
+        f"/api/ws/sessions/{created['sessionId']}?token=bad-token"
+    ) as websocket:
+        assert websocket.receive_json() == {
+            "type": "error",
+            "message": "Invalid WebSocket token",
+        }
+
+
+def test_handoff_websocket_token_is_validated_for_handoff_replay() -> None:
     client = TestClient(app)
     issued = client.post("/api/sessions/ws-session/handoff", json={}).json()
     claim = client.post(
@@ -185,7 +214,7 @@ def test_handoff_websocket_token_is_validated_when_present() -> None:
     with client.websocket_connect("/api/ws/sessions/ws-session?token=bad-token") as websocket:
         assert websocket.receive_json() == {
             "type": "error",
-            "message": "Invalid handoff WebSocket token",
+            "message": "Invalid WebSocket token",
         }
 
 
@@ -195,6 +224,7 @@ def test_handoff_websocket_receives_primary_session_events() -> None:
     claim = client.post(
         "/api/sessions/handoff/claim", json={"token": issued["handoffToken"]}
     ).json()
+    primary_token = handoff_tokens.issue_ws_token("mirror-session", purpose="session")
 
     with client.websocket_connect(claim["wsUrl"]) as handoff:
         assert handoff.receive_json() == {
@@ -202,7 +232,9 @@ def test_handoff_websocket_receives_primary_session_events() -> None:
             "sessionId": "mirror-session",
         }
 
-        with client.websocket_connect("/api/ws/sessions/mirror-session") as primary:
+        with client.websocket_connect(
+            f"/api/ws/sessions/mirror-session?token={primary_token}"
+        ) as primary:
             primary.receive_json()
             primary.send_json({"type": "start_session"})
 

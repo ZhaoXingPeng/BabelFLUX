@@ -3,6 +3,7 @@ import base64
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.api.auth import require_model_gateway_auth
 from app.core.config import settings
 from app.models.model_gateway import (
     ASRSegmentResponse,
@@ -21,7 +22,11 @@ from app.services.providers.dashscope import (
     DashScopeConfigurationError,
 )
 
-router = APIRouter(prefix="/models", tags=["models"])
+router = APIRouter(
+    prefix="/models",
+    tags=["models"],
+    dependencies=[Depends(require_model_gateway_auth)],
+)
 
 
 def get_dashscope_client() -> DashScopeClient:
