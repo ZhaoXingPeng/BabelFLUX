@@ -7,8 +7,10 @@ export interface BilingualSubtitleSegment {
   segmentId: string;
   startMs: number;
   endMs: number;
-  en: string;
-  zh: string;
+  source: string;
+  target: string;
+  sourceLanguage: string;
+  targetLanguage: string;
 }
 
 const TIMED_LINE_PATTERN = /^(\d{2}(?::\d{2}){1,2})\s+(.+)$/;
@@ -35,6 +37,7 @@ export function parseTimedSubtitleText(text: string): TimedSubtitleLine[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .filter((line) => TIMED_LINE_PATTERN.test(line))
     .map((line) => {
       const match = line.match(TIMED_LINE_PATTERN);
       if (!match) throw new Error(`Invalid subtitle line: ${line}`);
@@ -47,26 +50,30 @@ export function parseTimedSubtitleText(text: string): TimedSubtitleLine[] {
 }
 
 export function buildBilingualTimeline(
-  englishText: string,
-  chineseText: string,
-  durationMs: number
+  sourceText: string,
+  targetText: string,
+  durationMs: number,
+  sourceLanguage = "zh",
+  targetLanguage = "en"
 ): BilingualSubtitleSegment[] {
-  const englishLines = parseTimedSubtitleText(englishText);
-  const chineseLines = parseTimedSubtitleText(chineseText);
-  const count = Math.min(englishLines.length, chineseLines.length);
+  const sourceLines = parseTimedSubtitleText(sourceText);
+  const targetLines = parseTimedSubtitleText(targetText);
+  const count = Math.min(sourceLines.length, targetLines.length);
 
   return Array.from({ length: count }, (_, index) => {
-    const english = englishLines[index];
-    const chinese = chineseLines[index];
-    const nextEnglish = englishLines[index + 1];
-    const endMs = nextEnglish?.startMs ?? durationMs;
+    const source = sourceLines[index];
+    const target = targetLines[index];
+    const nextSource = sourceLines[index + 1];
+    const endMs = nextSource?.startMs ?? durationMs;
 
     return {
       segmentId: `fixture-seg-${String(index + 1).padStart(3, "0")}`,
-      startMs: english.startMs,
+      startMs: source.startMs,
       endMs,
-      en: english.text,
-      zh: chinese.text
+      source: source.text,
+      target: target.text,
+      sourceLanguage,
+      targetLanguage
     };
   });
 }

@@ -585,7 +585,7 @@ async def test_cjk_repetition_is_collapsed_for_source_and_translation() -> None:
     pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
 
     await pipeline._on_source(
-        "从最黑暗的深处走来，从最黑暗的深处走来，黑暗的深处走来。",
+        "从最黑暗的深处走来从最黑暗的深处走来，黑暗的深处走来，一个举刀，一个举刀对致命微笑。",
         "itemA",
         final=True,
     )
@@ -597,8 +597,66 @@ async def test_cjk_repetition_is_collapsed_for_source_and_translation() -> None:
 
     combined_source = "".join(segment.source_text for segment in record.segments)
     combined_translation = "".join(segment.translation_text for segment in record.segments)
-    assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_source
+    assert "从最黑暗的深处走来从最黑暗的深处走来" not in combined_source
+    assert "，黑暗的深处走来" not in combined_source
+    assert "一个举刀，一个举刀对" not in combined_source
     assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_translation
+
+
+@pytest.mark.asyncio
+async def test_cjk_sliding_window_partials_are_overlap_merged() -> None:
+    record = SessionRecord(session_id="cjk-overlap", source_language="zh", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    for text in [
+        "从最黑暗的深处走来",
+        "最黑暗的深处走来，致命的微笑",
+        "深处走来，致命的微笑也来了",
+        "致命的微笑也来了，到处都是三头鹰",
+    ]:
+        await pipeline._on_source(text, "itemA", final=False)
+
+    combined_source = "".join(segment.source_text for segment in record.segments)
+    assert "从最黑暗的深处走来最黑暗的深处走来" not in combined_source
+    assert "致命的微笑也来了" in combined_source
+    assert combined_source.endswith("到处都是三头鹰")
+
+
+@pytest.mark.asyncio
+async def test_chinese_source_to_english_translation_keeps_spaces_and_splits_readably() -> None:
+    record = SessionRecord(session_id="zh-to-en", source_language="zh", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline.elapsed_ms = 43_000
+
+    await pipeline._on_source(
+        "如果他们的作业完全按质按量去完成的话，至少需要五个半小时。这样算下来，即便是毫不间断地做，也要做到十二点。",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        (
+            "If their homework is completed with both quality and quantity, it takes at "
+            "least five and a half hours. Calculated this way, even if they work without "
+            "any break, they still have to work until midnight."
+        ),
+        "responseA",
+        final=True,
+    )
+
+    combined_translation = " ".join(segment.translation_text for segment in record.segments)
+    assert "completed with both quality" in combined_translation
+    assert "completedwithbothquality" not in combined_translation
+    assert len(record.segments) >= 2
+    assert all(len(segment.source_text) <= 60 for segment in record.segments)
+    assert all(segment.translation_text for segment in record.segments)
 
 
 @pytest.mark.asyncio

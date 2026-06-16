@@ -59,6 +59,7 @@ let handleTtsPlaybackError: ((message: string) => void) | null = null;
 let ttsPlayback = createTtsPlayback({
   onError: (message) => handleTtsPlaybackError?.(message)
 });
+let lastFixtureSpeechKey: string | null = null;
 let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
 const sampledOutputLatencySegmentIds = new Set<string>();
@@ -122,7 +123,7 @@ const quickSourceOptions: SourceOption[] = [
   {
     key: testVideoFixture.key,
     label: testVideoFixture.label,
-    channel: "mp4 + m4a + 中英字幕",
+    channel: "mp4 + mp3 + zh/en 字幕",
     availability: "web"
   },
   { key: "video-file", label: "视频文件", channel: "mp4 / mov / webm", availability: "web" },
@@ -170,6 +171,15 @@ const languageCodeByLabel: Record<string, string> = {
   韩语: "ko",
   法语: "fr",
   德语: "de"
+};
+
+const speechLangByCode: Record<string, string> = {
+  en: "en-US",
+  zh: "zh-CN",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  fr: "fr-FR",
+  de: "de-DE"
 };
 
 const samplePairs: TranscriptPair[] = [
@@ -266,8 +276,8 @@ function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): Subt
 function createFixtureSourceSegments(): SubtitleSegment[] {
   return testVideoFixture.segments.map((segment) => ({
     segmentId: segment.segmentId,
-    text: segment.en,
-    language: "en",
+    text: segment.source,
+    language: testVideoFixture.sourceLanguage,
     startMs: segment.startMs,
     endMs: segment.endMs,
     status: "final"
@@ -277,8 +287,8 @@ function createFixtureSourceSegments(): SubtitleSegment[] {
 function createFixtureTranslationSegments(): SubtitleSegment[] {
   return testVideoFixture.segments.map((segment) => ({
     segmentId: segment.segmentId,
-    text: segment.zh,
-    language: "zh",
+    text: segment.target,
+    language: testVideoFixture.targetLanguage,
     startMs: segment.startMs,
     endMs: segment.endMs,
     status: "final"
@@ -305,6 +315,49 @@ function formatPlaybackTime(ms: number): string {
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function stopFixtureSpeech(resetKey = true) {
+  window.speechSynthesis?.cancel();
+  if (resetKey) lastFixtureSpeechKey = null;
+}
+
+function pauseFixtureSpeech() {
+  window.speechSynthesis?.pause();
+}
+
+function resumeFixtureSpeech() {
+  window.speechSynthesis?.resume();
+}
+
+function speakFixtureTranslation(
+  segmentId: string,
+  text: string,
+  targetLanguage: string,
+  volume: number,
+  muted: boolean,
+  onError: (message: string) => void
+) {
+  const value = text.trim();
+  const speechKey = `${segmentId}:${value}`;
+  if (!value || lastFixtureSpeechKey === speechKey) return;
+  lastFixtureSpeechKey = speechKey;
+
+  const SpeechSynthesisUtteranceCtor = window.SpeechSynthesisUtterance;
+  if (!window.speechSynthesis || typeof SpeechSynthesisUtteranceCtor === "undefined") {
+    onError("当前浏览器不支持本地语音播报；真实后端会话仍使用模型 TTS。");
+    return;
+  }
+
+  window.speechSynthesis.cancel();
+  if (muted || volume <= 0) return;
+
+  const utterance = new SpeechSynthesisUtteranceCtor(value);
+  utterance.lang = speechLangByCode[targetLanguage] ?? "zh-CN";
+  utterance.volume = clamp01(volume);
+  utterance.rate = 1;
+  utterance.onerror = () => onError("本地语音播报失败，请确认浏览器语音合成可用。");
+  window.speechSynthesis.speak(utterance);
 }
 
 function streamText(text: string, progress: number): string {
@@ -671,8 +724,8 @@ export const useSessionStore = defineStore("session", {
     quickForm: {
       name: defaultSessionName(),
       domain: "通用",
-      sourceLanguage: "英语",
-      targetLanguage: "中文",
+      sourceLanguage: "中文",
+      targetLanguage: "英语",
       modelProfile: "智能默认",
       source: testVideoFixture.key,
       ttsEnabled: false
@@ -1268,6 +1321,7 @@ export const useSessionStore = defineStore("session", {
     stopSession(nextStatus: SessionStatus = "stopped") {
       void this.stopCapture();
       ttsPlayback.stop();
+      stopFixtureSpeech();
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1284,6 +1338,7 @@ export const useSessionStore = defineStore("session", {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "pause_session" }));
       }
+      pauseFixtureSpeech();
       this.status = "paused";
     },
 
@@ -1292,6 +1347,7 @@ export const useSessionStore = defineStore("session", {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "resume_session" }));
       }
+      resumeFixtureSpeech();
       this.status = "running";
     },
 
@@ -1332,6 +1388,7 @@ export const useSessionStore = defineStore("session", {
 
     resetTtsPlayback() {
       ttsPlayback.stop();
+      stopFixtureSpeech();
       this.ttsErrorMessage = null;
       ttsPlayback.setVolume(this.ttsVolume);
       ttsPlayback.setMuted(this.ttsMuted);
@@ -1393,6 +1450,7 @@ export const useSessionStore = defineStore("session", {
       this.sessionId = "local-test-video-fixture";
       this.wsConnected = true;
       this.status = "running";
+      lastFixtureSpeechKey = null;
       // 媒体就绪，但字幕不再一次性灌入：跟随左侧播放进度逐句"听到一句、出一句"。
       this.mediaUrl = testVideoFixture.videoUrl;
       this.audioUrl = testVideoFixture.audioUrl;
@@ -1490,9 +1548,9 @@ export const useSessionStore = defineStore("session", {
         segmentId: segment.segmentId,
         text:
           segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS
-            ? streamText(segment.en, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
-            : segment.en,
-        language: "en",
+            ? streamText(segment.source, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
+            : segment.source,
+        language: testVideoFixture.sourceLanguage,
         startMs: segment.startMs,
         endMs: segment.endMs,
         status:
@@ -1507,7 +1565,7 @@ export const useSessionStore = defineStore("session", {
           return {
             segmentId: segment.segmentId,
             text: revision.afterText,
-            language: "zh",
+            language: testVideoFixture.targetLanguage,
             startMs: segment.startMs,
             endMs: segment.endMs,
             status: "revised" as SegmentStatus,
@@ -1519,8 +1577,10 @@ export const useSessionStore = defineStore("session", {
           segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS;
         return {
           segmentId: segment.segmentId,
-          text: isFreshActive ? streamText(segment.zh, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS) : segment.zh,
-          language: "zh",
+          text: isFreshActive
+            ? streamText(segment.target, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
+            : segment.target,
+          language: testVideoFixture.targetLanguage,
           startMs: segment.startMs,
           endMs: segment.endMs,
           status: (isFreshActive ? "partial" : "final") as SegmentStatus
@@ -1531,6 +1591,20 @@ export const useSessionStore = defineStore("session", {
       this.fixtureAppliedRevisionIds = dueRevisions.map((revision) => revision.revisionId);
       this.activeSegmentId = activeId;
       this.playbackMs = playbackMs;
+
+      if (this.quickForm.ttsEnabled && activeSegment) {
+        const revision = revisionBySegment.get(activeSegment.segmentId);
+        speakFixtureTranslation(
+          revision?.revisionId ?? activeSegment.segmentId,
+          revision?.afterText ?? activeSegment.target,
+          testVideoFixture.targetLanguage,
+          this.ttsVolume,
+          this.ttsMuted,
+          (message) => {
+            this.ttsErrorMessage = message;
+          }
+        );
+      }
     },
 
     connectSocket(sessionId: string, wsToken: string, mode: ProductMode, requestId: number) {

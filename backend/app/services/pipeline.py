@@ -44,7 +44,9 @@ DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.25
 SYNC_LAG_WARN_MS = 600
 SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
+SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT = 28
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
+TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
 FINAL_DISPLAY_MAX_SEGMENT_MS = 9500
@@ -519,14 +521,19 @@ class InterpretationPipeline:
         if not prior:
             return self._collapse_source_repetition(current)
 
+        if current in prior or prior.endswith(current):
+            return prior
+
+        cjk_overlapped = self._merge_cjk_overlap(prior, current)
+        if cjk_overlapped is not None:
+            return self._collapse_source_repetition(cjk_overlapped)
+
         # DashScope ASR partials can be either full snapshots or small incremental stashes.
         # Keep snapshots as-is, but append true incremental fragments so the UI never
         # regresses from a complete prefix to a trailing phrase such as "works, in fact,".
         normalized_prior = prior.rstrip(" .!?。！？")
         if current.startswith(normalized_prior) or len(current) > len(prior) * 1.2:
             return self._prefer_source_snapshot(prior, current)
-        if current in prior or prior.endswith(current):
-            return prior
 
         overlapped = self._merge_source_overlap(prior, current)
         if overlapped is not None:
@@ -578,6 +585,22 @@ class InterpretationPipeline:
                 for size in range(min(len(base_words), len(candidate_words)), 1, -1):
                     if base_norm[-size:] == current_norm[:size]:
                         return " ".join([*base_words[:-size], *candidate_words])
+        return None
+
+    def _merge_cjk_overlap(self, prior: str, current: str) -> str | None:
+        if not (self._contains_cjk(prior) and self._contains_cjk(current)):
+            return None
+        prior_value = re.sub(r"\s+", "", prior)
+        current_value = re.sub(r"\s+", "", current)
+        if current_value in prior_value:
+            return prior_value
+        if prior_value in current_value:
+            return current_value
+
+        max_size = min(len(prior_value), len(current_value), 48)
+        for size in range(max_size, 2, -1):
+            if prior_value[-size:] == current_value[:size]:
+                return f"{prior_value}{current_value[size:]}"
         return None
 
     def _looks_unstable_source_word(self, word: str) -> bool:
@@ -661,7 +684,31 @@ class InterpretationPipeline:
     def _collapse_cjk_repetition_once(self, text: str) -> str:
         if not re.search(r"[\u4e00-\u9fff]", text):
             return text
-        return re.sub(r"([\u4e00-\u9fff]{3,24})(?:[，,、\s]*\1)+", r"\1", text)
+        collapsed = re.sub(r"([\u4e00-\u9fff]{3,24})(?:[，,、\s]*\1)+", r"\1", text)
+        return self._collapse_cjk_contained_clauses(collapsed)
+
+    def _collapse_cjk_contained_clauses(self, text: str) -> str:
+        clauses = re.findall(r"[^，,、；;。！？!?]+[，,、；;。！？!?]?", text)
+        if len(clauses) < 2:
+            return text
+
+        kept: list[str] = []
+        for clause in clauses:
+            body = clause.rstrip("，,、；;。！？!?").strip()
+            if not body:
+                kept.append(clause)
+                continue
+            if kept:
+                previous = kept[-1]
+                previous_body = previous.rstrip("，,、；;。！？!?").strip()
+                if len(body) >= 4 and body in previous_body:
+                    continue
+                if len(previous_body) >= 4 and previous_body in body:
+                    kept[-1] = clause
+                    continue
+            kept.append(clause)
+        collapsed = "".join(kept)
+        return collapsed if collapsed else text
 
     def _collapse_adjacent_source_duplicates(self, words: list[str]) -> list[str]:
         result: list[str] = []
@@ -787,10 +834,11 @@ class InterpretationPipeline:
             " ",
             self._raw_source_by_root.get(root.segment_id, "").strip(),
         )
-        translation_text = re.sub(
-            r"\s+",
-            "",
-            self._raw_translation_by_root.get(root.segment_id, "").strip(),
+        raw_translation_text = self._raw_translation_by_root.get(root.segment_id, "").strip()
+        translation_text = (
+            re.sub(r"\s+", "", raw_translation_text)
+            if self._contains_cjk(raw_translation_text)
+            else re.sub(r"\s+", " ", raw_translation_text)
         )
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
@@ -839,17 +887,19 @@ class InterpretationPipeline:
         preserve_split = previous_count > 1 and (
             len(source_parts) < previous_count or len(translation_parts) < previous_count
         )
+        source_separator = "" if self._contains_cjk("".join(source_parts)) else " "
+        translation_separator = "" if self._contains_cjk("".join(translation_parts)) else " "
         source_display = self._align_parts(
             source_parts,
             count,
-            separator=" ",
+            separator=source_separator,
             previous=[child.source_text for child in existing_children],
             preserve_existing=preserve_split,
         )
         translation_display = self._align_parts(
             translation_parts,
             count,
-            separator="",
+            separator=translation_separator,
             previous=[child.translation_text for child in existing_children],
             preserve_existing=preserve_split,
         )
@@ -944,11 +994,21 @@ class InterpretationPipeline:
         value = re.sub(r"\s+", " ", text.strip())
         if not value:
             return []
+        if self._contains_cjk(value):
+            return self._split_cjk_display(value, SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT)
+
+        parts = self._split_latin_display(value, SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
+        return parts
+
+    def _split_latin_display(self, text: str, max_words: int) -> list[str]:
+        value = re.sub(r"\s+", " ", text.strip())
+        if not value:
+            return []
 
         parts = self._split_source_sentences(value)
-        target_count = self._target_source_part_count(value)
+        target_count = self._target_source_part_count(value, max_words)
         while len(parts) < target_count or any(
-            self._word_count(part) > SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT for part in parts
+            self._word_count(part) > max_words for part in parts
         ):
             split_index, replacement = self._best_source_split(parts)
             if split_index < 0:
@@ -981,11 +1041,11 @@ class InterpretationPipeline:
             for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
         ]
 
-    def _target_source_part_count(self, text: str) -> int:
+    def _target_source_part_count(self, text: str, max_words = SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT) -> int:
         return max(
             1,
-            (self._word_count(text) + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT - 1)
-            // SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT,
+            (self._word_count(text) + max_words - 1)
+            // max_words,
         )
 
     def _best_source_split(self, parts: list[str]) -> tuple[int, list[str]]:
@@ -1037,17 +1097,36 @@ class InterpretationPipeline:
         return text[:split_at].strip(), text[split_at:].strip()
 
     def _split_target_display(self, text: str) -> list[str]:
+        raw = text.strip()
+        if not raw:
+            return []
+        if not self._contains_cjk(raw):
+            return self._split_latin_display(raw, TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT)
+
+        value = re.sub(r"\s+", "", raw)
+        if not value:
+            return []
+
+        return self._split_cjk_display(value, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
+
+    def _contains_cjk(self, text: str) -> bool:
+        return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+    def _split_cjk_display(self, text: str, max_chars: int) -> list[str]:
         value = re.sub(r"\s+", "", text.strip())
         if not value:
             return []
 
         groups: list[str] = []
         for sentence in self._split_target_sentences(value):
-            groups.extend(self._split_long_target_part(sentence))
+            groups.extend(self._split_long_cjk_part(sentence, max_chars))
         return [part for part in groups if part]
 
     def _split_long_target_part(self, text: str) -> list[str]:
-        if len(text) <= TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+        return self._split_long_cjk_part(text, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
+
+    def _split_long_cjk_part(self, text: str, max_chars: int) -> list[str]:
+        if len(text) <= max_chars:
             return [text]
 
         parts: list[str] = []
@@ -1055,18 +1134,18 @@ class InterpretationPipeline:
         clauses = re.findall(r"[^，,；;：:]+[，,；;：:]?", text)
         for clause in clauses:
             candidate = f"{current}{clause}" if current else clause
-            if current and len(candidate) > TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+            if current and len(candidate) > max_chars:
                 parts.append(current)
                 current = clause
             else:
                 current = candidate
         if current:
             parts.append(current)
-        if len(parts) == 1 and len(parts[0]) > TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT:
+        if len(parts) == 1 and len(parts[0]) > max_chars:
             value = parts[0]
             return [
-                value[index : index + TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT]
-                for index in range(0, len(value), TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
+                value[index : index + max_chars]
+                for index in range(0, len(value), max_chars)
             ]
         return parts
 
@@ -1089,11 +1168,13 @@ class InterpretationPipeline:
 
     def _fit_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
         parts = self._expand_source_parts_to_count(parts, count)
-        return self._fit_parts_to_count(parts, count, separator=" ")
+        separator = "" if self._contains_cjk("".join(parts)) else " "
+        return self._fit_parts_to_count(parts, count, separator=separator)
 
     def _fit_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
         parts = self._expand_target_parts_to_count(parts, count)
-        return self._fit_parts_to_count(parts, count, separator="")
+        separator = "" if self._contains_cjk("".join(parts)) else " "
+        return self._fit_parts_to_count(parts, count, separator=separator)
 
     def _expand_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
         expanded = [part for part in parts if part]
@@ -1105,11 +1186,19 @@ class InterpretationPipeline:
             )
             if index < 0:
                 break
-            replacement = self._split_source_clauses(expanded[index])
-            if len(replacement) < 2:
-                replacement = self._split_long_source_part(expanded[index])
-            if len(replacement) < 2:
-                replacement = self._split_source_part_evenly(expanded[index])
+            if self._contains_cjk(expanded[index]):
+                replacement = self._split_long_cjk_part(
+                    expanded[index],
+                    SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT,
+                )
+                if len(replacement) < 2:
+                    replacement = self._split_target_part_evenly(expanded[index])
+            else:
+                replacement = self._split_source_clauses(expanded[index])
+                if len(replacement) < 2:
+                    replacement = self._split_long_source_part(expanded[index])
+                if len(replacement) < 2:
+                    replacement = self._split_source_part_evenly(expanded[index])
             if len(replacement) < 2:
                 break
             expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
@@ -1121,9 +1210,17 @@ class InterpretationPipeline:
             index = max(range(len(expanded)), key=lambda item: len(expanded[item]), default=-1)
             if index < 0:
                 break
-            replacement = self._split_long_target_part(expanded[index])
+            replacement = (
+                self._split_long_target_part(expanded[index])
+                if self._contains_cjk(expanded[index])
+                else self._split_long_source_part(expanded[index])
+            )
             if len(replacement) < 2:
-                replacement = self._split_target_part_evenly(expanded[index])
+                replacement = (
+                    self._split_target_part_evenly(expanded[index])
+                    if self._contains_cjk(expanded[index])
+                    else self._split_source_part_evenly(expanded[index])
+                )
             if len(replacement) < 2:
                 break
             expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]

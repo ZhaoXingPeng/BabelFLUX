@@ -73,7 +73,7 @@ const emit = defineEmits<{
       <label class="flex items-center justify-between gap-3 rounded-md border border-[#d7ddd8] bg-[#f7f8f6] px-3 py-2">
         <span>
           <span class="form-label mb-0">语音播报</span>
-          <small class="field-hint">开启后播报中文译文，默认关闭</small>
+          <small class="field-hint">开启后播报目标译文，默认关闭</small>
         </span>
         <input v-model="form.ttsEnabled" class="h-4 w-4" type="checkbox" />
       </label>

@@ -93,7 +93,7 @@ function emitPlaybackTime(event: Event) {
               @seeked="emitPlaybackTime"
             />
             <div v-if="audioUrl" class="fixture-audio-row">
-              <span>voice.m4a</span>
+              <span>voice.mp3</span>
               <audio
                 class="fixture-audio"
                 :src="audioUrl"
