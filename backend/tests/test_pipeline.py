@@ -353,7 +353,7 @@ async def test_display_segments_keep_source_and_translation_paired() -> None:
 
 
 @pytest.mark.asyncio
-async def test_display_segments_keep_mismatched_sentence_counts_together() -> None:
+async def test_display_segments_split_mismatched_sentence_counts_for_readability() -> None:
     record = SessionRecord(session_id="paired-tail", source_language="en", target_language="zh")
 
     async def emit(_ev: dict) -> None:
@@ -368,9 +368,73 @@ async def test_display_segments_keep_mismatched_sentence_counts_together() -> No
     )
     await pipeline._on_translation("第一句。第二句。", "responseA", final=True)
 
-    assert len(record.segments) == 1
-    assert record.segments[0].source_text == "First sentence. Second sentence. Third sentence."
-    assert record.segments[0].translation_text == "第一句。第二句。"
+    assert len(record.segments) == 2
+    assert record.segments[0].source_text == "First sentence."
+    assert record.segments[0].translation_text == "第一句。"
+    assert record.segments[1].source_text == "Second sentence. Third sentence."
+    assert record.segments[1].translation_text == "第二句。"
+
+
+@pytest.mark.asyncio
+async def test_long_live_translate_turn_is_split_into_readable_display_segments() -> None:
+    record = SessionRecord(session_id="long-turn", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    pipeline.elapsed_ms = 34_000
+
+    await pipeline._on_source(
+        (
+            "One of the works, in fact, so didn't meet her mark, she had set it out in the "
+            "trash in her studio, and her neighbor had taken it because she saw its value."
+        ),
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        (
+            "事实上，其中一件作品甚至远未达到她的标准，以至于她把它扔进了工作室的垃圾桶，"
+            "结果被邻居捡走了，因为邻居看出了它的价值。"
+        ),
+        "responseA",
+        final=True,
+    )
+
+    assert len(record.segments) >= 3
+    assert all(len(segment.source_text) < 150 for segment in record.segments)
+    assert all(len(segment.translation_text) < 80 for segment in record.segments)
+    assert all(
+        later.start_ms - earlier.start_ms < 10_000
+        for earlier, later in zip(record.segments, record.segments[1:], strict=False)
+    )
+
+
+@pytest.mark.asyncio
+async def test_cjk_repetition_is_collapsed_for_source_and_translation() -> None:
+    record = SessionRecord(session_id="cjk-repeat", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "从最黑暗的深处走来，从最黑暗的深处走来，黑暗的深处走来。",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "从最黑暗的深处走来，从最黑暗的深处走来，黑暗的深处走来。",
+        "responseA",
+        final=True,
+    )
+
+    combined_source = "".join(segment.source_text for segment in record.segments)
+    combined_translation = "".join(segment.translation_text for segment in record.segments)
+    assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_source
+    assert "从最黑暗的深处走来，从最黑暗的深处走来" not in combined_translation
 
 
 @pytest.mark.asyncio
@@ -418,13 +482,18 @@ async def test_lowercase_source_continuation_does_not_shift_following_translatio
         final=True,
     )
 
-    assert len(record.segments) == 2
-    assert "the trash in her studio" in record.segments[0].source_text
-    assert "on her. the trash" not in record.segments[0].source_text
-    assert record.segments[1].source_text == (
+    item_a_segments = [segment for segment in record.segments if segment.item_id == "itemA"]
+    item_c_segments = [segment for segment in record.segments if segment.item_id == "itemC"]
+    combined_item_a_source = " ".join(segment.source_text for segment in item_a_segments)
+
+    assert len(record.segments) >= 3
+    assert "the trash in her studio" in combined_item_a_source
+    assert "on her. the trash" not in combined_item_a_source
+    assert len(item_c_segments) == 1
+    assert item_c_segments[0].source_text == (
         "In that moment, my view of success and creativity changed."
     )
-    assert record.segments[1].translation_text == "在那一刻，我对成功和创造力的看法发生了改变。"
+    assert item_c_segments[0].translation_text == "在那一刻，我对成功和创造力的看法发生了改变。"
 
 
 @pytest.mark.asyncio

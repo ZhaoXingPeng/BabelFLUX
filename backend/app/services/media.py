@@ -160,30 +160,6 @@ def _build_ffmpeg_args(source: str, sample_rate: int) -> list[str]:
     return args
 
 
-async def probe_duration_seconds(source: str) -> float | None:
-    """用 ffprobe 探测时长（秒）；失败返回 None。"""
-    ffprobe = _resolve_tool_binary("ffprobe")
-    if ffprobe is None:
-        return None
-    args = [
-        ffprobe, "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        source,
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-        value = stdout.decode().strip()
-        return float(value) if value and value != "N/A" else None
-    except (TimeoutError, ValueError, OSError):
-        return None
-
-
 async def iter_pcm_frames(
     source: str,
     *,

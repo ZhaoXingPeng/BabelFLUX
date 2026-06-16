@@ -4,7 +4,6 @@ import {
   getSessionReport,
   issueSessionHandoff,
   reportDownloadUrl,
-  uploadSessionMedia,
   type CreateSessionPayload,
   type DesktopDisplayMode,
   type ReportFormat,
@@ -45,7 +44,7 @@ let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
 let desktopLaunchDismissTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
-// File 对象不放进响应式 state（不可序列化），用模块级暂存供上传模式在 start 前上传字节。
+// File 对象不放进响应式 state（不可序列化），用模块级暂存供本地媒体预览与采集使用。
 const pendingFiles: { quick: File | null; floating: File | null } = { quick: null, floating: null };
 const localPreviewUrls: Record<ProductMode, string | null> = { quick: null, floating: null };
 // 实时采集句柄与“本次会话应采集的音源种类”，同样不入响应式 state。
@@ -941,7 +940,7 @@ export const useSessionStore = defineStore("session", {
         desktopLaunchDismissTimer = null;
       }, DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS);
       try {
-        window.localStorage.setItem("lingosync.clientSeen", "1");
+        window.localStorage.setItem("babelflux.clientSeen", "1");
       } catch {
         // localStorage can be unavailable in privacy modes; launch success should not depend on it.
       }
@@ -1230,20 +1229,6 @@ export const useSessionStore = defineStore("session", {
         if (!this.isCurrentStart(mode, requestId)) return false;
 
         this.sessionId = session.sessionId;
-
-        const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
-        const inputMode = inputModeBySourceKey[sourceKey] ?? "demo";
-        if (inputMode === "upload_video" || inputMode === "upload_audio") {
-          // 备用后端解码路径：必须在 start_session 前把文件字节传给后端。
-          const file = pendingFiles[mode];
-          if (!file) {
-            this.status = "error";
-            this.errorMessage = "未找到待上传的文件，请重新选择";
-            return false;
-          }
-          await uploadSessionMedia(session.sessionId, file);
-          if (!this.isCurrentStart(mode, requestId)) return false;
-        }
 
         this.connectSocket(session.sessionId, session.wsToken, mode, requestId);
         return true;

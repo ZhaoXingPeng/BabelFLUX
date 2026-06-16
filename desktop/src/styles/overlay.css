@@ -47,6 +47,20 @@ body {
   cursor: move;
 }
 
+.handoff-report-hint {
+  width: fit-content;
+  max-width: 100%;
+  margin: 6px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(11, 12, 15, 0.78);
+  padding: 5px 9px;
+  color: var(--stage-src, #c8c0b3);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: move;
+}
+
 /* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。外层 main 负责拖动。 */
 .overlay-launcher {
   display: flex;

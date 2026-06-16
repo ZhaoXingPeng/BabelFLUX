@@ -1,10 +1,9 @@
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -26,8 +25,6 @@ class GlossaryTermPayload(BaseModel):
 class CreateSessionRequest(BaseModel):
     input_mode: Literal[
         "demo",
-        "upload_video",
-        "upload_audio",
         "url",
         "microphone",
         "browser_audio",
@@ -86,12 +83,6 @@ class ClaimHandoffResponse(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
-class UploadMediaResponse(BaseModel):
-    media_id: str = Field(alias="mediaId")
-    file_name: str = Field(alias="fileName")
-    size_bytes: int = Field(alias="sizeBytes")
-
-
 def _normalize_source_language(code: str) -> str:
     # LiveTranslate 的 ASR 需要明确语种；auto 暂以英语兜底（演示素材以英文为主）。
     return "en" if code in ("auto", "", None) else code
@@ -121,38 +112,6 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = _register_session(req)
     ws_token = handoff_tokens.issue_ws_token(session_id, purpose="session")
     return CreateSessionResponse(sessionId=session_id, wsToken=ws_token, status="created")
-
-
-@router.post(
-    "/{session_id}/media",
-    response_model=UploadMediaResponse,
-    response_model_by_alias=True,
-)
-async def upload_session_media(
-    session_id: str,
-    file: UploadFile = File(...),
-    kind: str = Form("upload"),
-) -> UploadMediaResponse:
-    record = session_store.get(session_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="session not found")
-
-    suffix = Path(file.filename or "media").suffix or ".bin"
-    media_path = settings.media_dir / f"{session_id}{suffix}"
-    size = 0
-    with media_path.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            out.write(chunk)
-            size += len(chunk)
-    if size == 0:
-        media_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="uploaded file is empty")
-
-    record.media_path = str(media_path)
-    record.source_label = file.filename or media_path.name
-    return UploadMediaResponse(
-        mediaId=media_path.name, fileName=file.filename or media_path.name, sizeBytes=size
-    )
 
 
 @router.get("/{session_id}/report")

@@ -27,7 +27,6 @@ const mockRuntime = vi.hoisted(() => ({
   getSessionReport: vi.fn(),
   issueSessionHandoff: vi.fn(),
   reportDownloadUrl: vi.fn(),
-  uploadSessionMedia: vi.fn(),
   createSessionSocket: vi.fn(),
   routerPush: vi.fn(),
   routerReplace: vi.fn(),
@@ -39,8 +38,7 @@ vi.mock("./api/client", () => ({
   createSession: mockRuntime.createSession,
   getSessionReport: mockRuntime.getSessionReport,
   issueSessionHandoff: mockRuntime.issueSessionHandoff,
-  reportDownloadUrl: mockRuntime.reportDownloadUrl,
-  uploadSessionMedia: mockRuntime.uploadSessionMedia
+  reportDownloadUrl: mockRuntime.reportDownloadUrl
 }));
 
 vi.mock("./api/ws", () => ({
@@ -250,7 +248,6 @@ describe("同传工作台 mock 流程", () => {
     mockRuntime.getSessionReport.mockReset();
     mockRuntime.issueSessionHandoff.mockReset();
     mockRuntime.reportDownloadUrl.mockReset();
-    mockRuntime.uploadSessionMedia.mockReset();
     mockRuntime.createSessionSocket.mockReset();
     mockRuntime.routerPush.mockReset();
     mockRuntime.routerReplace.mockReset();
@@ -596,7 +593,6 @@ describe("同传工作台 mock 流程", () => {
         sourceFileName: "demo.mp4"
       })
     );
-    expect(mockRuntime.uploadSessionMedia).not.toHaveBeenCalled();
     expect(store.mediaUrl).toBe("blob:preview-demo.mp4");
     expect(store.audioUrl).toBeNull();
     const video = wrapper.find('[data-testid="fixture-video"]');

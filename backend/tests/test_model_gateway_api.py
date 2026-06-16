@@ -151,6 +151,7 @@ def test_strategy_plan_api_response() -> None:
 
     assert response.status_code == 200
     payload = response.json()
+    assert "gummy/fun_asr provider 当前未接入真实管线" in payload["disclaimer"]
     assert payload["primaryProvider"] == "qwen_live_translate"
     assert payload["ttsProvider"] == "qwen_tts"
     assert payload["liveTranslateSession"]["event"]["session"]["modalities"] == ["text", "audio"]

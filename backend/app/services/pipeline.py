@@ -42,7 +42,7 @@ DRAIN_GRACE_S = 4.0
 DRAIN_MAX_S = 30.0
 SYNC_EMIT_INTERVAL_S = 0.25
 SYNC_LAG_WARN_MS = 600
-SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 14
+SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 PARTIAL_DISPLAY_SEGMENT_MS = 500
 FINAL_DISPLAY_SEGMENT_MS = 2000
@@ -532,6 +532,10 @@ class InterpretationPipeline:
         return result
 
     def _collapse_source_repetition_once(self, text: str) -> str:
+        cjk_collapsed = self._collapse_cjk_repetition_once(text)
+        if cjk_collapsed != text:
+            return cjk_collapsed
+
         words = text.split()
         deduped = self._collapse_adjacent_source_duplicates(words)
         if deduped != words:
@@ -565,6 +569,20 @@ class InterpretationPipeline:
                 if normalized[index : index + size] == prefix:
                     return " ".join(words[index:])
         return text
+
+    def _collapse_text_repetition(self, text: str) -> str:
+        result = text
+        for _ in range(4):
+            collapsed = self._collapse_cjk_repetition_once(result)
+            if collapsed == result:
+                return result
+            result = collapsed
+        return result
+
+    def _collapse_cjk_repetition_once(self, text: str) -> str:
+        if not re.search(r"[\u4e00-\u9fff]", text):
+            return text
+        return re.sub(r"([\u4e00-\u9fff]{3,24})(?:[，,、\s]*\1)+", r"\1", text)
 
     def _collapse_adjacent_source_duplicates(self, words: list[str]) -> list[str]:
         result: list[str] = []
@@ -633,7 +651,7 @@ class InterpretationPipeline:
     ) -> SegmentRecord | None:
         if not text:
             return None
-        display_text = text.strip()
+        display_text = self._collapse_text_repetition(text.strip())
         seg = self._bind_response(response_id, display_text)
         previous = self._raw_translation_by_root.get(seg.segment_id, "")
         self._raw_translation_by_root[seg.segment_id] = display_text
@@ -650,10 +668,10 @@ class InterpretationPipeline:
         return seg
 
     async def _emit_display_segments(self, root: SegmentRecord) -> None:
-        # Split paired bilingual text only at sentence level, and only when both
-        # sides produce the same number of sentences. Clause/length splitting per
-        # language creates false pairings because English and Chinese boundaries
-        # rarely line up exactly.
+        # LiveTranslate VAD can keep several semantic clauses in one turn, and source/target
+        # punctuation counts often differ. Split both sides into readable display chunks first,
+        # then align them by proportional order so the report and subtitle cards do not collapse
+        # long turns into one dense paragraph.
         source_text = re.sub(
             r"\s+",
             " ",
@@ -666,33 +684,37 @@ class InterpretationPipeline:
         )
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
-        source_sentences = self._split_source_sentences(source_text)
-        translation_sentences = self._split_target_sentences(translation_text)
+        has_bilingual_text = bool(source_text and translation_text)
+        source_split = (
+            self._split_source_display(source_text)
+            if has_bilingual_text
+            else ([source_text] if source_text else [])
+        )
+        translation_split = (
+            self._split_target_display(translation_text)
+            if has_bilingual_text
+            else ([translation_text] if translation_text else [])
+        )
         previous_count = self._display_count_by_root.get(root.segment_id, 1)
         keep_existing_split = previous_count > 1 and (
-            len(source_sentences) > 1 or len(translation_sentences) > 1
+            len(source_split) > 1 or len(translation_split) > 1
         )
-        if len(source_sentences) > 1 and len(source_sentences) == len(translation_sentences):
-            source_parts = source_sentences
-            translation_parts = translation_sentences
-        elif keep_existing_split:
-            source_parts = (
-                source_sentences
-                if len(source_sentences) > 1
-                else ([source_text] if source_text else [])
-            )
+        if keep_existing_split:
+            source_parts = source_split if source_split else ([source_text] if source_text else [])
             translation_parts = (
-                translation_sentences
-                if len(translation_sentences) > 1
+                translation_split
+                if translation_split
                 else ([translation_text] if translation_text else [])
             )
         else:
-            source_parts = [source_text] if source_text else []
-            translation_parts = [translation_text] if translation_text else []
+            source_parts = source_split
+            translation_parts = translation_split
         if not source_parts and not translation_parts:
             return
 
-        current_count = max(len(source_parts), len(translation_parts), 1)
+        current_count = self._display_split_count(source_parts, translation_parts)
+        source_parts = self._fit_source_parts_to_count(source_parts, current_count)
+        translation_parts = self._fit_target_parts_to_count(translation_parts, current_count)
         count = max(previous_count, current_count)
         self._display_count_by_root[root.segment_id] = count
 
@@ -854,10 +876,9 @@ class InterpretationPipeline:
         if not value:
             return []
 
-        raw_parts = re.findall(r"[^，,；;：:。！？]+[，,；;：:。！？]?", value)
         groups: list[str] = []
-        for raw in raw_parts:
-            groups.extend(self._split_long_target_part(raw))
+        for sentence in self._split_target_sentences(value):
+            groups.extend(self._split_long_target_part(sentence))
         return [part for part in groups if part]
 
     def _split_long_target_part(self, text: str) -> list[str]:
@@ -883,6 +904,41 @@ class InterpretationPipeline:
                 for index in range(0, len(value), TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
             ]
         return parts
+
+    def _display_split_count(self, source_parts: list[str], translation_parts: list[str]) -> int:
+        source_count = len(source_parts)
+        translation_count = len(translation_parts)
+        if not source_count:
+            return max(translation_count, 1)
+        if not translation_count:
+            return max(source_count, 1)
+        source_chars = len(" ".join(source_parts))
+        translation_chars = len("".join(translation_parts))
+        readable_count = max(
+            1,
+            (source_chars + 139) // 140,
+            (translation_chars + 79) // 80,
+        )
+        bounded_by_parts = max(min(source_count, translation_count), readable_count)
+        return min(max(source_count, translation_count), bounded_by_parts)
+
+    def _fit_source_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        return self._fit_parts_to_count(parts, count, separator=" ")
+
+    def _fit_target_parts_to_count(self, parts: list[str], count: int) -> list[str]:
+        return self._fit_parts_to_count(parts, count, separator="")
+
+    def _fit_parts_to_count(self, parts: list[str], count: int, *, separator: str) -> list[str]:
+        if count <= 0 or len(parts) <= count:
+            return parts
+        groups: list[str] = []
+        for index in range(count):
+            start = (len(parts) * index) // count
+            end = (len(parts) * (index + 1)) // count
+            if end <= start:
+                end = start + 1
+            groups.append(separator.join(parts[start:end]).strip())
+        return groups
 
     def _split_by_regex(self, text: str, pattern: str) -> list[str]:
         return [part.strip() for part in re.split(pattern, text) if part.strip()]

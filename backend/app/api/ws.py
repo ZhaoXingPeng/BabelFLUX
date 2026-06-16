@@ -2,7 +2,6 @@
 
 客户端在连接后发送 start_session 启动同传；服务端按会话的 inputMode 选择音频入口：
     - url                         → 后端用 ffmpeg 从在线直链解码并喂入；
-    - upload_video / upload_audio → 解码先前上传到 /sessions/{id}/media 的文件；
     - 采集类（microphone/browser_audio/screen_window/media_element_audio/system_audio）
                                   → 前端把 PCM 以 WS 二进制帧推来；
     - demo                        → 演示事件流（或 DEMO_MEDIA_PATH 指向的样例媒体）。
@@ -253,14 +252,6 @@ async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:
             await emit({"type": "error", "message": "缺少在线媒体 URL"})
             return
         await pipeline.run_media(url)
-        return
-
-    if input_mode in ("upload_video", "upload_audio"):
-        media_path = record.media_path
-        if not media_path or not Path(media_path).exists():
-            await emit({"type": "error", "message": "未找到已上传的媒体文件，请先上传"})
-            return
-        await pipeline.run_media(media_path)
         return
 
     await emit({"type": "error", "message": f"暂不支持的输入模式：{input_mode}"})

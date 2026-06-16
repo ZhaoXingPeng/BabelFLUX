@@ -43,7 +43,11 @@ const emit = defineEmits<{
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
-let suppressPauseEvent = false;
+const suppressPauseEvent = ref(false);
+let lastPauseIntentAt = 0;
+let lastPlayIntentAt = 0;
+
+const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -80,7 +84,7 @@ async function tryAutoPlay() {
 function pauseMedia(silent = false) {
   const element = currentMediaElement();
   if (element && !element.paused) {
-    suppressPauseEvent = silent;
+    suppressPauseEvent.value = silent;
     element.pause();
   }
 }
@@ -90,15 +94,22 @@ function emitPlaybackTime(event: Event) {
 }
 
 function handlePause(event: Event) {
-  if (suppressPauseEvent) {
-    suppressPauseEvent = false;
+  if (suppressPauseEvent.value) {
+    suppressPauseEvent.value = false;
     return;
   }
   const element = event.target as HTMLMediaElement;
-  if (!element.ended) emit("playbackPause");
+  const now = window.performance.now();
+  if (!element.ended && now - lastPauseIntentAt > PLAYBACK_INTENT_DEBOUNCE_MS) {
+    lastPauseIntentAt = now;
+    emit("playbackPause");
+  }
 }
 
 function handlePlay() {
+  const now = window.performance.now();
+  if (now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
+  lastPlayIntentAt = now;
   emit("playbackPlay");
 }
 
@@ -121,7 +132,7 @@ watch(
     if (canAutoPlay()) {
       void tryAutoPlay();
     } else {
-      pauseMedia();
+      pauseMedia(true);
     }
   },
   { flush: "post", immediate: true }

@@ -35,6 +35,7 @@ def test_auto_strategy_prefers_live_translate_with_glossary() -> None:
     }
     assert "技术" in plan.final_correction_prompt
     assert "near win -> 差一点成功" in plan.final_correction_prompt
+    assert "gummy/fun_asr provider 当前未接入真实管线" in plan.disclaimer
 
 
 def test_strategy_enables_audio_and_tts_provider_when_requested() -> None:
@@ -62,4 +63,3 @@ def test_gummy_preference_changes_primary_but_keeps_live_translate_fallback() ->
         "translation_enabled": True,
         "translation_target_languages": ["zh"],
     }
-
