@@ -1110,7 +1110,6 @@ export const useSessionStore = defineStore("session", {
 
     handleMediaPlaybackPaused() {
       if (this.activeMode !== "quick") return;
-      if (this.isMediaElementCaptureSource() && !captureStarted) return;
       if (this.modeStates.quick === "running") this.pauseMode("quick");
     },
 
@@ -1118,6 +1117,13 @@ export const useSessionStore = defineStore("session", {
       if (this.activeMode !== "quick") return;
 
       if (this.modeStates.quick === "paused") this.resumeMode("quick");
+      else if (
+        this.isMediaElementCaptureSource() &&
+        this.modeStates.quick === "running" &&
+        this.status === "paused"
+      ) {
+        this.resumeSession();
+      }
     },
 
     askEnd(mode: ProductMode) {
