@@ -54,6 +54,8 @@ const activeSessionId = ref<string | null>(null);
 const activeSessionName = ref("");
 const reportId = ref<string | null>(null);
 const closeNotice = ref("");
+const closeConfirmOpen = ref(false);
+const closeConfirmBusy = ref(false);
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "system_audio", label: "Windows 系统音频" },
@@ -123,6 +125,8 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
   capturing.value = false;
   captureStarted = false;
   closeNotice.value = "";
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
   activeSessionName.value = "";
   status.value = { status: "listening", lagMs: 0, message: "等待音源" };
   if (params.source && launchSourceMap[params.source]) {
@@ -295,6 +299,8 @@ async function startFromLaunchParams(params: LaunchParams) {
     activeSessionId.value = claim.sessionId;
     activeSessionName.value = "";
     closeNotice.value = "";
+    closeConfirmOpen.value = false;
+    closeConfirmBusy.value = false;
     reportId.value = null;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent, claim.wsToken);
@@ -372,6 +378,8 @@ async function startStandalone() {
   const sessionName = floatingSessionName(kind);
   try {
     closeNotice.value = "";
+    closeConfirmOpen.value = false;
+    closeConfirmBusy.value = false;
     activeSessionName.value = sessionName;
     const session = await createSession({
       inputMode: kind,
@@ -481,6 +489,8 @@ async function stopStandalone() {
   activeSessionName.value = "";
   reportId.value = null;
   closeNotice.value = "";
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
@@ -526,7 +536,54 @@ async function finishStandaloneAndDownloadReport() {
   reportPending.value = false;
 }
 
-async function closeOverlayWindow() {
+function resetStandaloneToLauncher(message = "已停止，可重新选择音源") {
+  activeSessionId.value = null;
+  activeSessionName.value = "";
+  reportId.value = null;
+  closeNotice.value = "";
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
+  capturing.value = false;
+  captureStarted = false;
+  reportPending.value = false;
+  status.value = { status: "listening", lagMs: 0, message };
+}
+
+function requestCaptionClose() {
+  if (closeConfirmBusy.value || reportPending.value) return;
+  closeNotice.value = "";
+  closeConfirmOpen.value = true;
+}
+
+function cancelCaptionClose() {
+  if (closeConfirmBusy.value) return;
+  closeConfirmOpen.value = false;
+}
+
+async function confirmCaptionClose() {
+  if (closeConfirmBusy.value) return;
+  closeConfirmBusy.value = true;
+  closeConfirmOpen.value = false;
+  try {
+    if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
+      await finishStandaloneAndDownloadReport();
+      resetStandaloneToLauncher("本次同传已结束，可重新选择音源");
+    } else if (mode.value === "handoff") {
+      setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
+      await wait(2200);
+      await stopStandalone();
+    } else {
+      await stopStandalone();
+    }
+    mode.value = "standalone";
+    errorMessage.value = "";
+  } finally {
+    closeConfirmBusy.value = false;
+    closeConfirmOpen.value = false;
+  }
+}
+
+async function exitOverlayWindow() {
   if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
     await finishStandaloneAndDownloadReport();
   } else if (mode.value === "handoff") {
@@ -662,7 +719,7 @@ onUnmounted(() => {
       <button class="overlay-start" type="button" :disabled="starting" @click="startStandalone">
         {{ starting ? "连接中…" : "开始" }}
       </button>
-      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="closeOverlayWindow">
+      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="exitOverlayWindow">
         ×
       </button>
     </div>
@@ -678,12 +735,27 @@ onUnmounted(() => {
         :locked="settings.locked"
         :status="status"
         desktop
-        @close="closeOverlayWindow"
+        @close="requestCaptionClose"
       />
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载
       </p>
     </div>
+
+    <section v-if="closeConfirmOpen" class="overlay-confirm" role="dialog" aria-live="polite">
+      <div>
+        <strong>结束悬浮同传？</strong>
+        <p>确认后会停止当前同传并整理报告。报告可在 Web 端首页的「报告历史」查看和下载。</p>
+      </div>
+      <div class="overlay-confirm-actions">
+        <button class="overlay-confirm-secondary" type="button" :disabled="closeConfirmBusy" @click="cancelCaptionClose">
+          继续同传
+        </button>
+        <button class="overlay-confirm-primary" type="button" :disabled="closeConfirmBusy" @click="confirmCaptionClose">
+          {{ closeConfirmBusy ? "整理中" : "确认关闭" }}
+        </button>
+      </div>
+    </section>
 
     <p v-if="closeNotice" class="desktop-overlay-notice standalone-notice">
       {{ closeNotice }}
