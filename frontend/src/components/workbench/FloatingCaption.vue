@@ -48,7 +48,6 @@ const sizeClass = computed(() => {
 });
 const isCompact = computed(() => props.displayMode === "floating" || props.displayMode === "compact");
 const showSource = computed(() => !isCompact.value && props.displayMode !== "translation-only" && props.form.style !== "仅译文");
-const dragRegionEnabled = computed(() => props.desktop && !props.form.captionPinned && !props.locked);
 
 function toggleStyle() {
   props.form.style = props.form.style === "仅译文" ? "双语字幕" : "仅译文";
@@ -126,7 +125,6 @@ watch(
     ref="root"
     class="floating-caption-panel"
     :class="[sizeClass, { 'desktop-overlay': desktop, locked, pinned: form.captionPinned, compact: isCompact, confirming: closeConfirmOpen }]"
-    :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
     :style="{ opacity }"
   >
     <div v-if="!locked" class="floating-caption-toolbar">
@@ -199,7 +197,6 @@ watch(
       v-if="showSource"
       ref="sourceRef"
       class="floating-source"
-      :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.source"
     >
       <StreamLine :text="pair.source" :state="pair.state" />
@@ -207,7 +204,6 @@ watch(
     <p
       ref="translationRef"
       class="floating-translation"
-      :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.translation"
     >
       <StreamLine :text="pair.translation" :state="pair.state" strong />
