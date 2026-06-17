@@ -256,7 +256,7 @@ async function startFromLaunchParams(params: LaunchParams) {
     activeSessionId.value = claim.sessionId;
     reportId.value = null;
     socket?.close();
-    socket = connectDesktopSession(claim.wsUrl, applyEvent);
+    socket = connectDesktopSession(claim.wsUrl, applyEvent, claim.wsToken);
   } catch (error) {
     applyStandaloneLaunchParams(params);
     errorMessage.value = error instanceof Error ? error.message : "桌面接管失败";
@@ -351,7 +351,8 @@ async function startStandalone() {
     socket?.close();
     socket = connectDesktopSession(
       `/api/ws/sessions/${session.sessionId}?token=${encodeURIComponent(session.wsToken)}`,
-      applyEvent
+      applyEvent,
+      session.wsToken
     );
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "无法创建悬浮同传会话";
