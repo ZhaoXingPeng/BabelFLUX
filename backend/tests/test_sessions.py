@@ -1,13 +1,16 @@
 import asyncio
+import json
 
 import pytest
 from asgi_test_client import ASGIWebSocketSession, asgi_http_client
 
 from app.api.ws import _put_pcm_end, _put_pcm_frame
+from app.core.config import settings
 from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
 from app.services.providers.mock import build_mock_events
 from app.services.session_events import session_event_hub
+from app.services.session_history import session_history_store
 from app.services.session_store import session_store
 
 
@@ -146,6 +149,7 @@ async def test_session_history_tracks_created_and_report_ready_sessions() -> Non
     assert first_entry["sessionName"] == "History Demo"
     assert first_entry["domain"] == "技术"
     assert first_entry["status"] == "created"
+    assert first_entry["availableFormats"] == []
 
     async with ASGIWebSocketSession(
         f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
@@ -167,6 +171,69 @@ async def test_session_history_tracks_created_and_report_ready_sessions() -> Non
     assert entry["status"] in {"fallback", "completed"}
     assert entry["segmentCount"] == 1
     assert entry["availableFormats"] == ["txt", "srt", "md", "json"]
+
+
+@pytest.mark.asyncio
+async def test_session_history_refreshes_pending_status_from_persisted_report() -> None:
+    async with asgi_http_client() as client:
+        created = (
+            await client.post(
+                "/api/sessions",
+                json={
+                    "inputMode": "demo",
+                    "sessionName": "Pending Refresh",
+                    "productMode": "quick",
+                },
+            )
+        ).json()
+
+    record = session_store.get(created["sessionId"])
+    assert record is not None
+    pending_report = {
+        "reportId": f"{created['sessionId']}-report-test",
+        "sessionId": created["sessionId"],
+        "sessionName": "Pending Refresh",
+        "domain": "通用",
+        "sourceLanguage": "en",
+        "targetLanguage": "zh",
+        "durationMs": 1000,
+        "durationText": "00:01",
+        "generatedAt": "2026-06-17 10:00:00",
+        "summary": "基础报告",
+        "qualityNotes": "纠偏中",
+        "glossaryHits": [],
+        "metrics": {"segments": 1, "realtimeRevisions": 0, "finalRevisions": 0, "durationText": "00:01"},
+        "segments": [],
+        "finalRevisions": [],
+        "realtimeRevisions": [],
+        "correctionModel": None,
+        "correctionStatus": "pending",
+        "correctionError": "",
+        "correctionElapsedMs": 0,
+    }
+    session_history_store.upsert_from_record(record, report=pending_report)
+
+    completed_report = {
+        **pending_report,
+        "summary": "完整总结",
+        "qualityNotes": "已完成",
+        "metrics": {"segments": 1, "realtimeRevisions": 0, "finalRevisions": 1, "durationText": "00:01"},
+        "finalRevisions": [{"segmentId": "s1", "beforeText": "a", "afterText": "b", "reason": "会后纠偏"}],
+        "correctionModel": "qwen-plus",
+        "correctionStatus": "completed",
+        "correctionElapsedMs": 1200,
+    }
+    report_path = settings.report_dir / f"{pending_report['reportId']}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(completed_report, ensure_ascii=False), encoding="utf-8")
+
+    async with asgi_http_client() as client:
+        history = await client.get("/api/sessions/history")
+
+    entry = next(item for item in history.json()["items"] if item["sessionId"] == created["sessionId"])
+    assert entry["status"] == "completed"
+    assert entry["correctionStatus"] == "completed"
+    assert entry["finalRevisionCount"] == 1
 
 
 @pytest.mark.asyncio

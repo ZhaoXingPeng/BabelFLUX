@@ -126,6 +126,7 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
 
 @router.get("/history", response_model=SessionHistoryListResponse)
 def list_session_history() -> SessionHistoryListResponse:
+    _refresh_history_from_reports()
     return SessionHistoryListResponse(items=session_history_store.list())
 
 
@@ -155,6 +156,8 @@ def get_session_report(session_id: str) -> JSONResponse:
             raise HTTPException(status_code=404, detail="report not ready")
         if record is not None:
             session_history_store.upsert_from_record(record, report=report)
+        else:
+            session_history_store.upsert_from_report(report)
         return JSONResponse(report)
     session_history_store.upsert_from_record(record, report=record.report)
     return JSONResponse(record.report)
@@ -170,6 +173,8 @@ def download_session_report(session_id: str, format: str = "txt"):
         raise HTTPException(status_code=404, detail="report not ready")
     if record is not None:
         session_history_store.upsert_from_record(record, report=report)
+    else:
+        session_history_store.upsert_from_report(report)
 
     fmt = format.lower()
     renderers = {"txt": render_txt, "srt": render_srt, "md": render_md}
@@ -224,6 +229,21 @@ def _load_report_from_disk(session_id: str) -> dict[str, Any] | None:
         except (OSError, ValueError):
             continue
     return None
+
+
+def _refresh_history_from_reports() -> None:
+    import json
+
+    for entry in session_history_store.list():
+        report_id = entry.get("reportId")
+        if not report_id:
+            continue
+        path = settings.report_dir / f"{report_id}.json"
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        session_history_store.upsert_from_report(report)
 
 
 @router.post(

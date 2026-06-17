@@ -2016,7 +2016,9 @@ a:focus-visible {
   display: grid;
   gap: 4px;
   min-width: 0;
-  text-align: left;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
 }
 
 .history-title-cell strong,
@@ -2029,8 +2031,12 @@ a:focus-visible {
 }
 
 .history-title-cell small {
+  display: block;
+  width: 100%;
   color: var(--stage-muted);
   font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .history-status {

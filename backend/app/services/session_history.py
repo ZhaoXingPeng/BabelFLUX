@@ -35,7 +35,7 @@ class HistoryEntry:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        data["availableFormats"] = self.availableFormats or ["txt", "srt", "md", "json"]
+        data["availableFormats"] = self.availableFormats or []
         return data
 
 
@@ -127,6 +127,49 @@ class SessionHistoryStore:
                     updatedAt=_fmt_ts(),
                     availableFormats=["txt", "srt", "md", "json"] if report_data else [],
                 ).to_dict()
+            )
+            self._write_unlocked(entries)
+            return existing
+
+    def upsert_from_report(self, report: dict[str, Any]) -> dict[str, Any] | None:
+        session_id = report.get("sessionId")
+        if not session_id:
+            return None
+
+        with self._lock:
+            entries = self._read_unlocked()
+            existing = next(
+                (entry for entry in entries if entry.get("sessionId") == session_id),
+                None,
+            )
+            if existing is None:
+                existing = {}
+                entries.append(existing)
+
+            metrics = report.get("metrics") or {}
+            correction_status = report.get("correctionStatus") or existing.get("correctionStatus") or "skipped"
+            existing.update(
+                {
+                    "sessionId": session_id,
+                    "reportId": report.get("reportId") or existing.get("reportId"),
+                    "sessionName": report.get("sessionName") or existing.get("sessionName") or "",
+                    "productMode": existing.get("productMode") or "quick",
+                    "inputMode": existing.get("inputMode") or "demo",
+                    "sourceLabel": existing.get("sourceLabel") or existing.get("inputMode") or "demo",
+                    "domain": report.get("domain") or existing.get("domain") or "通用",
+                    "sourceLanguage": report.get("sourceLanguage") or existing.get("sourceLanguage") or "auto",
+                    "targetLanguage": report.get("targetLanguage") or existing.get("targetLanguage") or "zh",
+                    "status": _history_status(correction_status, existing.get("status") or ""),
+                    "startedAt": existing.get("startedAt") or report.get("generatedAt") or _fmt_ts(),
+                    "endedAt": existing.get("endedAt") or report.get("generatedAt"),
+                    "durationMs": int(report.get("durationMs") or existing.get("durationMs") or 0),
+                    "segmentCount": int(metrics.get("segments") or len(report.get("segments") or [])),
+                    "realtimeRevisionCount": int(metrics.get("realtimeRevisions") or 0),
+                    "finalRevisionCount": int(metrics.get("finalRevisions") or 0),
+                    "correctionStatus": correction_status,
+                    "updatedAt": _fmt_ts(),
+                    "availableFormats": ["txt", "srt", "md", "json"],
+                }
             )
             self._write_unlocked(entries)
             return existing

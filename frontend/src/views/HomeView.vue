@@ -16,6 +16,7 @@ const { desktopDownloadPromptOpen, desktopHandoffUrl, desktopLaunchMessage, desk
 useGsapReveal(root, { stagger: 0.09, y: 18 });
 
 function enterWeb() {
+  sessionStore.resetMode("quick");
   router.push({ path: "/web", query: { setup: "1" } });
 }
 

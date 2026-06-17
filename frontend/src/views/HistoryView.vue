@@ -25,8 +25,8 @@ function formatDuration(ms: number): string {
 }
 
 function statusLabel(entry: SessionHistoryEntry): string {
-  if (entry.status === "correcting" || entry.correctionStatus === "pending") return "纠偏中";
   if (entry.status === "completed") return "已完成";
+  if (entry.status === "correcting" || entry.correctionStatus === "pending") return "纠偏中";
   if (entry.status === "fallback") return "实时译文";
   if (entry.status === "running") return "进行中";
   if (entry.status === "failed") return "失败";
@@ -98,8 +98,8 @@ onMounted(loadHistory);
     <section class="history-panel">
       <div class="history-panel-header">
         <div>
-          <p>Unified downloads</p>
-          <h1>所有同传会话的报告文件</h1>
+          <p>Session archive</p>
+          <h1>会话报告</h1>
         </div>
         <button class="secondary-button compact-button" type="button" @click="router.push('/web')">
           新建同传

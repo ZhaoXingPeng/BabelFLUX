@@ -1210,6 +1210,27 @@ describe("同传工作台 mock 流程", () => {
     expect(assign).toHaveBeenCalledTimes(2);
   });
 
+  it("从主屏进入 Web 端会重置上一轮上传视频设置", async () => {
+    const wrapper = mountHome();
+    const store = useSessionStore();
+
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "video-file")!);
+    const file = new File(["fake mp4"], "previous.mp4", { type: "video/mp4" });
+    store.setQuickSourceFile(file);
+    store.quickForm.name = "上一轮会话";
+    await nextTick();
+
+    await findButton(wrapper, "进入工作台").trigger("click");
+    await nextTick();
+
+    expect(mockRuntime.routerPush).toHaveBeenCalledWith({ path: "/web", query: { setup: "1" } });
+    expect(store.quickForm.source).toBe(testVideoFixture.key);
+    expect(store.quickForm.name).toMatch(/^同传_/);
+    expect(store.quickInput.fileName).toBe("");
+    expect(store.mediaUrl).toBe(testVideoFixture.videoUrl);
+    expect(store.audioUrl).toBe(testVideoFixture.audioUrl);
+  });
+
   it("桌面客户端唤起成功后保留提示再自动收起", async () => {
     vi.useFakeTimers();
     vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
