@@ -47,8 +47,7 @@ body {
   cursor: move;
 }
 
-.handoff-report-hint,
-.desktop-overlay-notice {
+.handoff-report-hint {
   width: fit-content;
   max-width: 100%;
   margin: 6px 0 0;
@@ -60,20 +59,6 @@ body {
   font-size: 12px;
   line-height: 1.4;
   cursor: move;
-}
-
-.desktop-overlay-notice {
-  border-color: rgba(95, 180, 138, 0.36);
-  color: var(--stage-dst, #f4ede0);
-}
-
-.desktop-overlay-notice.standalone-notice {
-  margin: 8px auto 0;
-  background: rgba(11, 12, 15, 0.92);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
-  font-size: 13px;
-  font-weight: 800;
-  text-align: center;
 }
 
 /* standalone 启动条：透明面板自带音源下拉，选源后开始（默认系统音频）。外层 main 负责拖动。 */

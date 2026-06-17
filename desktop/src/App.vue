@@ -53,7 +53,6 @@ const reportPending = ref(false);
 const activeSessionId = ref<string | null>(null);
 const activeSessionName = ref("");
 const reportId = ref<string | null>(null);
-const closeNotice = ref("");
 const closeConfirmOpen = ref(false);
 const closeConfirmBusy = ref(false);
 
@@ -124,7 +123,6 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
   starting.value = false;
   capturing.value = false;
   captureStarted = false;
-  closeNotice.value = "";
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   activeSessionName.value = "";
@@ -141,11 +139,6 @@ function formatTime(ms: number): string {
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function setCloseNotice(message: string) {
-  closeNotice.value = message;
-  status.value = { status: "ready", lagMs: 0, message };
 }
 
 function resolvePendingReport(ready: boolean) {
@@ -255,7 +248,6 @@ async function startFromLaunchParams(params: LaunchParams) {
     displayMode.value = claim.displayMode;
     activeSessionId.value = claim.sessionId;
     activeSessionName.value = "";
-    closeNotice.value = "";
     closeConfirmOpen.value = false;
     closeConfirmBusy.value = false;
     reportId.value = null;
@@ -334,7 +326,6 @@ async function startStandalone() {
   const kind = selectedSource.value;
   const sessionName = floatingSessionName(kind);
   try {
-    closeNotice.value = "";
     closeConfirmOpen.value = false;
     closeConfirmBusy.value = false;
     activeSessionName.value = sessionName;
@@ -445,7 +436,6 @@ async function stopStandalone() {
   activeSessionId.value = null;
   activeSessionName.value = "";
   reportId.value = null;
-  closeNotice.value = "";
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
@@ -459,11 +449,9 @@ async function finishStandaloneAndSaveReport() {
   if (reportPending.value) return;
 
   reportPending.value = true;
-  capturing.value = false;
   captureStarted = false;
   resetNativeAudioStats();
-  closeNotice.value = "正在整理报告，完成后可在 Web 端「报告历史」查看和下载。";
-  status.value = { status: "syncing", lagMs: 0, message: closeNotice.value };
+  status.value = { status: "syncing", lagMs: 0, message: "正在整理报告" };
 
   if (capture) {
     const current = capture;
@@ -476,11 +464,9 @@ async function finishStandaloneAndSaveReport() {
   }
   const ready = await waitForReport();
   if (ready) {
-    setCloseNotice("报告已保存到 Web 端「报告历史」，可查看和下载。");
-    await wait(1200);
+    status.value = { status: "ready", lagMs: 0, message: "报告已保存" };
   } else {
-    setCloseNotice("报告仍在生成，可稍后到 Web 端「报告历史」查看和下载。");
-    await wait(1600);
+    status.value = { status: "ready", lagMs: 0, message: "报告仍在生成" };
   }
 
   socket?.close();
@@ -492,7 +478,6 @@ function resetStandaloneToLauncher(message = "已停止，可重新选择音源"
   activeSessionId.value = null;
   activeSessionName.value = "";
   reportId.value = null;
-  closeNotice.value = "";
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   capturing.value = false;
@@ -503,7 +488,6 @@ function resetStandaloneToLauncher(message = "已停止，可重新选择音源"
 
 function requestCaptionClose() {
   if (closeConfirmBusy.value || reportPending.value) return;
-  closeNotice.value = "";
   closeConfirmOpen.value = true;
 }
 
@@ -520,8 +504,6 @@ async function confirmCaptionClose() {
       await finishStandaloneAndSaveReport();
       resetStandaloneToLauncher("本次同传已结束，可重新选择音源");
     } else if (mode.value === "handoff") {
-      setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
-      await wait(2200);
       await stopStandalone();
     } else {
       await stopStandalone();
@@ -538,8 +520,6 @@ async function exitOverlayWindow() {
   if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
     await finishStandaloneAndSaveReport();
   } else if (mode.value === "handoff") {
-    setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
-    await wait(2200);
     await stopStandalone();
   } else {
     await stopStandalone();
@@ -660,7 +640,7 @@ onUnmounted(() => {
   >
     <!-- standalone 启动条：透明框自带音源下拉，选源后开始（默认系统音频）。整条可拖动。 -->
     <div
-      v-if="mode === 'standalone' && !capturing && !reportPending && !closeNotice && !settings.locked"
+      v-if="mode === 'standalone' && !capturing && !reportPending && !settings.locked"
       class="overlay-launcher"
     >
       <span class="overlay-launcher-title">悬浮同传</span>
@@ -696,10 +676,6 @@ onUnmounted(() => {
         本次会话由 Web 端发起，报告请在 Web 端下载
       </p>
     </div>
-
-    <p v-if="closeNotice" class="desktop-overlay-notice standalone-notice">
-      {{ closeNotice }}
-    </p>
 
     <p v-if="errorMessage" class="desktop-overlay-error">{{ errorMessage }}</p>
   </main>
