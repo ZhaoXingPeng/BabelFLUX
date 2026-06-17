@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
+import HistoryView from "./views/HistoryView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
 import { englishTestVideoFixture } from "./fixtures/englishTestVideo";
@@ -35,6 +36,8 @@ interface MockAudioSource {
 const mockRuntime = vi.hoisted(() => ({
   createSession: vi.fn(),
   getSessionReport: vi.fn(),
+  getSessionHistory: vi.fn(),
+  deleteSessionHistory: vi.fn(),
   issueSessionHandoff: vi.fn(),
   reportDownloadUrl: vi.fn(),
   createSessionSocket: vi.fn(),
@@ -53,6 +56,8 @@ const mockRuntime = vi.hoisted(() => ({
 vi.mock("./api/client", () => ({
   createSession: mockRuntime.createSession,
   getSessionReport: mockRuntime.getSessionReport,
+  getSessionHistory: mockRuntime.getSessionHistory,
+  deleteSessionHistory: mockRuntime.deleteSessionHistory,
   issueSessionHandoff: mockRuntime.issueSessionHandoff,
   reportDownloadUrl: mockRuntime.reportDownloadUrl
 }));
@@ -79,6 +84,16 @@ function mountHome(): VueWrapper {
   const pinia = createPinia();
   setActivePinia(pinia);
   return mount(HomeView, {
+    global: {
+      plugins: [pinia]
+    }
+  });
+}
+
+function mountHistory(): VueWrapper {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  return mount(HistoryView, {
     global: {
       plugins: [pinia]
     }
@@ -306,6 +321,8 @@ describe("同传工作台 mock 流程", () => {
     });
     mockRuntime.createSession.mockReset();
     mockRuntime.getSessionReport.mockReset();
+    mockRuntime.getSessionHistory.mockReset();
+    mockRuntime.deleteSessionHistory.mockReset();
     mockRuntime.issueSessionHandoff.mockReset();
     mockRuntime.reportDownloadUrl.mockReset();
     mockRuntime.createSessionSocket.mockReset();
@@ -332,6 +349,40 @@ describe("同传工作台 mock 流程", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("报告历史用中文展示来源和语种", async () => {
+    mockRuntime.getSessionHistory.mockResolvedValueOnce([
+      {
+        sessionId: "floating-history-1",
+        reportId: "report-floating-1",
+        sessionName: "悬浮同传_系统音频_20260617_1108",
+        productMode: "floating",
+        inputMode: "system_audio",
+        sourceLabel: "system_audio",
+        domain: "通用",
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        status: "completed",
+        startedAt: "2026-06-17 11:08:00",
+        endedAt: "2026-06-17 11:09:00",
+        durationMs: 60_000,
+        segmentCount: 3,
+        realtimeRevisionCount: 0,
+        finalRevisionCount: 1,
+        correctionStatus: "completed",
+        updatedAt: "2026-06-17 11:09:02",
+        availableFormats: ["txt", "srt", "md", "json"]
+      }
+    ]);
+
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("系统音频");
+    expect(wrapper.text()).toContain("英语 → 中文");
+    expect(wrapper.text()).not.toContain("system_audio");
+    expect(wrapper.text()).not.toContain("en → zh");
   });
 
   it("默认测试视频字幕滞后音频约 1s 逐句产出，并在约 23s 触发上下文纠偏", async () => {

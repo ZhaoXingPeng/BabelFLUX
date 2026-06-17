@@ -17,11 +17,50 @@ const errorMessage = ref("");
 
 const hasEntries = computed(() => entries.value.length > 0);
 
+const languageLabelByCode: Record<string, string> = {
+  auto: "自动检测",
+  zh: "中文",
+  en: "英语",
+  ja: "日语",
+  ko: "韩语",
+  fr: "法语",
+  de: "德语",
+  yue: "粤语"
+};
+
+const sourceLabelByCode: Record<string, string> = {
+  demo: "演示视频",
+  fixture_video: "演示视频",
+  fixture_english_video: "英文测试视频",
+  url: "网络视频",
+  microphone: "麦克风",
+  browser_audio: "浏览器音频",
+  screen_window: "屏幕窗口",
+  media_element_audio: "上传媒体",
+  video_file: "上传视频",
+  audio_file: "上传音频",
+  system_audio: "系统音频"
+};
+
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(total / 60);
   const seconds = total % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function lookupLabel(value: string | null | undefined, labels: Record<string, string>): string {
+  const normalized = value?.trim();
+  if (!normalized) return "未知";
+  return labels[normalized.toLowerCase()] ?? normalized;
+}
+
+function sourceLabel(entry: SessionHistoryEntry): string {
+  return lookupLabel(entry.sourceLabel || entry.inputMode, sourceLabelByCode);
+}
+
+function languagePairLabel(entry: SessionHistoryEntry): string {
+  return `${lookupLabel(entry.sourceLanguage, languageLabelByCode)} → ${lookupLabel(entry.targetLanguage, languageLabelByCode)}`;
 }
 
 function statusLabel(entry: SessionHistoryEntry): string {
@@ -125,9 +164,9 @@ onMounted(loadHistory);
             <strong>{{ entry.sessionName || "未命名同传" }}</strong>
             <small>{{ entry.startedAt }} · {{ entry.segmentCount }} 句</small>
           </div>
-          <span>{{ entry.sourceLabel || entry.inputMode }}</span>
+          <span>{{ sourceLabel(entry) }}</span>
           <span>{{ entry.domain }}</span>
-          <span>{{ entry.sourceLanguage }} → {{ entry.targetLanguage }}</span>
+          <span>{{ languagePairLabel(entry) }}</span>
           <span>{{ formatDuration(entry.durationMs) }}</span>
           <span :class="['history-status', statusTone(entry)]">{{ statusLabel(entry) }}</span>
           <div class="history-actions">

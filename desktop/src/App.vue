@@ -51,7 +51,9 @@ const capturing = ref(false);
 const starting = ref(false);
 const reportPending = ref(false);
 const activeSessionId = ref<string | null>(null);
+const activeSessionName = ref("");
 const reportId = ref<string | null>(null);
+const closeNotice = ref("");
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "system_audio", label: "Windows 系统音频" },
@@ -120,6 +122,8 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
   starting.value = false;
   capturing.value = false;
   captureStarted = false;
+  closeNotice.value = "";
+  activeSessionName.value = "";
   status.value = { status: "listening", lagMs: 0, message: "等待音源" };
   if (params.source && launchSourceMap[params.source]) {
     selectedSource.value = launchSourceMap[params.source];
@@ -133,6 +137,11 @@ function formatTime(ms: number): string {
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function setCloseNotice(message: string) {
+  closeNotice.value = message;
+  status.value = { status: "ready", lagMs: 0, message };
 }
 
 function resolvePendingReport(ready: boolean) {
@@ -159,9 +168,26 @@ async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
   return false;
 }
 
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const encoded = header.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  const quoted = header.match(/filename="([^"]+)"/i)?.[1];
+  if (quoted) return quoted;
+  return header.match(/filename=([^;]+)/i)?.[1]?.trim() ?? null;
+}
+
 function reportFilename(format: ReportFormat) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `BabelFlux-report-${stamp}.${format}`;
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const fallbackName = activeSessionName.value || `悬浮同传_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
+  return `${fallbackName}.${format}`;
 }
 
 function floatingSessionName(kind: CaptureSourceKind) {
@@ -186,7 +212,8 @@ async function downloadCurrentReport(format: ReportFormat = "txt") {
   if (!activeSessionId.value) return false;
   const response = await fetch(reportDownloadUrl(activeSessionId.value, format));
   if (!response.ok) return false;
-  downloadBlob(await response.blob(), reportFilename(format));
+  const filename = filenameFromContentDisposition(response.headers.get("Content-Disposition")) ?? reportFilename(format);
+  downloadBlob(await response.blob(), filename);
   return true;
 }
 
@@ -240,7 +267,7 @@ function applyEvent(event: ServerEvent) {
   if (event.type === "session_report") {
     reportId.value = event.reportId;
     reportPending.value = false;
-    status.value = { status: "ready", lagMs: 0, message: "基础报告已保存到 Web 报告区，TXT 正在下载" };
+    status.value = { status: "ready", lagMs: 0, message: "报告已保存到 Web 端「报告历史」，可查看和下载" };
     resolvePendingReport(true);
     return;
   }
@@ -266,6 +293,8 @@ async function startFromLaunchParams(params: LaunchParams) {
     mode.value = "handoff";
     displayMode.value = claim.displayMode;
     activeSessionId.value = claim.sessionId;
+    activeSessionName.value = "";
+    closeNotice.value = "";
     reportId.value = null;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent, claim.wsToken);
@@ -340,13 +369,16 @@ async function startStandalone() {
   errorMessage.value = "";
   captureStarted = false;
   const kind = selectedSource.value;
+  const sessionName = floatingSessionName(kind);
   try {
+    closeNotice.value = "";
+    activeSessionName.value = sessionName;
     const session = await createSession({
       inputMode: kind,
       sourceLanguage: toCode(settings.value.form.sourceLanguage),
       targetLanguage: toCode(settings.value.form.targetLanguage),
       productMode: "floating",
-      sessionName: floatingSessionName(kind),
+      sessionName,
       domain: settings.value.form.domain,
       modelProfile: settings.value.form.modelProfile,
       sourceKey: kind,
@@ -367,6 +399,7 @@ async function startStandalone() {
       session.wsToken
     );
   } catch (error) {
+    activeSessionName.value = "";
     errorMessage.value = error instanceof Error ? error.message : "无法创建悬浮同传会话";
     status.value = { status: "missing", lagMs: 0, message: errorMessage.value };
     capturing.value = false;
@@ -445,7 +478,9 @@ async function stopStandalone() {
   socket?.close();
   socket = null;
   activeSessionId.value = null;
+  activeSessionName.value = "";
   reportId.value = null;
+  closeNotice.value = "";
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
@@ -460,7 +495,8 @@ async function finishStandaloneAndDownloadReport() {
   capturing.value = false;
   captureStarted = false;
   resetNativeAudioStats();
-  status.value = { status: "syncing", lagMs: 0, message: "正在整理基础报告" };
+  closeNotice.value = "正在整理报告，完成后可在 Web 端「报告历史」查看和下载。";
+  status.value = { status: "syncing", lagMs: 0, message: closeNotice.value };
 
   if (capture) {
     const current = capture;
@@ -470,21 +506,19 @@ async function finishStandaloneAndDownloadReport() {
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "stop_session" }));
-    const ready = await waitForReport();
-    if (ready) {
-      const downloaded = await downloadCurrentReport("txt");
-      status.value = {
-        status: "ready",
-        lagMs: 0,
-        message: downloaded
-          ? "报告已保存到 Web 报告历史，并已开始下载 TXT"
-          : "报告已保存到 Web 报告历史，可在报告历史下载"
-      };
-      await wait(1800);
-    } else {
-      status.value = { status: "missing", lagMs: 0, message: "报告仍在生成，可稍后到 Web 报告区下载" };
-      await wait(1800);
-    }
+  }
+  const ready = await waitForReport();
+  if (ready) {
+    const downloaded = await downloadCurrentReport("txt");
+    setCloseNotice(
+      downloaded
+        ? "报告已保存到 Web 端「报告历史」，TXT 已开始下载。"
+        : "报告已保存到 Web 端「报告历史」，可稍后查看和下载。"
+    );
+    await wait(3000);
+  } else {
+    setCloseNotice("报告仍在生成，可稍后到 Web 端「报告历史」查看和下载。");
+    await wait(3000);
   }
 
   socket?.close();
@@ -495,6 +529,10 @@ async function finishStandaloneAndDownloadReport() {
 async function closeOverlayWindow() {
   if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
     await finishStandaloneAndDownloadReport();
+  } else if (mode.value === "handoff") {
+    setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
+    await wait(2200);
+    await stopStandalone();
   } else {
     await stopStandalone();
   }
@@ -644,6 +682,9 @@ onUnmounted(() => {
       />
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载
+      </p>
+      <p v-if="closeNotice" class="desktop-overlay-notice">
+        {{ closeNotice }}
       </p>
     </div>
 
