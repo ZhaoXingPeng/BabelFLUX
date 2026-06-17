@@ -689,6 +689,154 @@ async def test_chinese_source_to_english_translation_keeps_spaces_and_splits_rea
 
 
 @pytest.mark.asyncio
+async def test_english_target_keeps_spaces_when_translation_contains_cjk_noise() -> None:
+    record = SessionRecord(session_id="en-target-mixed", source_language="zh", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "这是关于现代艺术博物馆的一段说明。",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "This is a note about the Museum of Modern Art 中文 note.",
+        "responseA",
+        final=True,
+    )
+
+    combined_translation = " ".join(segment.translation_text for segment in record.segments)
+    assert "Museum of Modern Art" in combined_translation
+    assert "MuseumofModernArt" not in combined_translation
+    assert "This is a note" in combined_translation
+
+
+@pytest.mark.asyncio
+async def test_chinese_target_preserves_embedded_english_term_spacing() -> None:
+    record = SessionRecord(session_id="zh-target-mixed", source_language="en", target_language="zh")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "The talk references the Museum of Modern Art and Elizabeth Murray.",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "这段演讲提到了 Museum of Modern Art 和 Elizabeth Murray。",
+        "responseA",
+        final=True,
+    )
+
+    combined_translation = "".join(segment.translation_text for segment in record.segments)
+    assert "Museum of Modern Art" in combined_translation
+    assert "MuseumofModernArt" not in combined_translation
+    assert "Elizabeth Murray" in combined_translation
+
+
+@pytest.mark.asyncio
+async def test_wrong_manual_source_language_does_not_glue_english_output() -> None:
+    record = SessionRecord(
+        session_id="wrong-source-language", source_language="zh", target_language="en"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        "itemA",
+        final=True,
+    )
+    await pipeline._on_translation(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art 中文.",
+        "responseA",
+        final=True,
+    )
+
+    combined_source = " ".join(segment.source_text for segment in record.segments)
+    combined_translation = " ".join(segment.translation_text for segment in record.segments)
+    assert "I feel so fortunate" in combined_source
+    assert "Museum of Modern Art" in combined_translation
+    assert "MuseumofModernArt" not in combined_translation
+
+
+@pytest.mark.asyncio
+async def test_auto_source_language_flips_same_target_english_to_chinese() -> None:
+    record = SessionRecord(
+        session_id="auto-source-flip", source_language="auto", target_language="en"
+    )
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    await pipeline._on_source(
+        "I feel so fortunate that my first job was working at the Museum of Modern Art.",
+        "itemA",
+        final=False,
+    )
+
+    assert record.source_language == "en"
+    assert record.target_language == "zh"
+
+
+def test_auto_source_initial_provider_language_uses_opposite_target_hint() -> None:
+    zh_target = SessionRecord(session_id="auto-zh", source_language="auto", target_language="zh")
+    en_target = SessionRecord(session_id="auto-en", source_language="auto", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    assert (
+        InterpretationPipeline(settings=settings, record=zh_target, emit=emit)
+        ._initial_provider_source_language()
+        == "en"
+    )
+    assert (
+        InterpretationPipeline(settings=settings, record=en_target, emit=emit)
+        ._initial_provider_source_language()
+        == "zh"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_pcm_preflight_replays_prefix_and_flips_same_language_target() -> None:
+    record = SessionRecord(session_id="auto-pcm", source_language="auto", target_language="en")
+
+    async def emit(_ev: dict) -> None:
+        return None
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+
+    async def fake_detect(audio: bytes) -> None:
+        assert audio == b"a" + b"b"
+        pipeline._lock_language_pair("en")
+
+    pipeline._detect_language_from_pcm = fake_detect  # type: ignore[method-assign]
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    await queue.put(b"a")
+    await queue.put(b"b")
+    await queue.put(None)
+
+    frames, ended = await pipeline._preflight_pcm_language(queue)
+
+    assert frames == [b"a", b"b"]
+    assert ended is True
+    assert record.source_language == "en"
+    assert record.target_language == "zh"
+
+
+@pytest.mark.asyncio
 async def test_lowercase_source_continuation_does_not_shift_following_translations() -> None:
     record = SessionRecord(
         session_id="continuation-source", source_language="en", target_language="zh"
@@ -988,6 +1136,38 @@ async def test_report_generation_uses_final_correction_output() -> None:
     assert "全文纠偏：已完成" in txt
     assert "会后校正记录" in txt
     assert "补充标点" in txt
+
+
+@pytest.mark.asyncio
+async def test_report_generation_can_emit_pending_base_report_without_waiting() -> None:
+    class SlowCorrectionClient:
+        async def generate(self, **_: object) -> object:
+            await asyncio.sleep(1)
+            return object()
+
+    record = SessionRecord(session_id="report-pending", source_language="en", target_language="zh")
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 0
+    seg.end_ms = 3000
+    seg.source_text = "Hello world."
+    seg.translation_text = "live translation"
+    seg.status = "final"
+
+    started = asyncio.get_running_loop().time()
+    report = await generate_session_report(
+        record,
+        settings=settings,
+        client=SlowCorrectionClient(),  # type: ignore[arg-type]
+        run_final_correction=False,
+        pending_final_correction=True,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 0.5
+    assert report["correctionStatus"] == "pending"
+    assert report["metrics"]["segments"] == 1
+    assert report["segments"][0]["finalTranslation"] == "live translation"
+    assert "Hello world." in render_srt(report)
 
 
 @pytest.mark.asyncio

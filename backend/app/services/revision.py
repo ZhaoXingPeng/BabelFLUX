@@ -89,6 +89,15 @@ class RealtimeReviser:
         )
         self._call_times: deque[float] = deque()
 
+    def update_languages(self, source_language: str, target_language: str) -> None:
+        self.source_language = source_language
+        self.target_language = target_language
+        self._system_prompt = build_realtime_revision_prompt(
+            self.domain,
+            source_language,
+            target_language,
+        )
+
     def _rate_limited(self) -> bool:
         now = time.monotonic()
         while self._call_times and now - self._call_times[0] > 60:

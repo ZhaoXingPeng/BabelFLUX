@@ -8,6 +8,7 @@ from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
 from app.services.providers.mock import build_mock_events
 from app.services.session_events import session_event_hub
+from app.services.session_store import session_store
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +52,21 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_create_session_preserves_auto_source_language() -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/sessions",
+            json={"inputMode": "browser_audio", "sourceLanguage": "auto", "targetLanguage": "zh"},
+        )
+
+    assert response.status_code == 200
+    record = session_store.get(response.json()["sessionId"])
+    assert record is not None
+    assert record.source_language == "auto"
+    assert record.target_language == "zh"
 
 
 @pytest.mark.asyncio
@@ -106,6 +122,51 @@ async def test_mock_websocket_report_includes_emitted_segments() -> None:
     segment = report["segments"][0]
     assert segment["sourceText"].startswith("Today we are going to talk")
     assert segment["finalTranslation"]
+
+
+@pytest.mark.asyncio
+async def test_session_history_tracks_created_and_report_ready_sessions() -> None:
+    async with asgi_http_client() as client:
+        created = (
+            await client.post(
+                "/api/sessions",
+                json={
+                    "inputMode": "demo",
+                    "sessionName": "History Demo",
+                    "domain": "技术",
+                    "productMode": "quick",
+                },
+            )
+        ).json()
+        initial = await client.get("/api/sessions/history")
+
+    assert initial.status_code == 200
+    first_entry = initial.json()["items"][0]
+    assert first_entry["sessionId"] == created["sessionId"]
+    assert first_entry["sessionName"] == "History Demo"
+    assert first_entry["domain"] == "技术"
+    assert first_entry["status"] == "created"
+
+    async with ASGIWebSocketSession(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
+        await websocket.receive_json()
+        await websocket.send_json({"type": "start_session"})
+        while True:
+            event = await websocket.receive_json()
+            if event["type"] == "session_report":
+                report_id = event["reportId"]
+                break
+
+    async with asgi_http_client() as client:
+        history = await client.get(f"/api/sessions/history/{created['sessionId']}")
+
+    assert history.status_code == 200
+    entry = history.json()
+    assert entry["reportId"] == report_id
+    assert entry["status"] in {"fallback", "completed"}
+    assert entry["segmentCount"] == 1
+    assert entry["availableFormats"] == ["txt", "srt", "md", "json"]
 
 
 @pytest.mark.asyncio

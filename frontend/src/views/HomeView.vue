@@ -37,6 +37,7 @@ function continueWithWebFloating() {
         <strong>巴别流 同传</strong>
       </div>
       <nav aria-label="主导航">
+        <button class="home-nav-button" type="button" @click="router.push('/history')">报告历史</button>
         <a href="/docs/design/前端布局重构设计方案_v1.md">设计方案</a>
         <a href="https://gitee.com/RedamancyZXP/ai-product-lab" target="_blank" rel="noreferrer">仓库</a>
       </nav>

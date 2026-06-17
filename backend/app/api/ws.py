@@ -25,9 +25,11 @@ from app.services.providers.dashscope import DashScopeClient, DashScopeConfig
 from app.services.providers.mock import build_mock_events
 from app.services.report import generate_session_report
 from app.services.session_events import session_event_hub
+from app.services.session_history import session_history_store
 from app.services.session_store import RevisionRecord, session_store
 
 router = APIRouter(tags=["websocket"])
+_REPORT_TASKS: set[asyncio.Task[None]] = set()
 
 CLIENT_CAPTURE_MODES = {
     "microphone",
@@ -88,9 +90,25 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
         record.ended_at = time.time()
         client = _build_llm_client()
         try:
-            report = await generate_session_report(record, settings=settings, client=client)
+            report = await generate_session_report(
+                record,
+                settings=settings,
+                client=None,
+                run_final_correction=False,
+                pending_final_correction=client is not None and bool(record.reportable_segments()),
+            )
             _persist_report(report)
-            await emit({"type": "session_report", "reportId": report["reportId"]})
+            history = session_history_store.upsert_from_record(record, report=report)
+            await emit(
+                {
+                    "type": "session_report",
+                    "reportId": report["reportId"],
+                    "correctionStatus": report.get("correctionStatus"),
+                    "historyStatus": history.get("status"),
+                }
+            )
+            if client is not None and record.reportable_segments():
+                _schedule_final_report_correction(record, report["reportId"], emit)
         except Exception as exc:  # noqa: BLE001 - 报告失败也要让前端收到提示
             await emit({"type": "error", "message": f"报告生成失败：{exc}"})
 
@@ -345,8 +363,7 @@ def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:
     """允许 start_session 携带少量覆盖项（语种/领域/源），增强健壮性。"""
     if payload.get("sourceLanguage"):
-        lang = payload["sourceLanguage"]
-        record.source_language = "en" if lang == "auto" else lang
+        record.source_language = payload["sourceLanguage"]
     if payload.get("targetLanguage"):
         record.target_language = payload["targetLanguage"]
     if payload.get("domain"):
@@ -364,6 +381,71 @@ def _build_llm_client() -> DashScopeClient | None:
         return DashScopeClient(DashScopeConfig.from_settings(settings))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _schedule_final_report_correction(
+    record: Any,
+    report_id: str,
+    emit: Any,
+) -> None:
+    async def runner() -> None:
+        client = _build_llm_client()
+        if client is None:
+            report = await generate_session_report(
+                record,
+                settings=settings,
+                client=None,
+                report_id=report_id,
+            )
+            _persist_report(report)
+            history = session_history_store.upsert_from_record(record, report=report)
+            await emit(
+                {
+                    "type": "session_report",
+                    "reportId": report["reportId"],
+                    "correctionStatus": report.get("correctionStatus"),
+                    "historyStatus": history.get("status"),
+                }
+            )
+            return
+        try:
+            report = await generate_session_report(
+                record,
+                settings=settings,
+                client=client,
+                report_id=report_id,
+            )
+            _persist_report(report)
+            history = session_history_store.upsert_from_record(record, report=report)
+            await emit(
+                {
+                    "type": "session_report",
+                    "reportId": report["reportId"],
+                    "correctionStatus": report.get("correctionStatus"),
+                    "historyStatus": history.get("status"),
+                }
+            )
+        except Exception:
+            report = await generate_session_report(
+                record,
+                settings=settings,
+                client=None,
+                report_id=report_id,
+            )
+            _persist_report(report)
+            history = session_history_store.upsert_from_record(record, report=report)
+            await emit(
+                {
+                    "type": "session_report",
+                    "reportId": report["reportId"],
+                    "correctionStatus": report.get("correctionStatus"),
+                    "historyStatus": history.get("status"),
+                }
+            )
+
+    task = asyncio.create_task(runner())
+    _REPORT_TASKS.add(task)
+    task.add_done_callback(_REPORT_TASKS.discard)
 
 
 def _persist_report(report: dict[str, Any]) -> None:

@@ -64,6 +64,20 @@ def test_live_translate_session_update_declares_low_latency_pcm_rate() -> None:
     assert event["session"]["output_audio_format"] == "pcm"
 
 
+def test_live_translate_session_update_can_request_auto_source_language() -> None:
+    session = LiveTranslateSession(
+        DashScopeConfig(api_key="test-key"),
+        model="m",
+        source_language="auto",
+        target_language="zh",
+    )
+
+    event = session._session_update_event()
+
+    assert event["session"]["input_audio_transcription"]["language"] == "auto"
+    assert event["session"]["translation"]["language"] == "zh"
+
+
 def test_live_translate_qwen35_tts_uses_supported_voice_for_legacy_cherry() -> None:
     session = LiveTranslateSession(
         DashScopeConfig(api_key="test-key"),

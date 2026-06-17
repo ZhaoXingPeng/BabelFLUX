@@ -77,6 +77,17 @@ function setLocalPreview(mode: ProductMode, file: File | null): string | null {
   return localPreviewUrls[mode];
 }
 
+function stopBoundMediaElement() {
+  if (!mediaElement) return;
+  try {
+    mediaElement.pause();
+    mediaElement.currentTime = 0;
+  } catch {
+    // Some test doubles and detached elements do not allow clock mutation.
+  }
+  mediaElement = null;
+}
+
 const captureKindBySource: Record<string, CaptureSourceKind> = {
   microphone: "microphone",
   "browser-tab": "browser_audio",
@@ -92,6 +103,7 @@ const SUBTITLE_LATENCY_MS = 1000;
 const MIN_OUTPUT_LATENCY_MS = 250;
 const MAX_OUTPUT_LATENCY_MS = 6000;
 const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
+const ACTIVE_PENDING_TRANSLATION_HOLD_MS = 2600;
 const REPORT_READY_TIMEOUT_MS = 150_000;
 const REPORT_POLL_INTERVAL_MS = 1_000;
 // 16kHz s16le mono 约 32KB/s；超过 1 秒发送积压时丢当前帧，避免旧音频拖慢同传。
@@ -151,6 +163,15 @@ const defaultSourceInputState: SourceInputState = {
 
 const fileSourceKeys = new Set(["video-file", "audio-file"]);
 const permissionSourceKeys = new Set(["microphone", "browser-tab", "screen-window"]);
+const autoDetectSourceKeys = new Set([
+  "video-file",
+  "audio-file",
+  "url",
+  "microphone",
+  "browser-tab",
+  "screen-window",
+  "system-audio"
+]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
   [testVideoFixture.key]: "demo",
@@ -374,6 +395,34 @@ function defaultSessionName(): string {
   return `同传_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
+function createDefaultQuickForm(): QuickFormState {
+  return {
+    name: defaultSessionName(),
+    domain: "通用",
+    sourceLanguage: "中文",
+    targetLanguage: "英语",
+    modelProfile: "智能默认",
+    source: testVideoFixture.key,
+    ttsEnabled: false
+  };
+}
+
+function createDefaultFloatingForm(): FloatingFormState {
+  return {
+    domain: "通用",
+    sourceLanguage: "自动检测",
+    targetLanguage: "中文",
+    modelProfile: "快速低延迟",
+    source: "browser-tab",
+    ttsEnabled: false,
+    style: "双语字幕",
+    size: "标准",
+    opacity: "90%",
+    captionPinned: false,
+    captionOffsetY: 0
+  };
+}
+
 function shouldRefreshDefaultSessionName(name: string): boolean {
   return name.trim().length === 0 || DEFAULT_SESSION_NAME_PATTERN.test(name);
 }
@@ -552,25 +601,15 @@ function hasTranslationText(translationSegments: SubtitleSegment[], segmentId: s
   );
 }
 
-function activeTranslatedSegmentForPlayback(
+function hasPendingTranslation(
   sourceSegments: SubtitleSegment[],
   translationSegments: SubtitleSegment[],
-  playbackMs: number
-): string | null {
-  const timeline = combinedTimeline(sourceSegments, translationSegments).filter((segment) =>
-    hasTranslationText(translationSegments, segment.segmentId)
-  );
-  if (timeline.length === 0) return null;
-  const displayClockMs = Math.max(0, playbackMs - estimatedOutputLatencyMs);
-  const exact = timeline.find(
-    (segment, index) =>
-      displayClockMs >= segment.startMs &&
-      displayClockMs < Math.max(segment.endMs, timeline[index + 1]?.startMs ?? 0, segment.startMs + 2000)
-  );
-  if (exact) return exact.segmentId;
-  return [...timeline].reverse().find((segment) => segment.startMs <= displayClockMs)?.segmentId
-    ?? timeline[timeline.length - 1]?.segmentId
-    ?? null;
+  segmentId: string | null
+): boolean {
+  if (!segmentId) return false;
+  const source = sourceSegments.find((segment) => segment.segmentId === segmentId);
+  const translation = translationSegments.find((segment) => segment.segmentId === segmentId);
+  return Boolean(source?.text.trim()) && !translation?.text.trim();
 }
 
 function timelineSegmentById(
@@ -594,6 +633,26 @@ function shouldKeepCurrentActiveSegment(
   const current = timelineSegmentById(sourceSegments, translationSegments, currentId);
   const candidate = timelineSegmentById(sourceSegments, translationSegments, candidateId);
   if (!current || !candidate) return false;
+  if (hasPendingTranslation(sourceSegments, translationSegments, currentId)) {
+    const holdUntil = Math.max(current.endMs, current.startMs + 1200) + estimatedOutputLatencyMs + ACTIVE_PENDING_TRANSLATION_HOLD_MS;
+    if (playbackMs <= holdUntil && candidate.startMs > current.startMs) return true;
+  }
+  if (
+    hasTranslationText(translationSegments, currentId) &&
+    hasPendingTranslation(sourceSegments, translationSegments, candidateId)
+  ) {
+    const currentEnd = Math.max(current.endMs, current.startMs + 1200);
+    const candidateSource = sourceSegments.find((segment) => segment.segmentId === candidateId);
+    const candidateTextLength = candidateSource?.text.trim().length ?? 0;
+    const candidateLooksFragment = candidateTextLength < 24 || candidate.endMs - candidate.startMs <= 1400;
+    if (
+      candidateLooksFragment &&
+      candidate.startMs <= currentEnd + 400 &&
+      playbackMs <= currentEnd + estimatedOutputLatencyMs + 800
+    ) {
+      return true;
+    }
+  }
   return candidate.startMs + 500 < current.startMs && playbackMs >= current.startMs - 500;
 }
 
@@ -676,6 +735,7 @@ function renderReportClient(
 }
 
 function correctionStatusText(report: SessionReport): string {
+  if (report.correctionStatus === "pending") return "基础报告已可下载，全文纠偏生成中";
   const elapsedMs = report.correctionElapsedMs ?? 0;
   const elapsed = elapsedMs > 0 ? `，耗时 ${(elapsedMs / 1000).toFixed(1)} 秒` : "";
   const model = report.correctionModel ? `，模型 ${report.correctionModel}` : "";
@@ -721,28 +781,8 @@ export const useSessionStore = defineStore("session", {
       quick: "setup",
       floating: "setup"
     },
-    quickForm: {
-      name: defaultSessionName(),
-      domain: "通用",
-      sourceLanguage: "中文",
-      targetLanguage: "英语",
-      modelProfile: "智能默认",
-      source: testVideoFixture.key,
-      ttsEnabled: false
-    },
-    floatingForm: {
-      domain: "通用",
-      sourceLanguage: "自动检测",
-      targetLanguage: "中文",
-      modelProfile: "快速低延迟",
-      source: "browser-tab",
-      ttsEnabled: false,
-      style: "双语字幕",
-      size: "标准",
-      opacity: "90%",
-      captionPinned: false,
-      captionOffsetY: 0
-    },
+    quickForm: createDefaultQuickForm(),
+    floatingForm: createDefaultFloatingForm(),
     quickInput: { ...defaultSourceInputState },
     floatingInput: { ...defaultSourceInputState },
     startRequestId: 0,
@@ -803,7 +843,11 @@ export const useSessionStore = defineStore("session", {
           originalTranslation: translation?.originalText,
           revisionReason: translation?.revisionReason
         };
-      }).filter((pair) => pair.translation.trim());
+      }).filter((pair) => {
+        if (pair.translation.trim()) return true;
+        if (!pair.source.trim()) return false;
+        return pair.segmentId === state.activeSegmentId;
+      });
     },
     currentPair(): TranscriptPair {
       const active = this.transcriptPairs.find((pair) => pair.isActive);
@@ -920,11 +964,17 @@ export const useSessionStore = defineStore("session", {
       if (source.disabled || this.quickForm.source === source.key) return;
       pendingFiles.quick = null;
       revokeLocalPreview("quick");
-      this.quickForm.source = source.key;
       this.quickInput = { ...defaultSourceInputState };
+      this.quickForm.source = source.key;
       if (source.key === testVideoFixture.key) {
+        this.quickForm.sourceLanguage = "中文";
+        this.quickForm.targetLanguage = "英语";
         this.loadTestVideoFixturePreview();
       } else if (!this.activeMode) {
+        if (autoDetectSourceKeys.has(source.key)) {
+          this.quickForm.sourceLanguage = "自动检测";
+          if (this.quickForm.targetLanguage === "英语") this.quickForm.targetLanguage = "中文";
+        }
         this.clearLocalMediaPreview();
       }
     },
@@ -1224,19 +1274,35 @@ export const useSessionStore = defineStore("session", {
     },
 
     resetMode(mode: ProductMode) {
-      if (this.activeMode === mode) {
+      if (this.activeMode) {
+        const previousMode = this.activeMode;
         this.activeMode = null;
+        this.modeStates[previousMode] = "setup";
         this.stopSession("idle");
       }
       // 无论该模式此前是否在跑，都清掉上一段的报告/字幕/进度，确保是"干净的下一次任务"。
       this.startRequestId += 1;
       this.resetSessionData();
       this.modeStates[mode] = "setup";
-      if (mode === "quick" && shouldRefreshDefaultSessionName(this.quickForm.name)) {
-        this.quickForm.name = defaultSessionName();
-      }
-      if (mode === "quick" && this.quickForm.source === testVideoFixture.key && !this.activeMode) {
+      this.productMode = mode;
+      this.showEndDialog = false;
+      this.endingMode = null;
+      if (mode === "quick") {
+        pendingFiles.quick = null;
+        revokeLocalPreview("quick");
+        this.quickForm = createDefaultQuickForm();
+        this.quickInput = { ...defaultSourceInputState };
+        this.selectedDisplayMode = "逐句对照";
+        this.desktopDownloadPromptOpen = false;
+        this.desktopHandoffUrl = null;
+        this.desktopLaunchState = "idle";
+        this.desktopLaunchMessage = "等待投送到桌面悬浮窗";
         this.loadTestVideoFixturePreview();
+      } else {
+        pendingFiles.floating = null;
+        revokeLocalPreview("floating");
+        this.floatingForm = createDefaultFloatingForm();
+        this.floatingInput = { ...defaultSourceInputState };
       }
     },
 
@@ -1361,11 +1427,13 @@ export const useSessionStore = defineStore("session", {
       this.resetTtsPlayback();
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
-      mediaElement = null;
+      stopBoundMediaElement();
       estimatedOutputLatencyMs = SUBTITLE_LATENCY_MS;
       recentOutputLatencies.length = 0;
       sampledOutputLatencySegmentIds.clear();
       this.sessionId = null;
+      this.status = "idle";
+      this.wsConnected = false;
       this.sourceSyncState = { ...defaultSourceSyncState };
       this.mediaUrl = null;
       this.audioUrl = null;
@@ -1393,7 +1461,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     resetTtsPlayback() {
-      ttsPlayback.stop();
+      void ttsPlayback.close();
       stopFixtureSpeech();
       this.ttsErrorMessage = null;
       ttsPlayback.setVolume(this.ttsVolume);
@@ -1421,6 +1489,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     clearLocalMediaPreview() {
+      stopBoundMediaElement();
       this.mediaUrl = null;
       this.audioUrl = null;
       this.playbackMs = 0;
@@ -1498,14 +1567,7 @@ export const useSessionStore = defineStore("session", {
         this.translationSegments,
         currentPlaybackMs
       );
-      const translatedCandidateId = hasTranslationText(this.translationSegments, candidateId)
-        ? candidateId
-        : activeTranslatedSegmentForPlayback(
-            this.sourceSegments,
-            this.translationSegments,
-            currentPlaybackMs
-          );
-      const nextActiveId = translatedCandidateId ?? candidateId;
+      const nextActiveId = candidateId;
       if (
         shouldKeepCurrentActiveSegment(
           this.sourceSegments,

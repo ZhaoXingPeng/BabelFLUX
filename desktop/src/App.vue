@@ -228,7 +228,7 @@ function applyEvent(event: ServerEvent) {
   if (event.type === "session_report") {
     reportId.value = event.reportId;
     reportPending.value = false;
-    status.value = { status: "ready", lagMs: 0, message: "最终报告已生成，正在下载" };
+    status.value = { status: "ready", lagMs: 0, message: "基础报告已保存到 Web 报告区，TXT 正在下载" };
     resolvePendingReport(true);
     return;
   }
@@ -447,7 +447,7 @@ async function finishStandaloneAndDownloadReport() {
   capturing.value = false;
   captureStarted = false;
   resetNativeAudioStats();
-  status.value = { status: "syncing", lagMs: 0, message: "正在生成最终报告" };
+  status.value = { status: "syncing", lagMs: 0, message: "正在整理基础报告" };
 
   if (capture) {
     const current = capture;
@@ -462,7 +462,7 @@ async function finishStandaloneAndDownloadReport() {
       const downloaded = await downloadCurrentReport("txt");
       if (downloaded) await wait(1200);
     } else {
-      status.value = { status: "missing", lagMs: 0, message: "报告生成超时，可在 Web 端稍后下载" };
+      status.value = { status: "missing", lagMs: 0, message: "报告仍在生成，可稍后到 Web 报告区下载" };
       await wait(1200);
     }
   }

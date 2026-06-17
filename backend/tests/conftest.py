@@ -3,6 +3,7 @@
 import pytest
 
 from app.core.config import settings
+from app.services.session_history import session_history_store
 from app.services.session_store import session_store
 
 
@@ -12,6 +13,8 @@ def force_mock_provider() -> None:
     original = settings.model_provider
     object.__setattr__(settings, "model_provider", "mock")
     session_store._sessions.clear()
+    session_history_store.reset()
     yield
     object.__setattr__(settings, "model_provider", original)
     session_store._sessions.clear()
+    session_history_store.reset()

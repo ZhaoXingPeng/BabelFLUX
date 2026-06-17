@@ -5,6 +5,7 @@ import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
+import { testVideoFixture } from "./fixtures/testVideo";
 import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
 
@@ -504,11 +505,23 @@ describe("同传工作台 mock 流程", () => {
     const wrapper = mountApp();
     const store = useSessionStore();
 
-    await findButton(wrapper, "开始同传").trigger("click");
-    await flushPromises();
-
-    const video = wrapper.find('[data-testid="fixture-video"]');
-    await video.trigger("ended");
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "video-file")!);
+    await nextTick();
+    const file = new File(["fake mp4"], "demo.mp4", { type: "video/mp4" });
+    const input = wrapper.find('input[type="file"]');
+    Object.defineProperty(input.element, "files", { configurable: true, value: [file] });
+    await input.trigger("change");
+    await nextTick();
+    store.quickForm.ttsEnabled = true;
+    store.quickForm.name = "手动会话名";
+    const pause = vi.fn();
+    const media = {
+      pause,
+      currentTime: 22
+    } as unknown as HTMLMediaElement;
+    store.setMediaElement(media);
+    store.modeStates.quick = "report";
+    store.report = completedCorrectionReport;
     await nextTick();
     expect(store.modeStates.quick).toBe("report");
 
@@ -518,6 +531,14 @@ describe("同传工作台 mock 流程", () => {
     expect(store.modeStates.quick).toBe("setup");
     expect(store.report).toBeNull();
     expect(store.activeMode).toBeNull();
+    expect(store.quickForm.source).toBe("fixture-video");
+    expect(store.quickForm.ttsEnabled).toBe(false);
+    expect(store.quickInput.fileName).toBe("");
+    expect(store.mediaUrl).toBe(testVideoFixture.videoUrl);
+    expect(store.audioUrl).toBe(testVideoFixture.audioUrl);
+    expect(store.selectedDisplayMode).toBe("逐句对照");
+    expect(pause).toHaveBeenCalled();
+    expect(media.currentTime).toBe(0);
   });
 
   it("从快速同传配置走完开始、事件和结束报告", async () => {
@@ -542,7 +563,7 @@ describe("同传工作台 mock 流程", () => {
 
     expect(mockRuntime.createSession).toHaveBeenCalledWith({
       inputMode: "browser_audio",
-      sourceLanguage: "en",
+      sourceLanguage: "auto",
       targetLanguage: "ja",
       productMode: "quick",
       sessionName: "季度发布会同传",
@@ -741,6 +762,29 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(store.activeSegmentId).toBe("upload-seg-1");
+  });
+
+  it("切换到上传类声源时会自动启用源语言自动检测", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await setSource(wrapper, "video-file");
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("自动检测");
+    expect(store.quickForm.targetLanguage).toBe("中文");
+
+    await setSource(wrapper, "url");
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("自动检测");
+    expect(store.quickForm.targetLanguage).toBe("中文");
+
+    await setSource(wrapper, testVideoFixture.key);
+    await nextTick();
+
+    expect(store.quickForm.sourceLanguage).toBe("中文");
+    expect(store.quickForm.targetLanguage).toBe("英语");
   });
 
   it("sends ttsEnabled and plays backend audio segments when voice broadcast is enabled", async () => {
@@ -992,14 +1036,14 @@ describe("同传工作台 mock 流程", () => {
     expect(store.activeSegmentId).toBe("seg-current");
   });
 
-  it("does not highlight or show source-only realtime segments as translation results", async () => {
+  it("shows only the active pending source while filtering unrelated source-only realtime segments", async () => {
     mountApp();
     const store = useSessionStore();
     store.resetSessionData();
     store.sessionId = "source-only-partial-session";
     store.status = "running";
     store.modeStates.quick = "running";
-    store.playbackMs = 34_000;
+    store.playbackMs = 37_200;
     store.activeSegmentId = "seg-translated";
     store.sourceSegments = [
       {
@@ -1050,7 +1094,61 @@ describe("同传工作台 mock 流程", () => {
     });
 
     expect(store.transcriptPairs.some((pair) => pair.segmentId === "seg-final-source-only")).toBe(false);
-    expect(store.transcriptPairs.every((pair) => pair.translation.trim())).toBe(true);
+
+    store.applyServerEvent({
+      type: "transcript_segment",
+      segment: {
+        segmentId: "seg-active-pending",
+        text: "but what we're always celebrating is creativity.",
+        language: "en",
+        startMs: 36_000,
+        endMs: 39_000,
+        status: "partial"
+      }
+    });
+
+    const activePending = store.transcriptPairs.find((pair) => pair.segmentId === "seg-active-pending");
+    expect(store.activeSegmentId).toBe("seg-active-pending");
+    expect(activePending?.isActive).toBe(true);
+    expect(activePending?.source).toContain("always celebrating");
+    expect(activePending?.translation).toBe("");
+  });
+
+  it("keeps the active subtitle on a pending translation instead of jumping ahead", async () => {
+    mountApp();
+    const store = useSessionStore();
+    store.resetSessionData();
+    store.sessionId = "pending-translation-hold-session";
+    store.status = "running";
+    store.modeStates.quick = "running";
+    store.playbackMs = 12_200;
+    store.activeSegmentId = "seg-waiting";
+    store.sourceSegments = [
+      {
+        segmentId: "seg-waiting",
+        text: "The translation is still catching up.",
+        language: "en",
+        startMs: 10_000,
+        endMs: 12_000,
+        status: "partial"
+      },
+      {
+        segmentId: "seg-next",
+        text: "The speaker has already started the next sentence.",
+        language: "en",
+        startMs: 12_100,
+        endMs: 14_000,
+        status: "partial"
+      }
+    ];
+    store.translationSegments = [];
+
+    store.updateActiveSegmentFromPlayback(13_000);
+
+    expect(store.activeSegmentId).toBe("seg-waiting");
+    const activePair = store.transcriptPairs.find((pair) => pair.segmentId === "seg-waiting");
+    expect(activePair?.isActive).toBe(true);
+    expect(activePair?.translation).toBe("");
   });
 
   it("URL 声源需要合法地址后才允许启动，并随 payload 传给后端", async () => {
