@@ -13,9 +13,7 @@ mod windows_impl {
     use tauri::WebviewWindow;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, HTCAPTION, HTCLIENT, WM_NCHITTEST,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, HTCLIENT, WM_NCHITTEST};
 
     const OVERLAY_SUBCLASS_ID: usize = 0x4c53_4452; // LSDR
 
@@ -71,15 +69,10 @@ mod windows_impl {
             return None;
         }
 
-        // Keep the source select and start/close buttons clickable; the rest of the
-        // transparent overlay behaves like a title bar.
-        let launcher_controls = y <= 74 && x >= width - 270;
-        let caption_top_right_controls = y <= 86 && x >= width - 128;
-        if launcher_controls || caption_top_right_controls {
-            Some(LRESULT(HTCLIENT as isize))
-        } else {
-            Some(LRESULT(HTCAPTION as isize))
-        }
+        // Keep every pixel in the WebView client area so Vue receives button
+        // clicks reliably. Window dragging is handled in App.vue, where form
+        // controls and caption actions can be excluded with DOM-level checks.
+        Some(LRESULT(HTCLIENT as isize))
     }
 
     fn signed_low_word(value: isize) -> i32 {

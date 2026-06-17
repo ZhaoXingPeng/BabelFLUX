@@ -62,6 +62,8 @@ export interface MediaElementClock {
 export interface MediaElementAudioCaptureOptions extends AudioCaptureOptions {
   /** 媒体元素播放时钟与已发送音频时钟，用于前后端同步观测。 */
   onClock?: (clock: MediaElementClock) => void;
+  /** 是否静音本地监听输出；采集分支始终保留原始媒体信号。 */
+  monitorMuted?: boolean;
 }
 
 function audioContextCtor() {
@@ -336,6 +338,8 @@ export async function startMediaElementAudioCapture(
 
   const source = context.createMediaElementSource(element);
   const node = new AudioWorkletNode(context, "pcm-capture-processor");
+  const monitor = context.createGain();
+  monitor.gain.value = options.monitorMuted ? 0 : 1;
   const sink = context.createGain();
   sink.gain.value = 0;
 
@@ -355,7 +359,8 @@ export async function startMediaElementAudioCapture(
   element.addEventListener("play", resumeContext);
   element.addEventListener("ended", handleEnded);
 
-  source.connect(context.destination);
+  source.connect(monitor);
+  monitor.connect(context.destination);
   source.connect(node);
   node.connect(sink);
   sink.connect(context.destination);
@@ -370,6 +375,7 @@ export async function startMediaElementAudioCapture(
     try {
       node.port.onmessage = null;
       node.disconnect();
+      monitor.disconnect();
       sink.disconnect();
       source.disconnect();
     } catch {

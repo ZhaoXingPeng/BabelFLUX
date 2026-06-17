@@ -17,6 +17,33 @@ const errorMessage = ref("");
 
 const hasEntries = computed(() => entries.value.length > 0);
 
+const languageLabelByCode: Record<string, string> = {
+  auto: "自动检测",
+  zh: "中文",
+  en: "英语",
+  ja: "日语",
+  ko: "韩语",
+  fr: "法语",
+  de: "德语",
+  yue: "粤语"
+};
+
+const sourceLabelByCode: Record<string, string> = {
+  demo: "演示视频",
+  fixture_video: "演示视频",
+  fixture_english_video: "英文测试视频",
+  url: "网络视频",
+  microphone: "麦克风",
+  browser_audio: "浏览器音频",
+  screen_window: "屏幕窗口",
+  media_element_audio: "上传媒体",
+  video_file: "上传视频",
+  audio_file: "上传音频",
+  system_audio: "系统音频"
+};
+
+const genericFloatingNames = new Set(["悬浮字幕", "悬浮自采集", "客户端悬浮"]);
+
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(total / 60);
@@ -24,9 +51,37 @@ function formatDuration(ms: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function lookupLabel(value: string | null | undefined, labels: Record<string, string>): string {
+  const normalized = value?.trim();
+  if (!normalized) return "未知";
+  return labels[normalized.toLowerCase()] ?? normalized;
+}
+
+function sourceLabel(entry: SessionHistoryEntry): string {
+  return lookupLabel(entry.sourceLabel || entry.inputMode, sourceLabelByCode);
+}
+
+function languagePairLabel(entry: SessionHistoryEntry): string {
+  return `${lookupLabel(entry.sourceLanguage, languageLabelByCode)} → ${lookupLabel(entry.targetLanguage, languageLabelByCode)}`;
+}
+
+function compactStartedAt(value: string): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return value.replace(/\D/g, "").slice(0, 14) || "未知时间";
+  return `${match[1]}${match[2]}${match[3]}_${match[4]}${match[5]}${match[6] ?? "00"}`;
+}
+
+function sessionName(entry: SessionHistoryEntry): string {
+  const name = entry.sessionName?.trim();
+  if (entry.productMode === "floating" && (!name || genericFloatingNames.has(name))) {
+    return `悬浮同传_${sourceLabel(entry)}_${compactStartedAt(entry.startedAt)}`;
+  }
+  return name || "未命名同传";
+}
+
 function statusLabel(entry: SessionHistoryEntry): string {
-  if (entry.status === "correcting" || entry.correctionStatus === "pending") return "纠偏中";
   if (entry.status === "completed") return "已完成";
+  if (entry.status === "correcting" || entry.correctionStatus === "pending") return "纠偏中";
   if (entry.status === "fallback") return "实时译文";
   if (entry.status === "running") return "进行中";
   if (entry.status === "failed") return "失败";
@@ -98,8 +153,8 @@ onMounted(loadHistory);
     <section class="history-panel">
       <div class="history-panel-header">
         <div>
-          <p>Unified downloads</p>
-          <h1>所有同传会话的报告文件</h1>
+          <p>Session archive</p>
+          <h1>会话报告</h1>
         </div>
         <button class="secondary-button compact-button" type="button" @click="router.push('/web')">
           新建同传
@@ -122,12 +177,12 @@ onMounted(loadHistory);
         </div>
         <article v-for="entry in entries" :key="entry.sessionId" class="history-row">
           <div class="history-title-cell">
-            <strong>{{ entry.sessionName || "未命名同传" }}</strong>
+            <strong>{{ sessionName(entry) }}</strong>
             <small>{{ entry.startedAt }} · {{ entry.segmentCount }} 句</small>
           </div>
-          <span>{{ entry.sourceLabel || entry.inputMode }}</span>
+          <span>{{ sourceLabel(entry) }}</span>
           <span>{{ entry.domain }}</span>
-          <span>{{ entry.sourceLanguage }} → {{ entry.targetLanguage }}</span>
+          <span>{{ languagePairLabel(entry) }}</span>
           <span>{{ formatDuration(entry.durationMs) }}</span>
           <span :class="['history-status', statusTone(entry)]">{{ statusLabel(entry) }}</span>
           <div class="history-actions">

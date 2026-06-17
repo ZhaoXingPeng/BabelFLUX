@@ -53,6 +53,7 @@ class SessionRecord:
     session_name: str = "未命名同传"
     glossary: list[dict[str, Any]] = field(default_factory=list)
     tts_enabled: bool = False
+    product_mode: str = "quick"
     input_mode: str = "demo"
     source_label: str = ""
     source_url: str | None = None

@@ -752,6 +752,10 @@ a:focus-visible {
   cursor: move;
 }
 
+.floating-caption-panel.desktop-overlay.confirming {
+  max-height: min(calc(100vh - 20px), 360px);
+}
+
 .floating-caption-panel.desktop-overlay.locked {
   border-color: rgba(255, 255, 255, 0.08);
   cursor: default;
@@ -855,6 +859,75 @@ a:focus-visible {
   color: var(--stage-accent);
 }
 
+.floating-close-confirm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 2px;
+  padding-top: 8px;
+  color: var(--stage-dst);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.floating-close-confirm strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--stage-dst);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.floating-close-confirm span {
+  color: var(--stage-src);
+}
+
+.floating-close-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.floating-close-actions button {
+  min-height: 28px;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.floating-close-actions .secondary {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--stage-src);
+}
+
+.floating-close-actions .secondary:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--stage-dst);
+}
+
+.floating-close-actions .primary {
+  border: 1px solid rgba(224, 164, 88, 0.58);
+  background: rgba(224, 164, 88, 0.92);
+  color: #1b1205;
+}
+
+.floating-close-actions .primary:hover:not(:disabled) {
+  background: #e7b06a;
+}
+
+.floating-close-actions button:disabled {
+  opacity: 0.62;
+  cursor: progress;
+}
+
 .floating-source,
 .floating-translation {
   display: -webkit-box;
@@ -878,6 +951,12 @@ a:focus-visible {
   color: var(--stage-dst);
   font-weight: 850;
   -webkit-line-clamp: 3;
+}
+
+@media (max-width: 560px) {
+  .floating-close-confirm {
+    grid-template-columns: 1fr;
+  }
 }
 
 .desktop-launch-prompt {
@@ -2016,7 +2095,9 @@ a:focus-visible {
   display: grid;
   gap: 4px;
   min-width: 0;
-  text-align: left;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
 }
 
 .history-title-cell strong,
@@ -2029,8 +2110,12 @@ a:focus-visible {
 }
 
 .history-title-cell small {
+  display: block;
+  width: 100%;
   color: var(--stage-muted);
   font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .history-status {

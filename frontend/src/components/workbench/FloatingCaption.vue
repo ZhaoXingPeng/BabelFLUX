@@ -17,10 +17,14 @@ const props = defineProps<{
   locked?: boolean;
   displayMode?: "bilingual" | "translation-only" | "floating" | "compact";
   status?: SourceSyncState;
+  closeConfirmOpen?: boolean;
+  closeConfirmBusy?: boolean;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  cancelClose: [];
+  confirmClose: [];
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -44,7 +48,6 @@ const sizeClass = computed(() => {
 });
 const isCompact = computed(() => props.displayMode === "floating" || props.displayMode === "compact");
 const showSource = computed(() => !isCompact.value && props.displayMode !== "translation-only" && props.form.style !== "仅译文");
-const dragRegionEnabled = computed(() => props.desktop && !props.form.captionPinned && !props.locked);
 
 function toggleStyle() {
   props.form.style = props.form.style === "仅译文" ? "双语字幕" : "仅译文";
@@ -121,8 +124,7 @@ watch(
   <section
     ref="root"
     class="floating-caption-panel"
-    :class="[sizeClass, { 'desktop-overlay': desktop, locked, pinned: form.captionPinned, compact: isCompact }]"
-    :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
+    :class="[sizeClass, { 'desktop-overlay': desktop, locked, pinned: form.captionPinned, compact: isCompact, confirming: closeConfirmOpen }]"
     :style="{ opacity }"
   >
     <div v-if="!locked" class="floating-caption-toolbar">
@@ -171,11 +173,30 @@ watch(
         <Icon name="x" :size="15" />
       </button>
     </div>
+    <div
+      v-if="closeConfirmOpen"
+      class="floating-close-confirm"
+      role="dialog"
+      aria-live="polite"
+      @pointerdown.stop
+    >
+      <div>
+        <strong>结束悬浮同传？</strong>
+        <span>确认后会停止当前同传并整理报告。报告可在 Web 端首页的「报告历史」查看和下载。</span>
+      </div>
+      <div class="floating-close-actions">
+        <button type="button" class="secondary" :disabled="closeConfirmBusy" @click.stop="emit('cancelClose')">
+          继续同传
+        </button>
+        <button type="button" class="primary" :disabled="closeConfirmBusy" @click.stop="emit('confirmClose')">
+          {{ closeConfirmBusy ? "整理中" : "确认关闭" }}
+        </button>
+      </div>
+    </div>
     <p
       v-if="showSource"
       ref="sourceRef"
       class="floating-source"
-      :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.source"
     >
       <StreamLine :text="pair.source" :state="pair.state" />
@@ -183,7 +204,6 @@ watch(
     <p
       ref="translationRef"
       class="floating-translation"
-      :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.translation"
     >
       <StreamLine :text="pair.translation" :state="pair.state" strong />

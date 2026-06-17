@@ -16,6 +16,7 @@ const { desktopDownloadPromptOpen, desktopHandoffUrl, desktopLaunchMessage, desk
 useGsapReveal(root, { stagger: 0.09, y: 18 });
 
 function enterWeb() {
+  sessionStore.resetMode("quick");
   router.push({ path: "/web", query: { setup: "1" } });
 }
 
@@ -62,7 +63,6 @@ function continueWithWebFloating() {
           subtitle="浏览器内音视频工作台"
           :features="['音视频播放 + 双栏字幕', '分区 / 逐句对照', '自动纠偏可视化']"
           cta="进入工作台"
-          variant="primary"
           @activate="enterWeb"
         >
           <template #icon>

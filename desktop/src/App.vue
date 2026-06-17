@@ -6,7 +6,7 @@ import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
-import { createSession, getSessionReport, reportDownloadUrl, type ReportFormat } from "@frontend/api/client";
+import { createSession, getSessionReport } from "@frontend/api/client";
 import {
   acquireStream,
   startAudioCapture,
@@ -51,7 +51,10 @@ const capturing = ref(false);
 const starting = ref(false);
 const reportPending = ref(false);
 const activeSessionId = ref<string | null>(null);
+const activeSessionName = ref("");
 const reportId = ref<string | null>(null);
+const closeConfirmOpen = ref(false);
+const closeConfirmBusy = ref(false);
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "system_audio", label: "Windows 系统音频" },
@@ -60,6 +63,12 @@ const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "microphone", label: "麦克风" }
 ];
 const selectedSource = ref<CaptureSourceKind>("system_audio");
+const sourceNameByKind: Record<CaptureSourceKind, string> = {
+  system_audio: "系统音频",
+  screen_window: "屏幕窗口",
+  browser_audio: "浏览器音频",
+  microphone: "麦克风"
+};
 const launchSourceMap: Record<string, CaptureSourceKind> = {
   "system-audio": "system_audio",
   system_audio: "system_audio",
@@ -114,6 +123,9 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
   starting.value = false;
   capturing.value = false;
   captureStarted = false;
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
+  activeSessionName.value = "";
   status.value = { status: "listening", lagMs: 0, message: "等待音源" };
   if (params.source && launchSourceMap[params.source]) {
     selectedSource.value = launchSourceMap[params.source];
@@ -153,29 +165,10 @@ async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
   return false;
 }
 
-function reportFilename(format: ReportFormat) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `BabelFlux-report-${stamp}.${format}`;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.rel = "noopener";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
-async function downloadCurrentReport(format: ReportFormat = "txt") {
-  if (!activeSessionId.value) return false;
-  const response = await fetch(reportDownloadUrl(activeSessionId.value, format));
-  if (!response.ok) return false;
-  downloadBlob(await response.blob(), reportFilename(format));
-  return true;
+function floatingSessionName(kind: CaptureSourceKind) {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `悬浮同传_${sourceNameByKind[kind]}_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
 function applyEvent(event: ServerEvent) {
@@ -228,7 +221,7 @@ function applyEvent(event: ServerEvent) {
   if (event.type === "session_report") {
     reportId.value = event.reportId;
     reportPending.value = false;
-    status.value = { status: "ready", lagMs: 0, message: "基础报告已保存到 Web 报告区，TXT 正在下载" };
+    status.value = { status: "ready", lagMs: 0, message: "报告已保存到 Web 端「报告历史」，可查看和下载" };
     resolvePendingReport(true);
     return;
   }
@@ -254,9 +247,12 @@ async function startFromLaunchParams(params: LaunchParams) {
     mode.value = "handoff";
     displayMode.value = claim.displayMode;
     activeSessionId.value = claim.sessionId;
+    activeSessionName.value = "";
+    closeConfirmOpen.value = false;
+    closeConfirmBusy.value = false;
     reportId.value = null;
     socket?.close();
-    socket = connectDesktopSession(claim.wsUrl, applyEvent);
+    socket = connectDesktopSession(claim.wsUrl, applyEvent, claim.wsToken);
   } catch (error) {
     applyStandaloneLaunchParams(params);
     errorMessage.value = error instanceof Error ? error.message : "桌面接管失败";
@@ -328,13 +324,17 @@ async function startStandalone() {
   errorMessage.value = "";
   captureStarted = false;
   const kind = selectedSource.value;
+  const sessionName = floatingSessionName(kind);
   try {
+    closeConfirmOpen.value = false;
+    closeConfirmBusy.value = false;
+    activeSessionName.value = sessionName;
     const session = await createSession({
       inputMode: kind,
       sourceLanguage: toCode(settings.value.form.sourceLanguage),
       targetLanguage: toCode(settings.value.form.targetLanguage),
       productMode: "floating",
-      sessionName: "悬浮自采集",
+      sessionName,
       domain: settings.value.form.domain,
       modelProfile: settings.value.form.modelProfile,
       sourceKey: kind,
@@ -351,9 +351,11 @@ async function startStandalone() {
     socket?.close();
     socket = connectDesktopSession(
       `/api/ws/sessions/${session.sessionId}?token=${encodeURIComponent(session.wsToken)}`,
-      applyEvent
+      applyEvent,
+      session.wsToken
     );
   } catch (error) {
+    activeSessionName.value = "";
     errorMessage.value = error instanceof Error ? error.message : "无法创建悬浮同传会话";
     status.value = { status: "missing", lagMs: 0, message: errorMessage.value };
     capturing.value = false;
@@ -432,11 +434,14 @@ async function stopStandalone() {
   socket?.close();
   socket = null;
   activeSessionId.value = null;
+  activeSessionName.value = "";
   reportId.value = null;
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
-async function finishStandaloneAndDownloadReport() {
+async function finishStandaloneAndSaveReport() {
   if (mode.value !== "standalone" || !activeSessionId.value) {
     await stopStandalone();
     return;
@@ -444,10 +449,9 @@ async function finishStandaloneAndDownloadReport() {
   if (reportPending.value) return;
 
   reportPending.value = true;
-  capturing.value = false;
   captureStarted = false;
   resetNativeAudioStats();
-  status.value = { status: "syncing", lagMs: 0, message: "正在整理基础报告" };
+  status.value = { status: "syncing", lagMs: 0, message: "正在整理报告" };
 
   if (capture) {
     const current = capture;
@@ -457,14 +461,12 @@ async function finishStandaloneAndDownloadReport() {
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "stop_session" }));
-    const ready = await waitForReport();
-    if (ready) {
-      const downloaded = await downloadCurrentReport("txt");
-      if (downloaded) await wait(1200);
-    } else {
-      status.value = { status: "missing", lagMs: 0, message: "报告仍在生成，可稍后到 Web 报告区下载" };
-      await wait(1200);
-    }
+  }
+  const ready = await waitForReport();
+  if (ready) {
+    status.value = { status: "ready", lagMs: 0, message: "报告已保存" };
+  } else {
+    status.value = { status: "ready", lagMs: 0, message: "报告仍在生成" };
   }
 
   socket?.close();
@@ -472,9 +474,53 @@ async function finishStandaloneAndDownloadReport() {
   reportPending.value = false;
 }
 
-async function closeOverlayWindow() {
+function resetStandaloneToLauncher(message = "已停止，可重新选择音源") {
+  activeSessionId.value = null;
+  activeSessionName.value = "";
+  reportId.value = null;
+  closeConfirmOpen.value = false;
+  closeConfirmBusy.value = false;
+  capturing.value = false;
+  captureStarted = false;
+  reportPending.value = false;
+  status.value = { status: "listening", lagMs: 0, message };
+}
+
+function requestCaptionClose() {
+  if (closeConfirmBusy.value || reportPending.value) return;
+  closeConfirmOpen.value = true;
+}
+
+function cancelCaptionClose() {
+  if (closeConfirmBusy.value) return;
+  closeConfirmOpen.value = false;
+}
+
+async function confirmCaptionClose() {
+  if (closeConfirmBusy.value) return;
+  closeConfirmBusy.value = true;
+  try {
+    if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
+      await finishStandaloneAndSaveReport();
+      resetStandaloneToLauncher("本次同传已结束，可重新选择音源");
+    } else if (mode.value === "handoff") {
+      await stopStandalone();
+    } else {
+      await stopStandalone();
+    }
+    mode.value = "standalone";
+    errorMessage.value = "";
+  } finally {
+    closeConfirmBusy.value = false;
+    closeConfirmOpen.value = false;
+  }
+}
+
+async function exitOverlayWindow() {
   if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
-    await finishStandaloneAndDownloadReport();
+    await finishStandaloneAndSaveReport();
+  } else if (mode.value === "handoff") {
+    await stopStandalone();
   } else {
     await stopStandalone();
   }
@@ -594,7 +640,7 @@ onUnmounted(() => {
   >
     <!-- standalone 启动条：透明框自带音源下拉，选源后开始（默认系统音频）。整条可拖动。 -->
     <div
-      v-if="mode === 'standalone' && !capturing && !settings.locked"
+      v-if="mode === 'standalone' && !capturing && !reportPending && !settings.locked"
       class="overlay-launcher"
     >
       <span class="overlay-launcher-title">悬浮同传</span>
@@ -604,7 +650,7 @@ onUnmounted(() => {
       <button class="overlay-start" type="button" :disabled="starting" @click="startStandalone">
         {{ starting ? "连接中…" : "开始" }}
       </button>
-      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="closeOverlayWindow">
+      <button class="overlay-close" type="button" aria-label="关闭悬浮窗" title="关闭悬浮窗" @click="exitOverlayWindow">
         ×
       </button>
     </div>
@@ -619,8 +665,12 @@ onUnmounted(() => {
         :display-mode="displayMode"
         :locked="settings.locked"
         :status="status"
+        :close-confirm-open="closeConfirmOpen"
+        :close-confirm-busy="closeConfirmBusy"
         desktop
-        @close="closeOverlayWindow"
+        @close="requestCaptionClose"
+        @cancel-close="cancelCaptionClose"
+        @confirm-close="confirmCaptionClose"
       />
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载

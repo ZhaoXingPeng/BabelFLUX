@@ -3,8 +3,10 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 import HomeView from "./views/HomeView.vue";
+import HistoryView from "./views/HistoryView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import { useSessionStore } from "./stores/session";
+import { englishTestVideoFixture } from "./fixtures/englishTestVideo";
 import { testVideoFixture } from "./fixtures/testVideo";
 import type { SessionReport } from "./api/client";
 import type { ServerEvent } from "./types/events";
@@ -34,6 +36,8 @@ interface MockAudioSource {
 const mockRuntime = vi.hoisted(() => ({
   createSession: vi.fn(),
   getSessionReport: vi.fn(),
+  getSessionHistory: vi.fn(),
+  deleteSessionHistory: vi.fn(),
   issueSessionHandoff: vi.fn(),
   reportDownloadUrl: vi.fn(),
   createSessionSocket: vi.fn(),
@@ -52,6 +56,8 @@ const mockRuntime = vi.hoisted(() => ({
 vi.mock("./api/client", () => ({
   createSession: mockRuntime.createSession,
   getSessionReport: mockRuntime.getSessionReport,
+  getSessionHistory: mockRuntime.getSessionHistory,
+  deleteSessionHistory: mockRuntime.deleteSessionHistory,
   issueSessionHandoff: mockRuntime.issueSessionHandoff,
   reportDownloadUrl: mockRuntime.reportDownloadUrl
 }));
@@ -78,6 +84,16 @@ function mountHome(): VueWrapper {
   const pinia = createPinia();
   setActivePinia(pinia);
   return mount(HomeView, {
+    global: {
+      plugins: [pinia]
+    }
+  });
+}
+
+function mountHistory(): VueWrapper {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  return mount(HistoryView, {
     global: {
       plugins: [pinia]
     }
@@ -305,6 +321,8 @@ describe("同传工作台 mock 流程", () => {
     });
     mockRuntime.createSession.mockReset();
     mockRuntime.getSessionReport.mockReset();
+    mockRuntime.getSessionHistory.mockReset();
+    mockRuntime.deleteSessionHistory.mockReset();
     mockRuntime.issueSessionHandoff.mockReset();
     mockRuntime.reportDownloadUrl.mockReset();
     mockRuntime.createSessionSocket.mockReset();
@@ -333,6 +351,51 @@ describe("同传工作台 mock 流程", () => {
     vi.unstubAllGlobals();
   });
 
+  it("报告历史用中文展示来源和语种", async () => {
+    mockRuntime.getSessionHistory.mockResolvedValueOnce([
+      {
+        sessionId: "floating-history-1",
+        reportId: "report-floating-1",
+        sessionName: "悬浮自采集",
+        productMode: "floating",
+        inputMode: "system_audio",
+        sourceLabel: "system_audio",
+        domain: "通用",
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        status: "completed",
+        startedAt: "2026-06-17 11:08:00",
+        endedAt: "2026-06-17 11:09:00",
+        durationMs: 60_000,
+        segmentCount: 3,
+        realtimeRevisionCount: 0,
+        finalRevisionCount: 1,
+        correctionStatus: "completed",
+        updatedAt: "2026-06-17 11:09:02",
+        availableFormats: ["txt", "srt", "md", "json"]
+      }
+    ]);
+
+    const wrapper = mountHistory();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("系统音频");
+    expect(wrapper.text()).toContain("悬浮同传_系统音频_20260617_110800");
+    expect(wrapper.text()).toContain("英语 → 中文");
+    expect(wrapper.text()).not.toContain("system_audio");
+    expect(wrapper.text()).not.toContain("悬浮自采集");
+    expect(wrapper.text()).not.toContain("en → zh");
+  });
+
+  it("首页两个入口默认保持平级状态", () => {
+    const wrapper = mountHome();
+    const cards = wrapper.findAll(".entry-card");
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0].classes()).not.toContain("primary");
+    expect(cards[1].classes()).not.toContain("primary");
+  });
+
   it("默认测试视频字幕滞后音频约 1s 逐句产出，并在约 23s 触发上下文纠偏", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
@@ -340,7 +403,7 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.find('[data-testid="fixture-video"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="fixture-audio"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("同声传译设置");
-    expect(wrapper.text()).toContain("video.mp4 / voice.mp3 / source.zh.txt / target.en.txt 已就绪");
+    expect(wrapper.text()).toContain("mp4 + mp3 + zh/en 字幕 已就绪");
 
     await findButton(wrapper, "开始同传").trigger("click");
     await flushPromises();
@@ -353,7 +416,7 @@ describe("同传工作台 mock 流程", () => {
     expect((video.element as HTMLVideoElement).volume).toBe(0.5);
     expect(mockRuntime.createSession).not.toHaveBeenCalled();
     expect(store.modeStates.quick).toBe("running");
-    expect(store.sessionId).toBe("local-test-video-fixture");
+    expect(store.sessionId).toBe("local-fixture-video");
 
     // 视频尚未播放（进度 0）：因产出延迟，右侧不应有任何字幕，也不应回退到示例占位字幕
     expect(store.activeSegmentId).toBeNull();
@@ -787,6 +850,22 @@ describe("同传工作台 mock 流程", () => {
     expect(store.quickForm.targetLanguage).toBe("英语");
   });
 
+  it("keeps the Chinese fixture as default and can switch to the English test video", async () => {
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    expect(store.quickForm.source).toBe(testVideoFixture.key);
+    await setSource(wrapper, englishTestVideoFixture.key);
+    await nextTick();
+
+    expect(store.quickForm.source).toBe(englishTestVideoFixture.key);
+    expect(store.quickForm.sourceLanguage).toBe("英语");
+    expect(store.quickForm.targetLanguage).toBe("中文");
+    expect(store.mediaUrl).toBe(englishTestVideoFixture.videoUrl);
+    expect(wrapper.text()).toContain("英文测试视频");
+    expect(wrapper.text()).toContain("mp4 + mp3 + en/zh 字幕 已就绪");
+  });
+
   it("sends ttsEnabled and plays backend audio segments when voice broadcast is enabled", async () => {
     mockRuntime.createSession.mockResolvedValueOnce({
       sessionId: "tts-session",
@@ -829,7 +908,7 @@ describe("同传工作台 mock 流程", () => {
     expect(mockRuntime.audioGain.gain.value).toBe(0);
   });
 
-  it("uses browser speech synthesis for local demo TTS and mutes original media", async () => {
+  it("uses browser speech synthesis queue for local demo TTS and mutes original media", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
     store.quickForm.ttsEnabled = true;
@@ -847,10 +926,49 @@ describe("同传工作台 mock 流程", () => {
     await nextTick();
 
     expect(mockRuntime.speechSpeak).toHaveBeenCalledTimes(1);
+    const cancelCallsAfterFirstSpeak = mockRuntime.speechCancel.mock.calls.length;
     const utterance = mockRuntime.speechSpeak.mock.calls[0][0] as { text: string; lang: string; volume: number };
     expect(utterance.text).toContain("students are facing");
     expect(utterance.lang).toBe("en-US");
     expect(utterance.volume).toBe(0.5);
+
+    Object.defineProperty(video.element, "currentTime", { configurable: true, value: 7 });
+    await video.trigger("timeupdate");
+    await nextTick();
+
+    expect(mockRuntime.speechSpeak).toHaveBeenCalledTimes(2);
+    expect(mockRuntime.speechCancel.mock.calls.length).toBe(cancelCallsAfterFirstSpeak);
+  });
+
+  it("keeps uploaded media unmuted when TTS is enabled so media-element capture still receives audio", async () => {
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "upload-tts-session",
+      wsToken: "w_upload_tts",
+      status: "created"
+    });
+    const wrapper = mountApp();
+    const store = useSessionStore();
+
+    await setSource(wrapper, "video-file");
+    store.quickForm.ttsEnabled = true;
+    const file = new File(["fake mp4"], "tts-demo.mp4", { type: "video/mp4" });
+    const input = wrapper.find('input[type="file"]');
+    Object.defineProperty(input.element, "files", { configurable: true, value: [file] });
+    await input.trigger("change");
+    await nextTick();
+
+    await wrapper.find(".settings-footer .primary-button").trigger("click");
+    await flushPromises();
+
+    const video = wrapper.find('[data-testid="fixture-video"]');
+    expect(video.attributes("muted")).toBeUndefined();
+    expect(mockRuntime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputMode: "media_element_audio",
+        sourceKey: "video-file",
+        ttsEnabled: true
+      })
+    );
   });
 
   it("keeps long backend paragraphs in one paired segment card", async () => {
@@ -1210,6 +1328,27 @@ describe("同传工作台 mock 流程", () => {
     expect(assign).toHaveBeenCalledTimes(2);
   });
 
+  it("从主屏进入 Web 端会重置上一轮上传视频设置", async () => {
+    const wrapper = mountHome();
+    const store = useSessionStore();
+
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "video-file")!);
+    const file = new File(["fake mp4"], "previous.mp4", { type: "video/mp4" });
+    store.setQuickSourceFile(file);
+    store.quickForm.name = "上一轮会话";
+    await nextTick();
+
+    await findButton(wrapper, "进入工作台").trigger("click");
+    await nextTick();
+
+    expect(mockRuntime.routerPush).toHaveBeenCalledWith({ path: "/web", query: { setup: "1" } });
+    expect(store.quickForm.source).toBe(testVideoFixture.key);
+    expect(store.quickForm.name).toMatch(/^同传_/);
+    expect(store.quickInput.fileName).toBe("");
+    expect(store.mediaUrl).toBe(testVideoFixture.videoUrl);
+    expect(store.audioUrl).toBe(testVideoFixture.audioUrl);
+  });
+
   it("桌面客户端唤起成功后保留提示再自动收起", async () => {
     vi.useFakeTimers();
     vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
@@ -1253,7 +1392,7 @@ describe("同传工作台 mock 流程", () => {
     await flushPromises();
 
     expect(mockRuntime.issueSessionHandoff).toHaveBeenCalledWith(
-      "local-test-video-fixture",
+      "local-fixture-video",
       expect.objectContaining({
         source: "fixture-video",
         sourceLanguage: "zh",
