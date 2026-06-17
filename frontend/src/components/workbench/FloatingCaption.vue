@@ -6,6 +6,7 @@ import { DUR, EASE, shouldReduceMotion } from "../../composables/motion";
 import type { SourceSyncState } from "../../types/events";
 import Icon from "../icons/Icon.vue";
 import type { FloatingFormState, TranscriptPair } from "../workflow/types";
+import StreamLine from "./StreamLine.vue";
 
 gsap.registerPlugin(Draggable);
 
@@ -177,7 +178,7 @@ watch(
       :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.source"
     >
-      {{ pair.source }}
+      <StreamLine :text="pair.source" :state="pair.state" />
     </p>
     <p
       ref="translationRef"
@@ -185,7 +186,7 @@ watch(
       :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
       :title="pair.translation"
     >
-      {{ pair.translation }}
+      <StreamLine :text="pair.translation" :state="pair.state" strong />
     </p>
   </section>
 </template>

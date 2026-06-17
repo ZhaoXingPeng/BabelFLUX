@@ -1139,6 +1139,38 @@ async def test_report_generation_uses_final_correction_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_report_generation_can_emit_pending_base_report_without_waiting() -> None:
+    class SlowCorrectionClient:
+        async def generate(self, **_: object) -> object:
+            await asyncio.sleep(1)
+            return object()
+
+    record = SessionRecord(session_id="report-pending", source_language="en", target_language="zh")
+    seg = record.get_or_create_segment("s1", 1)
+    seg.start_ms = 0
+    seg.end_ms = 3000
+    seg.source_text = "Hello world."
+    seg.translation_text = "live translation"
+    seg.status = "final"
+
+    started = asyncio.get_running_loop().time()
+    report = await generate_session_report(
+        record,
+        settings=settings,
+        client=SlowCorrectionClient(),  # type: ignore[arg-type]
+        run_final_correction=False,
+        pending_final_correction=True,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 0.5
+    assert report["correctionStatus"] == "pending"
+    assert report["metrics"]["segments"] == 1
+    assert report["segments"][0]["finalTranslation"] == "live translation"
+    assert "Hello world." in render_srt(report)
+
+
+@pytest.mark.asyncio
 async def test_report_generation_falls_back_when_final_correction_times_out() -> None:
     class SlowCorrectionClient:
         async def generate(self, **_: object) -> object:

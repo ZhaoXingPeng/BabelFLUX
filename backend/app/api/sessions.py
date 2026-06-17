@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
 from app.services.report import render_md, render_srt, render_txt
+from app.services.session_history import session_history_store
 from app.services.session_store import session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -83,6 +84,10 @@ class ClaimHandoffResponse(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
+class SessionHistoryListResponse(BaseModel):
+    items: list[dict[str, Any]]
+
+
 def _normalize_source_language(code: str | None) -> str:
     return code or "auto"
 
@@ -103,6 +108,12 @@ def _register_session(req: CreateSessionRequest) -> str:
     record = session_store.get(session_id)
     if record is not None and req.source_url:
         record.source_url = req.source_url
+    if record is not None:
+        session_history_store.upsert_from_record(
+            record,
+            product_mode=req.product_mode,
+            status="created",
+        )
     return session_id
 
 
@@ -113,6 +124,27 @@ def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     return CreateSessionResponse(sessionId=session_id, wsToken=ws_token, status="created")
 
 
+@router.get("/history", response_model=SessionHistoryListResponse)
+def list_session_history() -> SessionHistoryListResponse:
+    return SessionHistoryListResponse(items=session_history_store.list())
+
+
+@router.get("/history/{session_id}")
+def get_session_history(session_id: str) -> JSONResponse:
+    entry = session_history_store.get(session_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="history not found")
+    return JSONResponse(entry)
+
+
+@router.delete("/history/{session_id}")
+def delete_session_history(session_id: str) -> JSONResponse:
+    deleted = session_history_store.delete(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="history not found")
+    return JSONResponse({"deleted": True})
+
+
 @router.get("/{session_id}/report")
 def get_session_report(session_id: str) -> JSONResponse:
     record = session_store.get(session_id)
@@ -121,7 +153,10 @@ def get_session_report(session_id: str) -> JSONResponse:
         report = _load_report_from_disk(session_id)
         if report is None:
             raise HTTPException(status_code=404, detail="report not ready")
+        if record is not None:
+            session_history_store.upsert_from_record(record, report=report)
         return JSONResponse(report)
+    session_history_store.upsert_from_record(record, report=record.report)
     return JSONResponse(record.report)
 
 
@@ -133,6 +168,8 @@ def download_session_report(session_id: str, format: str = "txt"):
         report = _load_report_from_disk(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not ready")
+    if record is not None:
+        session_history_store.upsert_from_record(record, report=report)
 
     fmt = format.lower()
     renderers = {"txt": render_txt, "srt": render_srt, "md": render_md}

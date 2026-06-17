@@ -8,6 +8,11 @@ const routes: RouteRecordRaw[] = [
     name: "workbench",
     component: () => import("../views/WorkbenchView.vue")
   },
+  {
+    path: "/history",
+    name: "history",
+    component: () => import("../views/HistoryView.vue")
+  },
   { path: "/:pathMatch(.*)*", redirect: "/" }
 ];
 

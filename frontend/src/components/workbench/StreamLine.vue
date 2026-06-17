@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 
 const props = defineProps<{
   text: string;
@@ -10,6 +10,50 @@ const props = defineProps<{
 // 只有「正在识别中」的当前句需要逐单元入场动画；已定稿/已校正的句子是稳定文本，
 // 直接渲染纯文本节点，既无意义也避免被反复重挂载。
 const isStreaming = computed(() => props.state === "partial");
+const visibleText = ref(props.text);
+let revealTimer: number | null = null;
+
+function clearRevealTimer() {
+  if (revealTimer !== null) {
+    window.clearInterval(revealTimer);
+    revealTimer = null;
+  }
+}
+
+function revealStepSize(remaining: number): number {
+  if (remaining > 48) return 8;
+  if (remaining > 24) return 5;
+  if (remaining > 12) return 3;
+  return 2;
+}
+
+function updateVisibleText(nextText: string, streaming: boolean) {
+  clearRevealTimer();
+  if (!streaming || !nextText || !nextText.startsWith(visibleText.value)) {
+    visibleText.value = nextText;
+    return;
+  }
+  const from = visibleText.value.length;
+  if (from >= nextText.length) {
+    visibleText.value = nextText;
+    return;
+  }
+  let index = from;
+  revealTimer = window.setInterval(() => {
+    const remaining = nextText.length - index;
+    index = Math.min(nextText.length, index + revealStepSize(remaining));
+    visibleText.value = nextText.slice(0, index);
+    if (index >= nextText.length) clearRevealTimer();
+  }, 45);
+}
+
+watch(
+  () => [props.text, props.state] as const,
+  ([nextText, nextState]) => updateVisibleText(nextText, nextState === "partial"),
+  { immediate: true }
+);
+
+onUnmounted(clearRevealTimer);
 
 // CJK 没有空格，旧实现 `text.split(/\s+/)` 会把整句中文当成单个 token，
 // 每次 partial 文本变化 → token 内容变 → key 变 → Vue 重挂载 → 整行重放入场动画 = 「顿/闪」。
@@ -22,7 +66,7 @@ type StreamUnit = { value: string; space: boolean };
 
 const units = computed<StreamUnit[]>(() => {
   if (!isStreaming.value) return [];
-  const matches = props.text.match(SEGMENTER);
+  const matches = visibleText.value.match(SEGMENTER);
   if (!matches) return [];
   return matches.map((value) => ({ value, space: /^\s+$/.test(value) }));
 });

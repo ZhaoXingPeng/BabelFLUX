@@ -1,8 +1,11 @@
 <script setup lang="ts">
 type IconName =
+  | "arrow-left"
   | "blinds"
   | "check"
   | "chevron-down"
+  | "clock-3"
+  | "refresh-cw"
   | "languages"
   | "monitor-up"
   | "picture-in-picture-2"
@@ -12,6 +15,7 @@ type IconName =
   | "sliders-horizontal"
   | "square"
   | "type"
+  | "trash-2"
   | "upload"
   | "volume-2"
   | "volume-x"
@@ -30,6 +34,7 @@ const props = withDefaults(
 );
 
 const ICON_PATHS: Record<IconName, string[]> = {
+  "arrow-left": ["m12 19-7-7 7-7", "M19 12H5"],
   blinds: [
     "M3 3h18",
     "M20 7H8",
@@ -41,6 +46,8 @@ const ICON_PATHS: Record<IconName, string[]> = {
   ],
   check: ["M20 6 9 17l-5-5"],
   "chevron-down": ["m6 9 6 6 6-6"],
+  "clock-3": ["M12 6v6h4", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
+  "refresh-cw": ["M3 12a9 9 0 0 1 15-6.7L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-15 6.7L3 16", "M3 21v-5h5"],
   languages: ["m5 8 6 6", "m4 14 6-6 2-3", "M2 5h12", "M7 2h1", "m22 22-5-10-5 10", "M14 18h6"],
   "monitor-up": [
     "M8 21h8",
@@ -79,6 +86,7 @@ const ICON_PATHS: Record<IconName, string[]> = {
   ],
   square: ["M5 5h14v14H5z"],
   type: ["M4 7V4h16v3", "M9 20h6", "M12 4v16"],
+  "trash-2": ["M3 6h18", "M8 6V4h8v2", "M19 6l-1 14H6L5 6", "M10 11v6", "M14 11v6"],
   upload: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"],
   "volume-2": ["M11 5 6 9H2v6h4l5 4z", "M19.07 4.93a10 10 0 0 1 0 14.14", "M15.54 8.46a5 5 0 0 1 0 7.07"],
   "volume-x": ["M11 5 6 9H2v6h4l5 4z", "m22 9-6 6", "m16 9 6 6"],

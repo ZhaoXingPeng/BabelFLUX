@@ -72,6 +72,9 @@ const reportCorrectionStatus = computed(() => {
 const reportCorrectionHint = computed(() => {
   const current = report.value;
   if (!current) return "";
+  if (reportCorrectionStatus.value === "pending") {
+    return "基础报告已可下载，全文纠偏正在后台生成，完成后会自动刷新。";
+  }
   const parts: string[] = [];
   if (current.correctionModel) parts.push(current.correctionModel);
   if (current.correctionElapsedMs) {
@@ -97,6 +100,8 @@ function closeSettings() {
     router.push("/");
   }
 }
+
+const canDownloadReport = computed(() => Boolean(report.value || sessionStore.reportId));
 
 function returnHome() {
   // 返回主屏即结束本次任务：清掉报告/字幕/进度并回到待开始态，
@@ -129,10 +134,16 @@ function toggleFloatingCaptions() {
         <p>BabelFlux Web</p>
         <strong>沉浸式同传工作台</strong>
       </div>
-      <button class="topbar-link icon-link" type="button" @click="settingsOpen = true">
-        <Icon name="sliders-horizontal" :size="16" />
-        <span>同传设置</span>
-      </button>
+      <div class="topbar-actions">
+        <button class="topbar-link icon-link" type="button" @click="router.push('/history')">
+          <Icon name="clock-3" :size="16" />
+          <span>报告历史</span>
+        </button>
+        <button class="topbar-link icon-link" type="button" @click="settingsOpen = true">
+          <Icon name="sliders-horizontal" :size="16" />
+          <span>同传设置</span>
+        </button>
+      </div>
     </header>
 
     <p v-if="errorMessage" class="workbench-error">{{ errorMessage }}</p>
@@ -201,7 +212,7 @@ function toggleFloatingCaptions() {
         <button
           class="secondary-button compact-button"
           type="button"
-          :disabled="reportLoading"
+          :disabled="!canDownloadReport"
           @click="sessionStore.downloadReport('txt')"
         >
           TXT
@@ -209,7 +220,7 @@ function toggleFloatingCaptions() {
         <button
           class="secondary-button compact-button"
           type="button"
-          :disabled="reportLoading"
+          :disabled="!canDownloadReport"
           @click="sessionStore.downloadReport('srt')"
         >
           SRT
@@ -217,7 +228,7 @@ function toggleFloatingCaptions() {
         <button
           class="secondary-button compact-button"
           type="button"
-          :disabled="reportLoading"
+          :disabled="!canDownloadReport"
           @click="sessionStore.downloadReport('md')"
         >
           MD
@@ -225,7 +236,7 @@ function toggleFloatingCaptions() {
         <button
           class="secondary-button compact-button"
           type="button"
-          :disabled="reportLoading"
+          :disabled="!canDownloadReport"
           @click="sessionStore.downloadReport('json')"
         >
           JSON

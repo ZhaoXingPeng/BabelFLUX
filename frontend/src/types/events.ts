@@ -43,5 +43,5 @@ export type ServerEvent =
   | { type: "translation_segment"; segment: SubtitleSegment }
   | AudioSegmentEvent
   | { type: "revision_event"; revision: RevisionEvent }
-  | { type: "session_report"; reportId: string }
+  | { type: "session_report"; reportId: string; correctionStatus?: string; historyStatus?: string }
   | { type: "error"; message: string };
