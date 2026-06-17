@@ -6,7 +6,7 @@ import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import FloatingCaption from "@frontend/components/workbench/FloatingCaption.vue";
 import type { SourceSyncState, ServerEvent } from "@frontend/types/events";
 import type { TranscriptPair } from "@frontend/types/workflow";
-import { createSession, getSessionReport, reportDownloadUrl, type ReportFormat } from "@frontend/api/client";
+import { createSession, getSessionReport } from "@frontend/api/client";
 import {
   acquireStream,
   startAudioCapture,
@@ -172,53 +172,10 @@ async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
   return false;
 }
 
-function filenameFromContentDisposition(header: string | null): string | null {
-  if (!header) return null;
-  const encoded = header.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded);
-    } catch {
-      return encoded;
-    }
-  }
-  const quoted = header.match(/filename="([^"]+)"/i)?.[1];
-  if (quoted) return quoted;
-  return header.match(/filename=([^;]+)/i)?.[1]?.trim() ?? null;
-}
-
-function reportFilename(format: ReportFormat) {
-  const date = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const fallbackName = activeSessionName.value || `悬浮同传_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
-  return `${fallbackName}.${format}`;
-}
-
 function floatingSessionName(kind: CaptureSourceKind) {
   const date = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   return `悬浮同传_${sourceNameByKind[kind]}_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.rel = "noopener";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
-async function downloadCurrentReport(format: ReportFormat = "txt") {
-  if (!activeSessionId.value) return false;
-  const response = await fetch(reportDownloadUrl(activeSessionId.value, format));
-  if (!response.ok) return false;
-  const filename = filenameFromContentDisposition(response.headers.get("Content-Disposition")) ?? reportFilename(format);
-  downloadBlob(await response.blob(), filename);
-  return true;
 }
 
 function applyEvent(event: ServerEvent) {
@@ -494,7 +451,7 @@ async function stopStandalone() {
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
 }
 
-async function finishStandaloneAndDownloadReport() {
+async function finishStandaloneAndSaveReport() {
   if (mode.value !== "standalone" || !activeSessionId.value) {
     await stopStandalone();
     return;
@@ -519,16 +476,11 @@ async function finishStandaloneAndDownloadReport() {
   }
   const ready = await waitForReport();
   if (ready) {
-    const downloaded = await downloadCurrentReport("txt");
-    setCloseNotice(
-      downloaded
-        ? "报告已保存到 Web 端「报告历史」，TXT 已开始下载。"
-        : "报告已保存到 Web 端「报告历史」，可稍后查看和下载。"
-    );
-    await wait(3000);
+    setCloseNotice("报告已保存到 Web 端「报告历史」，可查看和下载。");
+    await wait(1200);
   } else {
     setCloseNotice("报告仍在生成，可稍后到 Web 端「报告历史」查看和下载。");
-    await wait(3000);
+    await wait(1600);
   }
 
   socket?.close();
@@ -563,10 +515,9 @@ function cancelCaptionClose() {
 async function confirmCaptionClose() {
   if (closeConfirmBusy.value) return;
   closeConfirmBusy.value = true;
-  closeConfirmOpen.value = false;
   try {
     if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
-      await finishStandaloneAndDownloadReport();
+      await finishStandaloneAndSaveReport();
       resetStandaloneToLauncher("本次同传已结束，可重新选择音源");
     } else if (mode.value === "handoff") {
       setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
@@ -585,7 +536,7 @@ async function confirmCaptionClose() {
 
 async function exitOverlayWindow() {
   if (mode.value === "standalone" && (capturing.value || socket || activeSessionId.value)) {
-    await finishStandaloneAndDownloadReport();
+    await finishStandaloneAndSaveReport();
   } else if (mode.value === "handoff") {
     setCloseNotice("本次会话报告请到 Web 端「报告历史」查看和下载。");
     await wait(2200);
@@ -734,28 +685,17 @@ onUnmounted(() => {
         :display-mode="displayMode"
         :locked="settings.locked"
         :status="status"
+        :close-confirm-open="closeConfirmOpen"
+        :close-confirm-busy="closeConfirmBusy"
         desktop
         @close="requestCaptionClose"
+        @cancel-close="cancelCaptionClose"
+        @confirm-close="confirmCaptionClose"
       />
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载
       </p>
     </div>
-
-    <section v-if="closeConfirmOpen" class="overlay-confirm" role="dialog" aria-live="polite">
-      <div>
-        <strong>结束悬浮同传？</strong>
-        <p>确认后会停止当前同传并整理报告。报告可在 Web 端首页的「报告历史」查看和下载。</p>
-      </div>
-      <div class="overlay-confirm-actions">
-        <button class="overlay-confirm-secondary" type="button" :disabled="closeConfirmBusy" @click="cancelCaptionClose">
-          继续同传
-        </button>
-        <button class="overlay-confirm-primary" type="button" :disabled="closeConfirmBusy" @click="confirmCaptionClose">
-          {{ closeConfirmBusy ? "整理中" : "确认关闭" }}
-        </button>
-      </div>
-    </section>
 
     <p v-if="closeNotice" class="desktop-overlay-notice standalone-notice">
       {{ closeNotice }}

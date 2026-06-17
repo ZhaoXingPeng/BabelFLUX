@@ -17,10 +17,14 @@ const props = defineProps<{
   locked?: boolean;
   displayMode?: "bilingual" | "translation-only" | "floating" | "compact";
   status?: SourceSyncState;
+  closeConfirmOpen?: boolean;
+  closeConfirmBusy?: boolean;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  cancelClose: [];
+  confirmClose: [];
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -121,7 +125,7 @@ watch(
   <section
     ref="root"
     class="floating-caption-panel"
-    :class="[sizeClass, { 'desktop-overlay': desktop, locked, pinned: form.captionPinned, compact: isCompact }]"
+    :class="[sizeClass, { 'desktop-overlay': desktop, locked, pinned: form.captionPinned, compact: isCompact, confirming: closeConfirmOpen }]"
     :data-tauri-drag-region="dragRegionEnabled ? true : undefined"
     :style="{ opacity }"
   >
@@ -170,6 +174,26 @@ watch(
       <button type="button" aria-label="关闭悬浮字幕" title="关闭悬浮字幕" @click="emit('close')">
         <Icon name="x" :size="15" />
       </button>
+    </div>
+    <div
+      v-if="closeConfirmOpen"
+      class="floating-close-confirm"
+      role="dialog"
+      aria-live="polite"
+      @pointerdown.stop
+    >
+      <div>
+        <strong>结束悬浮同传？</strong>
+        <span>确认后会停止当前同传并整理报告。报告可在 Web 端首页的「报告历史」查看和下载。</span>
+      </div>
+      <div class="floating-close-actions">
+        <button type="button" class="secondary" :disabled="closeConfirmBusy" @click.stop="emit('cancelClose')">
+          继续同传
+        </button>
+        <button type="button" class="primary" :disabled="closeConfirmBusy" @click.stop="emit('confirmClose')">
+          {{ closeConfirmBusy ? "整理中" : "确认关闭" }}
+        </button>
+      </div>
     </div>
     <p
       v-if="showSource"
