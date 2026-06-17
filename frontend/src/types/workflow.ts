@@ -17,6 +17,7 @@ export interface SourceOption {
   channel: string;
   availability: "web" | "desktop";
   disabled?: boolean;
+  fixture?: boolean;
 }
 
 export interface SourceInputState {

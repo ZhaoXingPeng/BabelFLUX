@@ -18,6 +18,7 @@ import {
   type CaptureSourceKind
 } from "../composables/useAudioCapture";
 import { createTtsPlayback } from "../composables/useTtsPlayback";
+import { englishTestVideoFixture } from "../fixtures/englishTestVideo";
 import { findActiveSegment, testVideoFixture, type TestVideoRevision } from "../fixtures/testVideo";
 import type {
   RevisionEvent,
@@ -60,6 +61,7 @@ let ttsPlayback = createTtsPlayback({
   onError: (message) => handleTtsPlaybackError?.(message)
 });
 let lastFixtureSpeechKey: string | null = null;
+const queuedFixtureSpeechKeys = new Set<string>();
 let estimatedOutputLatencyMs = 1000;
 const recentOutputLatencies: number[] = [];
 const sampledOutputLatencySegmentIds = new Set<string>();
@@ -131,13 +133,19 @@ const displayModeCopy: Record<string, string> = {
   悬浮字幕: "Web 内嵌字幕层，桌面端可全局悬浮"
 };
 
+type VideoFixture = typeof testVideoFixture | typeof englishTestVideoFixture;
+const videoFixtures: VideoFixture[] = [testVideoFixture, englishTestVideoFixture];
+const fixtureByKey: Map<string, VideoFixture> = new Map(videoFixtures.map((fixture) => [fixture.key, fixture]));
+const defaultFixture = testVideoFixture;
+
 const quickSourceOptions: SourceOption[] = [
-  {
-    key: testVideoFixture.key,
-    label: testVideoFixture.label,
-    channel: "mp4 + mp3 + zh/en 字幕",
-    availability: "web"
-  },
+  ...videoFixtures.map((fixture) => ({
+    key: fixture.key,
+    label: fixture.label,
+    channel: `mp4 + mp3 + ${fixture.sourceLanguage}/${fixture.targetLanguage} 字幕`,
+    availability: "web" as const,
+    fixture: true
+  })),
   { key: "video-file", label: "视频文件", channel: "mp4 / mov / webm", availability: "web" },
   { key: "audio-file", label: "音频文件", channel: "mp3 / wav / m4a", availability: "web" },
   { key: "url", label: "URL", channel: "网页视频或直播链接", availability: "web" },
@@ -174,7 +182,7 @@ const autoDetectSourceKeys = new Set([
 ]);
 
 const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
-  [testVideoFixture.key]: "demo",
+  ...Object.fromEntries(videoFixtures.map((fixture) => [fixture.key, "demo"] as const)),
   "video-file": "media_element_audio",
   "audio-file": "media_element_audio",
   url: "url",
@@ -192,6 +200,16 @@ const languageCodeByLabel: Record<string, string> = {
   韩语: "ko",
   法语: "fr",
   德语: "de"
+};
+
+const languageLabelByCode: Record<string, string> = {
+  auto: "自动检测",
+  en: "英语",
+  zh: "中文",
+  ja: "日语",
+  ko: "韩语",
+  fr: "法语",
+  de: "德语"
 };
 
 const speechLangByCode: Record<string, string> = {
@@ -294,22 +312,26 @@ function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment): Subt
   return items.map((item, itemIndex) => (itemIndex === index ? mergeSegmentUpdate(item, segment) : item));
 }
 
-function createFixtureSourceSegments(): SubtitleSegment[] {
-  return testVideoFixture.segments.map((segment) => ({
+function currentFixture(sourceKey: string): VideoFixture {
+  return fixtureByKey.get(sourceKey) ?? defaultFixture;
+}
+
+function createFixtureSourceSegments(fixture: VideoFixture = defaultFixture): SubtitleSegment[] {
+  return fixture.segments.map((segment) => ({
     segmentId: segment.segmentId,
     text: segment.source,
-    language: testVideoFixture.sourceLanguage,
+    language: fixture.sourceLanguage,
     startMs: segment.startMs,
     endMs: segment.endMs,
     status: "final"
   }));
 }
 
-function createFixtureTranslationSegments(): SubtitleSegment[] {
-  return testVideoFixture.segments.map((segment) => ({
+function createFixtureTranslationSegments(fixture: VideoFixture = defaultFixture): SubtitleSegment[] {
+  return fixture.segments.map((segment) => ({
     segmentId: segment.segmentId,
     text: segment.target,
-    language: testVideoFixture.targetLanguage,
+    language: fixture.targetLanguage,
     startMs: segment.startMs,
     endMs: segment.endMs,
     status: "final"
@@ -340,7 +362,18 @@ function clamp01(value: number): number {
 
 function stopFixtureSpeech(resetKey = true) {
   window.speechSynthesis?.cancel();
-  if (resetKey) lastFixtureSpeechKey = null;
+  if (resetKey) {
+    lastFixtureSpeechKey = null;
+    queuedFixtureSpeechKeys.clear();
+  }
+}
+
+function fixtureSessionId(fixture: VideoFixture): string {
+  return `local-${fixture.key}`;
+}
+
+function isFixtureSession(sessionId: string | null): boolean {
+  return sessionId === "local-test-video-fixture" || videoFixtures.some((fixture) => sessionId === fixtureSessionId(fixture));
 }
 
 function pauseFixtureSpeech() {
@@ -361,8 +394,10 @@ function speakFixtureTranslation(
 ) {
   const value = text.trim();
   const speechKey = `${segmentId}:${value}`;
-  if (!value || lastFixtureSpeechKey === speechKey) return;
+  if (!value || lastFixtureSpeechKey === speechKey || queuedFixtureSpeechKeys.has(speechKey)) return;
+  if (muted || volume <= 0) return;
   lastFixtureSpeechKey = speechKey;
+  queuedFixtureSpeechKeys.add(speechKey);
 
   const SpeechSynthesisUtteranceCtor = window.SpeechSynthesisUtterance;
   if (!window.speechSynthesis || typeof SpeechSynthesisUtteranceCtor === "undefined") {
@@ -370,13 +405,11 @@ function speakFixtureTranslation(
     return;
   }
 
-  window.speechSynthesis.cancel();
-  if (muted || volume <= 0) return;
-
   const utterance = new SpeechSynthesisUtteranceCtor(value);
   utterance.lang = speechLangByCode[targetLanguage] ?? "zh-CN";
   utterance.volume = clamp01(volume);
   utterance.rate = 1;
+  utterance.onend = () => queuedFixtureSpeechKeys.delete(speechKey);
   utterance.onerror = () => onError("本地语音播报失败，请确认浏览器语音合成可用。");
   window.speechSynthesis.speak(utterance);
 }
@@ -402,7 +435,7 @@ function createDefaultQuickForm(): QuickFormState {
     sourceLanguage: "中文",
     targetLanguage: "英语",
     modelProfile: "智能默认",
-    source: testVideoFixture.key,
+    source: defaultFixture.key,
     ttsEnabled: false
   };
 }
@@ -756,10 +789,10 @@ export const useSessionStore = defineStore("session", {
       lagMs: 0,
       message: "本地测试素材已就绪"
     },
-    mediaUrl: testVideoFixture.videoUrl,
-    audioUrl: testVideoFixture.audioUrl,
+    mediaUrl: defaultFixture.videoUrl,
+    audioUrl: defaultFixture.audioUrl,
     playbackMs: 0,
-    activeSegmentId: testVideoFixture.segments[0]?.segmentId ?? null,
+    activeSegmentId: defaultFixture.segments[0]?.segmentId ?? null,
     fixtureAppliedRevisionIds: [],
     sourceSegments: createFixtureSourceSegments(),
     translationSegments: createFixtureTranslationSegments(),
@@ -885,7 +918,7 @@ export const useSessionStore = defineStore("session", {
       return displayModeCopy[state.selectedDisplayMode];
     },
     mediaKind(state): "video" | "audio" {
-      return state.quickForm.source === testVideoFixture.key || state.quickForm.source === "video-file" || state.quickForm.source === "url"
+      return fixtureByKey.has(state.quickForm.source) || state.quickForm.source === "video-file" || state.quickForm.source === "url"
         ? "video"
         : "audio";
     },
@@ -966,9 +999,10 @@ export const useSessionStore = defineStore("session", {
       revokeLocalPreview("quick");
       this.quickInput = { ...defaultSourceInputState };
       this.quickForm.source = source.key;
-      if (source.key === testVideoFixture.key) {
-        this.quickForm.sourceLanguage = "中文";
-        this.quickForm.targetLanguage = "英语";
+      const fixture = fixtureByKey.get(source.key);
+      if (fixture) {
+        this.quickForm.sourceLanguage = languageLabelByCode[fixture.sourceLanguage] ?? "自动检测";
+        this.quickForm.targetLanguage = languageLabelByCode[fixture.targetLanguage] ?? "中文";
         this.loadTestVideoFixturePreview();
       } else if (!this.activeMode) {
         if (autoDetectSourceKeys.has(source.key)) {
@@ -1250,8 +1284,7 @@ export const useSessionStore = defineStore("session", {
 
       this.modeStates[mode] = "report";
 
-      const isFixture =
-        this.sessionId === testVideoFixture.key || this.sessionId === "local-test-video-fixture";
+      const isFixture = isFixtureSession(this.sessionId);
 
       if (socket && socket.readyState === WebSocket.OPEN && !isFixture) {
         // 优雅结束：发 stop_session 但不立即关闭 socket，等后端完成会后完整纠偏后下发
@@ -1309,12 +1342,12 @@ export const useSessionStore = defineStore("session", {
     /** 本地测试视频自然播放结束 → 自动收尾出报告，贴近"音频播放完自动结束"的真实路径。 */
     handleFixtureEnded() {
       if (!["running", "paused"].includes(this.modeStates.quick)) return;
-      if (this.sessionId !== "local-test-video-fixture") {
+      if (!isFixtureSession(this.sessionId)) {
         this.endingMode = "quick";
         this.confirmEnd();
         return;
       }
-      this.revealFixtureSegmentsUpTo(testVideoFixture.durationMs);
+      this.revealFixtureSegmentsUpTo(currentFixture(this.quickForm.source).durationMs);
       this.modeStates.quick = "report";
       this.startRequestId += 1;
       this.activeMode = null;
@@ -1366,7 +1399,7 @@ export const useSessionStore = defineStore("session", {
         });
       }
 
-      if (mode === "quick" && this.quickForm.source === testVideoFixture.key) {
+      if (mode === "quick" && fixtureByKey.has(this.quickForm.source)) {
         this.startTestVideoFixtureSession(requestId);
         return true;
       }
@@ -1473,13 +1506,14 @@ export const useSessionStore = defineStore("session", {
     },
 
     loadTestVideoFixturePreview() {
-      this.mediaUrl = testVideoFixture.videoUrl;
-      this.audioUrl = testVideoFixture.audioUrl;
+      const fixture = currentFixture(this.quickForm.source);
+      this.mediaUrl = fixture.videoUrl;
+      this.audioUrl = fixture.audioUrl;
       this.playbackMs = 0;
-      this.activeSegmentId = testVideoFixture.segments[0]?.segmentId ?? null;
+      this.activeSegmentId = fixture.segments[0]?.segmentId ?? null;
       this.fixtureAppliedRevisionIds = [];
-      this.sourceSegments = createFixtureSourceSegments();
-      this.translationSegments = createFixtureTranslationSegments();
+      this.sourceSegments = createFixtureSourceSegments(fixture);
+      this.translationSegments = createFixtureTranslationSegments(fixture);
       this.revisions = [];
       this.sourceSyncState = {
         status: "listening",
@@ -1522,13 +1556,14 @@ export const useSessionStore = defineStore("session", {
     startTestVideoFixtureSession(requestId: number) {
       if (!this.isCurrentStart("quick", requestId)) return;
 
-      this.sessionId = "local-test-video-fixture";
+      const fixture = currentFixture(this.quickForm.source);
+      this.sessionId = fixtureSessionId(fixture);
       this.wsConnected = true;
       this.status = "running";
       lastFixtureSpeechKey = null;
       // 媒体就绪，但字幕不再一次性灌入：跟随左侧播放进度逐句"听到一句、出一句"。
-      this.mediaUrl = testVideoFixture.videoUrl;
-      this.audioUrl = testVideoFixture.audioUrl;
+      this.mediaUrl = fixture.videoUrl;
+      this.audioUrl = fixture.audioUrl;
       this.revealFixtureSegmentsUpTo(0);
       this.sourceSyncState = {
         status: "syncing",
@@ -1542,7 +1577,7 @@ export const useSessionStore = defineStore("session", {
       const playbackMs = Math.max(0, Math.round(currentTimeSeconds * 1000));
       const previousPlaybackMs = this.playbackMs;
       this.playbackMs = playbackMs;
-      if (this.sessionId !== "local-test-video-fixture") {
+      if (!isFixtureSession(this.sessionId)) {
         this.updateActiveSegmentFromPlayback(playbackMs, playbackMs + 500 < previousPlaybackMs);
         return;
       }
@@ -1560,7 +1595,7 @@ export const useSessionStore = defineStore("session", {
     },
 
     updateActiveSegmentFromPlayback(playbackMs?: number, allowBackward = false) {
-      if (this.sessionId === "local-test-video-fixture") return;
+      if (isFixtureSession(this.sessionId)) return;
       const currentPlaybackMs = playbackMs ?? this.playbackMs;
       const candidateId = activeSegmentForPlayback(
         this.sourceSegments,
@@ -1586,7 +1621,7 @@ export const useSessionStore = defineStore("session", {
     isMediaElementCaptureSource(): boolean {
       return (
         this.activeMode === "quick" &&
-        this.sessionId !== "local-test-video-fixture" &&
+        !isFixtureSession(this.sessionId) &&
         fileSourceKeys.has(this.quickForm.source)
       );
     },
@@ -1600,14 +1635,15 @@ export const useSessionStore = defineStore("session", {
      */
     revealFixtureSegmentsUpTo(playbackMs: number) {
       const PARTIAL_WINDOW_MS = 900;
+      const fixture = currentFixture(this.quickForm.source);
       const effectiveMs = playbackMs - SUBTITLE_LATENCY_MS;
-      const revealed = testVideoFixture.segments.filter((segment) => effectiveMs >= segment.startMs);
-      const activeSegment = findActiveSegment(testVideoFixture.segments, effectiveMs);
+      const revealed = fixture.segments.filter((segment) => effectiveMs >= segment.startMs);
+      const activeSegment = findActiveSegment(fixture.segments, effectiveMs);
       const activeId = activeSegment?.segmentId ?? revealed[revealed.length - 1]?.segmentId ?? null;
 
       const revealedIds = new Set(revealed.map((segment) => segment.segmentId));
       // 纠偏是显示层事件：按播放进度 atMs 触发，但只套用到已经产出的句子上。
-      const dueRevisions = testVideoFixture.revisions.filter(
+      const dueRevisions = fixture.revisions.filter(
         (revision) => playbackMs >= revision.atMs && revealedIds.has(revision.segmentId)
       );
       const revisionBySegment = new Map(dueRevisions.map((revision) => [revision.segmentId, revision] as const));
@@ -1618,7 +1654,7 @@ export const useSessionStore = defineStore("session", {
           segment.segmentId === activeId && effectiveMs - segment.startMs < PARTIAL_WINDOW_MS
             ? streamText(segment.source, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
             : segment.source,
-        language: testVideoFixture.sourceLanguage,
+        language: fixture.sourceLanguage,
         startMs: segment.startMs,
         endMs: segment.endMs,
         status:
@@ -1633,7 +1669,7 @@ export const useSessionStore = defineStore("session", {
           return {
             segmentId: segment.segmentId,
             text: revision.afterText,
-            language: testVideoFixture.targetLanguage,
+            language: fixture.targetLanguage,
             startMs: segment.startMs,
             endMs: segment.endMs,
             status: "revised" as SegmentStatus,
@@ -1648,7 +1684,7 @@ export const useSessionStore = defineStore("session", {
           text: isFreshActive
             ? streamText(segment.target, (effectiveMs - segment.startMs) / PARTIAL_WINDOW_MS)
             : segment.target,
-          language: testVideoFixture.targetLanguage,
+          language: fixture.targetLanguage,
           startMs: segment.startMs,
           endMs: segment.endMs,
           status: (isFreshActive ? "partial" : "final") as SegmentStatus
@@ -1665,7 +1701,7 @@ export const useSessionStore = defineStore("session", {
         speakFixtureTranslation(
           revision?.revisionId ?? activeSegment.segmentId,
           revision?.afterText ?? activeSegment.target,
-          testVideoFixture.targetLanguage,
+          fixture.targetLanguage,
           this.ttsVolume,
           this.ttsMuted,
           (message) => {
@@ -1911,6 +1947,7 @@ export const useSessionStore = defineStore("session", {
           captureStarted = true;
           audioCapture = await startMediaElementAudioCapture(mediaElement, {
             frameMs: 40,
+            monitorMuted: this.quickForm.ttsEnabled,
             onChunk: (chunk) => {
               sendAudioChunk(chunk);
             },

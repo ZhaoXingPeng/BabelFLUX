@@ -60,6 +60,12 @@ const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "microphone", label: "麦克风" }
 ];
 const selectedSource = ref<CaptureSourceKind>("system_audio");
+const sourceNameByKind: Record<CaptureSourceKind, string> = {
+  system_audio: "系统音频",
+  screen_window: "屏幕窗口",
+  browser_audio: "浏览器音频",
+  microphone: "麦克风"
+};
 const launchSourceMap: Record<string, CaptureSourceKind> = {
   "system-audio": "system_audio",
   system_audio: "system_audio",
@@ -156,6 +162,12 @@ async function waitForReport(timeoutMs = 45_000): Promise<boolean> {
 function reportFilename(format: ReportFormat) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return `BabelFlux-report-${stamp}.${format}`;
+}
+
+function floatingSessionName(kind: CaptureSourceKind) {
+  const date = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `悬浮同传_${sourceNameByKind[kind]}_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -334,7 +346,7 @@ async function startStandalone() {
       sourceLanguage: toCode(settings.value.form.sourceLanguage),
       targetLanguage: toCode(settings.value.form.targetLanguage),
       productMode: "floating",
-      sessionName: "悬浮自采集",
+      sessionName: floatingSessionName(kind),
       domain: settings.value.form.domain,
       modelProfile: settings.value.form.modelProfile,
       sourceKey: kind,
@@ -461,10 +473,17 @@ async function finishStandaloneAndDownloadReport() {
     const ready = await waitForReport();
     if (ready) {
       const downloaded = await downloadCurrentReport("txt");
-      if (downloaded) await wait(1200);
+      status.value = {
+        status: "ready",
+        lagMs: 0,
+        message: downloaded
+          ? "报告已保存到 Web 报告历史，并已开始下载 TXT"
+          : "报告已保存到 Web 报告历史，可在报告历史下载"
+      };
+      await wait(1800);
     } else {
       status.value = { status: "missing", lagMs: 0, message: "报告仍在生成，可稍后到 Web 报告区下载" };
-      await wait(1200);
+      await wait(1800);
     }
   }
 

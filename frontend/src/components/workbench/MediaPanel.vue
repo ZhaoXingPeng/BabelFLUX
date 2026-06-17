@@ -63,6 +63,7 @@ const hasNativeMediaControls = computed(
     (props.mediaKind === "audio" && Boolean(props.audioUrl))
 );
 const showTtsControls = computed(() => props.form.ttsEnabled && !hasNativeMediaControls.value);
+const shouldMuteNativeMedia = computed(() => props.form.ttsEnabled && !isMediaElementCaptureSource());
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -209,7 +210,7 @@ watch(
           controls
           playsinline
           autoplay
-          :muted="form.ttsEnabled"
+          :muted="shouldMuteNativeMedia"
           preload="metadata"
           data-testid="fixture-video"
           @loadedmetadata="handleLoadedMetadata"
@@ -232,7 +233,7 @@ watch(
           :src="audioUrl"
           controls
           autoplay
-          :muted="form.ttsEnabled"
+          :muted="shouldMuteNativeMedia"
           preload="metadata"
           data-testid="fixture-audio"
           @loadedmetadata="handleLoadedMetadata"
