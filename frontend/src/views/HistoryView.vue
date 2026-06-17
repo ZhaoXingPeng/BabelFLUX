@@ -42,6 +42,8 @@ const sourceLabelByCode: Record<string, string> = {
   system_audio: "系统音频"
 };
 
+const genericFloatingNames = new Set(["悬浮字幕", "悬浮自采集", "客户端悬浮"]);
+
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(total / 60);
@@ -61,6 +63,20 @@ function sourceLabel(entry: SessionHistoryEntry): string {
 
 function languagePairLabel(entry: SessionHistoryEntry): string {
   return `${lookupLabel(entry.sourceLanguage, languageLabelByCode)} → ${lookupLabel(entry.targetLanguage, languageLabelByCode)}`;
+}
+
+function compactStartedAt(value: string): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return value.replace(/\D/g, "").slice(0, 14) || "未知时间";
+  return `${match[1]}${match[2]}${match[3]}_${match[4]}${match[5]}${match[6] ?? "00"}`;
+}
+
+function sessionName(entry: SessionHistoryEntry): string {
+  const name = entry.sessionName?.trim();
+  if (entry.productMode === "floating" && (!name || genericFloatingNames.has(name))) {
+    return `悬浮同传_${sourceLabel(entry)}_${compactStartedAt(entry.startedAt)}`;
+  }
+  return name || "未命名同传";
 }
 
 function statusLabel(entry: SessionHistoryEntry): string {
@@ -161,7 +177,7 @@ onMounted(loadHistory);
         </div>
         <article v-for="entry in entries" :key="entry.sessionId" class="history-row">
           <div class="history-title-cell">
-            <strong>{{ entry.sessionName || "未命名同传" }}</strong>
+            <strong>{{ sessionName(entry) }}</strong>
             <small>{{ entry.startedAt }} · {{ entry.segmentCount }} 句</small>
           </div>
           <span>{{ sourceLabel(entry) }}</span>

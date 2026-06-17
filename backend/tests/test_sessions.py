@@ -174,6 +174,47 @@ async def test_session_history_tracks_created_and_report_ready_sessions() -> Non
 
 
 @pytest.mark.asyncio
+async def test_floating_history_replaces_generic_session_name() -> None:
+    async with asgi_http_client() as client:
+        created = (
+            await client.post(
+                "/api/sessions",
+                json={
+                    "inputMode": "system_audio",
+                    "sourceKey": "system_audio",
+                    "sessionName": "悬浮自采集",
+                    "productMode": "floating",
+                },
+            )
+        ).json()
+        initial = await client.get(f"/api/sessions/history/{created['sessionId']}")
+
+    assert initial.status_code == 200
+    entry = initial.json()
+    assert entry["sessionName"].startswith("悬浮同传_系统音频_")
+    assert entry["sessionName"] != "悬浮自采集"
+
+    async with ASGIWebSocketSession(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
+        await websocket.receive_json()
+        await websocket.send_json({"type": "stop_session"})
+        while True:
+            event = await websocket.receive_json()
+            if event["type"] == "session_report":
+                break
+
+    async with asgi_http_client() as client:
+        report_response = await client.get(f"/api/sessions/{created['sessionId']}/report")
+        history_response = await client.get(f"/api/sessions/history/{created['sessionId']}")
+
+    assert report_response.status_code == 200
+    report = report_response.json()
+    assert report["sessionName"].startswith("悬浮同传_系统音频_")
+    assert history_response.json()["sessionName"].startswith("悬浮同传_系统音频_")
+
+
+@pytest.mark.asyncio
 async def test_session_history_refreshes_pending_status_from_persisted_report() -> None:
     async with asgi_http_client() as client:
         created = (

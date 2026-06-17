@@ -356,7 +356,7 @@ describe("同传工作台 mock 流程", () => {
       {
         sessionId: "floating-history-1",
         reportId: "report-floating-1",
-        sessionName: "悬浮同传_系统音频_20260617_1108",
+        sessionName: "悬浮自采集",
         productMode: "floating",
         inputMode: "system_audio",
         sourceLabel: "system_audio",
@@ -380,9 +380,20 @@ describe("同传工作台 mock 流程", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("系统音频");
+    expect(wrapper.text()).toContain("悬浮同传_系统音频_20260617_110800");
     expect(wrapper.text()).toContain("英语 → 中文");
     expect(wrapper.text()).not.toContain("system_audio");
+    expect(wrapper.text()).not.toContain("悬浮自采集");
     expect(wrapper.text()).not.toContain("en → zh");
+  });
+
+  it("首页两个入口默认保持平级状态", () => {
+    const wrapper = mountHome();
+    const cards = wrapper.findAll(".entry-card");
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0].classes()).not.toContain("primary");
+    expect(cards[1].classes()).not.toContain("primary");
   });
 
   it("默认测试视频字幕滞后音频约 1s 逐句产出，并在约 23s 触发上下文纠偏", async () => {

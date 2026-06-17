@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
 from app.services.report import render_md, render_srt, render_txt
-from app.services.session_history import session_history_store
+from app.services.session_history import normalize_session_name, session_history_store
 from app.services.session_store import session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -94,14 +94,21 @@ def _normalize_source_language(code: str | None) -> str:
 
 def _register_session(req: CreateSessionRequest) -> str:
     session_id = str(uuid4())
+    session_name = normalize_session_name(
+        req.session_name,
+        product_mode=req.product_mode,
+        input_mode=req.input_mode,
+        source_label=req.source_file_name or req.source_url or req.source_key,
+    )
     session_store.create(
         session_id,
         source_language=_normalize_source_language(req.source_language),
         target_language=req.target_language or "zh",
         domain=req.domain,
-        session_name=req.session_name,
+        session_name=session_name,
         glossary=[t.model_dump(by_alias=True) for t in req.glossary],
         tts_enabled=req.tts_enabled,
+        product_mode=req.product_mode,
         input_mode=req.input_mode,
         source_label=req.source_file_name or req.source_url or req.source_key,
     )
@@ -172,13 +179,13 @@ def download_session_report(session_id: str, format: str = "txt"):
     if report is None:
         raise HTTPException(status_code=404, detail="report not ready")
     if record is not None:
-        session_history_store.upsert_from_record(record, report=report)
+        history_entry = session_history_store.upsert_from_record(record, report=report)
     else:
-        session_history_store.upsert_from_report(report)
+        history_entry = session_history_store.upsert_from_report(report)
 
     fmt = format.lower()
     renderers = {"txt": render_txt, "srt": render_srt, "md": render_md}
-    base = report.get("sessionName") or session_id
+    base = (history_entry or {}).get("sessionName") or report.get("sessionName") or session_id
     if fmt == "json":
         import json
 

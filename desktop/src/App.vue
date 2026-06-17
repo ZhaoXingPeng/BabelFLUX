@@ -652,7 +652,7 @@ onUnmounted(() => {
   >
     <!-- standalone 启动条：透明框自带音源下拉，选源后开始（默认系统音频）。整条可拖动。 -->
     <div
-      v-if="mode === 'standalone' && !capturing && !settings.locked"
+      v-if="mode === 'standalone' && !capturing && !reportPending && !closeNotice && !settings.locked"
       class="overlay-launcher"
     >
       <span class="overlay-launcher-title">悬浮同传</span>
@@ -683,10 +683,11 @@ onUnmounted(() => {
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载
       </p>
-      <p v-if="closeNotice" class="desktop-overlay-notice">
-        {{ closeNotice }}
-      </p>
     </div>
+
+    <p v-if="closeNotice" class="desktop-overlay-notice standalone-notice">
+      {{ closeNotice }}
+    </p>
 
     <p v-if="errorMessage" class="desktop-overlay-error">{{ errorMessage }}</p>
   </main>
