@@ -108,6 +108,7 @@ def _register_session(req: CreateSessionRequest) -> str:
         session_name=session_name,
         glossary=[t.model_dump(by_alias=True) for t in req.glossary],
         tts_enabled=req.tts_enabled,
+        model_profile=req.model_profile,
         product_mode=req.product_mode,
         input_mode=req.input_mode,
         source_label=req.source_file_name or req.source_url or req.source_key,

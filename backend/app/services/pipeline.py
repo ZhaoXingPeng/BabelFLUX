@@ -39,6 +39,7 @@ from app.services.display_text import (
     word_count,
 )
 from app.services.media import iter_pcm_frames
+from app.services.model_selection import ModelSelection, select_model_profile
 from app.services.providers.dashscope import (
     DashScopeClient,
     DashScopeConfig,
@@ -155,10 +156,11 @@ class InterpretationPipeline:
         self.emit = emit
         self._config = DashScopeConfig.from_settings(settings)
         self._llm_client = DashScopeClient(self._config)
+        self._model_selection: ModelSelection = select_model_profile(record.model_profile, settings)
         self._ws_connect = websocket_connect
         self._reviser = RealtimeReviser(
             client=self._llm_client,
-            model=settings.realtime_revision_model,
+            model=self._model_selection.realtime_revision_model,
             source_language=record.source_language,
             target_language=record.target_language,
             domain=record.domain,
@@ -207,10 +209,10 @@ class InterpretationPipeline:
         await self._emit_sync("syncing", 0, "正在连接同传引擎…")
         session = LiveTranslateSession(
             self._config,
-            model=self.settings.live_translate_model,
+            model=self._model_selection.live_translate_model,
             source_language=self._initial_provider_source_language(),
             target_language=self.record.target_language,
-            asr_model=self.settings.live_translate_asr_model,
+            asr_model=self._model_selection.live_translate_asr_model,
             tts_enabled=self.record.tts_enabled,
             voice=self.settings.tts_voice,
             glossary=self._glossary_phrases or None,
@@ -253,10 +255,10 @@ class InterpretationPipeline:
         await self._emit_sync("syncing", 0, "正在连接同传引擎…")
         session = LiveTranslateSession(
             self._config,
-            model=self.settings.live_translate_model,
+            model=self._model_selection.live_translate_model,
             source_language=self._initial_provider_source_language(),
             target_language=self.record.target_language,
-            asr_model=self.settings.live_translate_asr_model,
+            asr_model=self._model_selection.live_translate_asr_model,
             tts_enabled=self.record.tts_enabled,
             voice=self.settings.tts_voice,
             glossary=self._glossary_phrases or None,
@@ -365,10 +367,10 @@ class InterpretationPipeline:
         source_hint = self._initial_provider_source_language()
         session = LiveTranslateSession(
             self._config,
-            model=self.settings.live_translate_model,
+            model=self._model_selection.live_translate_model,
             source_language=source_hint,
             target_language=self.record.target_language,
-            asr_model=self.settings.live_translate_asr_model,
+            asr_model=self._model_selection.live_translate_asr_model,
             tts_enabled=False,
             voice=self.settings.tts_voice,
             glossary=self._glossary_phrases or None,

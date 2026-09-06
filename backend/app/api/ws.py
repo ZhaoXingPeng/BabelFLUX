@@ -372,6 +372,8 @@ def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:
         record.input_mode = payload["inputMode"]
     if payload.get("sourceUrl"):
         record.source_url = payload["sourceUrl"]
+    if payload.get("modelProfile"):
+        record.model_profile = payload["modelProfile"]
 
 
 def _build_llm_client() -> DashScopeClient | None:

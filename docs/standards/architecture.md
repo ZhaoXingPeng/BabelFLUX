@@ -19,6 +19,7 @@ Provider adapters (services/providers/*)
 - `app/api` 只负责协议适配、认证和生命周期编排，不承载字幕算法。
 - `models/events.py` 是前后端事件契约的单一事实源；新增字段必须同时更新前端类型和契约测试。
 - `services/pipeline.py` 负责时序和状态机；纯文本转换、媒体解析、报告生成应放在独立模块。
+- `services/model_selection.py` 负责把产品层模型档位解析为已验证 provider 支持的具体模型；禁止在 UI 或 API 层直接拼接 provider 参数。
 - provider 只能通过稳定的领域接口向上提供能力，不能把第三方 SDK 类型泄漏到 API 或前端。
 - `frontend` 和 `desktop` 共享协议类型语义，但不能直接依赖后端实现细节。
 
@@ -59,4 +60,3 @@ Provider adapters (services/providers/*)
 ## 变更记录模板
 
 架构调整至少记录：背景、约束、方案、替代方案、风险、迁移步骤、验证结果和回滚方式。小型调整可直接写入 PR；跨模块调整应新增 `docs/adr/NNNN-<topic>.md`。
-
