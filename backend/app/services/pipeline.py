@@ -24,6 +24,20 @@ from uuid import uuid4
 
 from app.core.config import Settings
 from app.models.events import AudioSegment, RevisionEvent, SourceSyncState, SubtitleSegment
+from app.services.display_text import (
+    contains_aligned_parts,
+    contains_cjk,
+    contains_latin_word,
+    is_cjk_language,
+    is_latin_dominant,
+    join_separator,
+    latin_word_count,
+    normalize_alignment_text,
+    normalize_display_text,
+    should_use_cjk_display,
+    split_by_regex,
+    word_count,
+)
 from app.services.media import iter_pcm_frames
 from app.services.providers.dashscope import (
     DashScopeClient,
@@ -1337,53 +1351,28 @@ class InterpretationPipeline:
         return self._split_cjk_display(raw, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
 
     def _contains_cjk(self, text: str) -> bool:
-        return bool(re.search(r"[\u4e00-\u9fff]", text))
+        return contains_cjk(text)
 
     def _contains_latin_word(self, text: str) -> bool:
-        return bool(re.search(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text))
+        return contains_latin_word(text)
 
     def _latin_word_count(self, text: str) -> int:
-        return len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text))
+        return latin_word_count(text)
 
     def _is_cjk_language(self, language: str | None) -> bool:
-        if not language or language == "auto":
-            return False
-        normalized = language.lower()
-        return normalized.startswith(CJK_LANGUAGE_PREFIXES)
+        return is_cjk_language(language)
 
     def _is_latin_dominant(self, text: str) -> bool:
-        latin_words = self._latin_word_count(text)
-        cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-        return latin_words >= 3 and latin_words * 2 >= cjk_chars
+        return is_latin_dominant(text)
 
     def _should_use_cjk_display(self, text: str, language: str | None = None) -> bool:
-        if not self._contains_cjk(text):
-            return False
-        if self._is_cjk_language(language):
-            return True
-        if not language or language == "auto":
-            return not self._is_latin_dominant(text)
-        return False
+        return should_use_cjk_display(text, language)
 
     def _normalize_display_text(self, text: str, language: str | None = None) -> str:
-        value = re.sub(r"\s+", " ", text.strip())
-        if not value:
-            return ""
-        if not self._should_use_cjk_display(value, language):
-            return value
-
-        value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
-        value = re.sub(r"\s+([，。！？；：、,.!?;:])", r"\1", value)
-        value = re.sub(r"(?<=[，。！？；：、])\s+(?=[\u4e00-\u9fff])", "", value)
-        value = re.sub(r"([（《“\"'(\[])\s+", r"\1", value)
-        value = re.sub(r"\s+([））》”\"')\]])", r"\1", value)
-        return value.strip()
+        return normalize_display_text(text, language)
 
     def _join_separator(self, parts: list[str]) -> str:
-        text = " ".join(parts)
-        if self._contains_cjk(text) and not self._contains_latin_word(text):
-            return ""
-        return " "
+        return join_separator(parts)
 
     def _split_cjk_display(self, text: str, max_chars: int) -> list[str]:
         value = self._normalize_display_text(text, "zh")
@@ -1547,10 +1536,10 @@ class InterpretationPipeline:
         return groups
 
     def _split_by_regex(self, text: str, pattern: str) -> list[str]:
-        return [part.strip() for part in re.split(pattern, text) if part.strip()]
+        return split_by_regex(text, pattern)
 
     def _word_count(self, text: str) -> int:
-        return len([word for word in text.split() if word])
+        return word_count(text)
 
     def _align_parts(
         self,
@@ -1589,13 +1578,10 @@ class InterpretationPipeline:
         return groups
 
     def _contains_aligned_parts(self, candidate: str, parts: list[str]) -> bool:
-        if len(parts) <= 1:
-            return False
-        normalized_candidate = self._normalize_alignment_text(candidate)
-        return all(self._normalize_alignment_text(part) in normalized_candidate for part in parts)
+        return contains_aligned_parts(candidate, parts)
 
     def _normalize_alignment_text(self, text: str) -> str:
-        return re.sub(r"[\s.,;:!?，。；：！？\"'’“”()（）\[\]{}]", "", text).lower()
+        return normalize_alignment_text(text)
 
     def _estimate_display_bounds(
         self,
