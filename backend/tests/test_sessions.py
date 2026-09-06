@@ -61,6 +61,38 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"inputMode": "url"},
+        {"inputMode": "url", "sourceUrl": "ftp://example.com/video.mp4"},
+    ],
+)
+async def test_create_url_session_rejects_missing_or_unsupported_url(
+    payload: dict[str, str],
+) -> None:
+    async with asgi_http_client() as client:
+        response = await client.post("/api/sessions", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_url", ["http://example.com/video.mp4", "https://example.com/live"])
+async def test_create_url_session_accepts_http_and_https(source_url: str) -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/sessions",
+            json={"inputMode": "url", "sourceUrl": source_url},
+        )
+
+    assert response.status_code == 200
+    record = session_store.get(response.json()["sessionId"])
+    assert record is not None
+    assert record.source_url == source_url
+
+
+@pytest.mark.asyncio
 async def test_create_session_preserves_auto_source_language() -> None:
     async with asgi_http_client() as client:
         response = await client.post(
