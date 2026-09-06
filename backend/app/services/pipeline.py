@@ -24,6 +24,13 @@ from uuid import uuid4
 
 from app.core.config import Settings
 from app.models.events import AudioSegment, RevisionEvent, SourceSyncState, SubtitleSegment
+from app.services.display_layout import (
+    FINAL_DISPLAY_MAX_SEGMENT_MS,
+    align_parts,
+    display_split_count,
+    estimate_display_bounds,
+    fit_parts_to_count,
+)
 from app.services.display_text import (
     contains_aligned_parts,
     contains_cjk,
@@ -75,9 +82,6 @@ SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT = 28
 TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT = 28
 TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT = 18
 CJK_LANGUAGE_PREFIXES = ("zh", "ja", "ko", "yue")
-PARTIAL_DISPLAY_SEGMENT_MS = 500
-FINAL_DISPLAY_SEGMENT_MS = 2000
-FINAL_DISPLAY_MAX_SEGMENT_MS = 9500
 SOURCE_CONTINUATION_MAX_GAP_MS = 700
 SOURCE_CONTINUATION_MAX_DURATION_MS = 12_000
 SOURCE_CONTINUATION_MAX_CHARS = 180
@@ -1049,7 +1053,7 @@ class InterpretationPipeline:
         if not source_parts and not translation_parts:
             return
 
-        current_count = self._display_split_count(source_parts, translation_parts)
+        current_count = display_split_count(source_parts, translation_parts)
         if source_final or translation_final:
             display_span_ms = root.end_ms - root.start_ms
             current_count = max(
@@ -1076,14 +1080,14 @@ class InterpretationPipeline:
         )
         source_separator = self._join_separator(source_parts)
         translation_separator = self._join_separator(translation_parts)
-        source_display = self._align_parts(
+        source_display = align_parts(
             source_parts,
             count,
             separator=source_separator,
             previous=[child.source_text for child in existing_children],
             preserve_existing=preserve_split,
         )
-        translation_display = self._align_parts(
+        translation_display = align_parts(
             translation_parts,
             count,
             separator=translation_separator,
@@ -1102,8 +1106,10 @@ class InterpretationPipeline:
             not translation_parts or translation_final
         )
         children = self._display_children(root, count)
-        bounds = self._estimate_display_bounds(
-            root,
+        bounds = estimate_display_bounds(
+            root.start_ms,
+            root.end_ms,
+            self.elapsed_ms,
             source_display,
             translation_display,
             final=display_final,
@@ -1405,21 +1411,7 @@ class InterpretationPipeline:
         return parts
 
     def _display_split_count(self, source_parts: list[str], translation_parts: list[str]) -> int:
-        source_count = len(source_parts)
-        translation_count = len(translation_parts)
-        if not source_count:
-            return max(translation_count, 1)
-        if not translation_count:
-            return max(source_count, 1)
-        source_chars = len(" ".join(source_parts))
-        translation_chars = len("".join(translation_parts))
-        readable_count = max(
-            1,
-            (source_chars + 139) // 140,
-            (translation_chars + 79) // 80,
-        )
-        bounded_by_parts = max(min(source_count, translation_count), readable_count)
-        return min(max(source_count, translation_count), bounded_by_parts)
+        return display_split_count(source_parts, translation_parts)
 
     def _fit_source_parts_to_count(
         self,
@@ -1517,16 +1509,7 @@ class InterpretationPipeline:
         return [value[:midpoint], value[midpoint:]]
 
     def _fit_parts_to_count(self, parts: list[str], count: int, *, separator: str) -> list[str]:
-        if count <= 0 or len(parts) <= count:
-            return parts
-        groups: list[str] = []
-        for index in range(count):
-            start = (len(parts) * index) // count
-            end = (len(parts) * (index + 1)) // count
-            if end <= start:
-                end = start + 1
-            groups.append(separator.join(parts[start:end]).strip())
-        return groups
+        return fit_parts_to_count(parts, count, separator=separator)
 
     def _split_by_regex(self, text: str, pattern: str) -> list[str]:
         return split_by_regex(text, pattern)
@@ -1543,32 +1526,13 @@ class InterpretationPipeline:
         previous: list[str] | None = None,
         preserve_existing: bool = False,
     ) -> list[str]:
-        if count <= 0:
-            return []
-        if not parts:
-            if preserve_existing and previous:
-                return [*previous[:count], *([""] * max(0, count - len(previous)))]
-            return [""] * count
-        if len(parts) == count:
-            return parts
-        if len(parts) < count:
-            if preserve_existing and previous:
-                padded_previous = [*previous[:count], *([""] * max(0, count - len(previous)))]
-                if len(parts) == 1 and parts[0]:
-                    existing_non_empty = [part for part in padded_previous if part]
-                    if self._contains_aligned_parts(parts[0], existing_non_empty):
-                        return padded_previous[:count]
-                return [*parts, *padded_previous[len(parts) : count]]
-            return [*parts, *([""] * (count - len(parts)))]
-
-        groups: list[str] = []
-        for index in range(count):
-            start = (len(parts) * index) // count
-            end = (len(parts) * (index + 1)) // count
-            if end <= start:
-                end = start + 1
-            groups.append(separator.join(parts[start:end]).strip())
-        return groups
+        return align_parts(
+            parts,
+            count,
+            separator=separator,
+            previous=previous,
+            preserve_existing=preserve_existing,
+        )
 
     def _contains_aligned_parts(self, candidate: str, parts: list[str]) -> bool:
         return contains_aligned_parts(candidate, parts)
@@ -1584,39 +1548,14 @@ class InterpretationPipeline:
         *,
         final: bool,
     ) -> list[tuple[int, int]]:
-        count = max(len(source_parts), len(translation_parts), 1)
-        estimated_segment_ms = FINAL_DISPLAY_SEGMENT_MS if final else PARTIAL_DISPLAY_SEGMENT_MS
-        end_ms = max(root.end_ms, self.elapsed_ms, root.start_ms + count * estimated_segment_ms)
-        span = max(1, end_ms - root.start_ms)
-        if final and span > FINAL_DISPLAY_MAX_SEGMENT_MS:
-            bounds: list[tuple[int, int]] = []
-            for index in range(count):
-                start = root.start_ms + int(span * index / count)
-                end = (
-                    end_ms
-                    if index == count - 1
-                    else root.start_ms + int(span * (index + 1) / count)
-                )
-                bounds.append((start, max(end, start)))
-            return bounds
-        weights = [
-            max(self._word_count(source_parts[index]), len(translation_parts[index]) // 3, 1)
-            for index in range(count)
-        ]
-        total = sum(weights) or count
-        bounds: list[tuple[int, int]] = []
-        cursor = root.start_ms
-        consumed = 0
-        for index, weight in enumerate(weights):
-            consumed += weight
-            next_cursor = (
-                end_ms
-                if index == count - 1
-                else root.start_ms + int(span * consumed / total)
-            )
-            bounds.append((cursor, max(next_cursor, cursor)))
-            cursor = next_cursor
-        return bounds
+        return estimate_display_bounds(
+            root.start_ms,
+            root.end_ms,
+            self.elapsed_ms,
+            source_parts,
+            translation_parts,
+            final=final,
+        )
 
     async def _on_segment_complete(self, seg: SegmentRecord) -> None:
         if not seg.translation_text:
