@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Any, Literal
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
@@ -48,6 +48,18 @@ class CreateSessionRequest(BaseModel):
     )
     tts_enabled: bool = Field(default=False, alias="ttsEnabled")
     glossary: list[GlossaryTermPayload] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_source_url(self) -> "CreateSessionRequest":
+        if self.input_mode != "url":
+            return self
+
+        value = (self.source_url or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("inputMode=url 时必须提供有效的 http 或 https sourceUrl")
+        self.source_url = value
+        return self
 
 
 class CreateSessionResponse(BaseModel):
