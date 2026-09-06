@@ -22,6 +22,7 @@ def test_auto_strategy_prefers_live_translate_with_glossary() -> None:
 
     session = plan.live_translate_session["event"]["session"]
     assert plan.primary_provider == LIVE_TRANSLATE_PROVIDER
+    assert plan.realtime_revision_policy.window_segments == 4
     assert GUMMY_PROVIDER in plan.fallback_providers
     assert session["modalities"] == ["text"]
     assert session["input_audio_transcription"] == {

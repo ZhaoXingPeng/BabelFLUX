@@ -14,8 +14,8 @@ QWEN_TTS_PROVIDER = "qwen_tts"
 # 可选 qwen3-max / deepseek-v4-pro（均已验证），默认与 .env 的 qwen-plus 一致。
 FINAL_CORRECTION_MODEL = "qwen-plus"
 STRATEGY_PLAN_DISCLAIMER = (
-    "注意：本策略计划为设计蓝图，gummy/fun_asr provider 当前未接入真实管线，"
-    "window 参数与实际实现有差异"
+    "注意：本策略计划为设计蓝图，gummy/fun_asr provider 当前未接入真实管线；"
+    "实时纠偏窗口与当前 RealtimeReviser 保持一致，会后纠偏仍由报告阶段执行。"
 )
 
 
@@ -33,7 +33,8 @@ def build_strategy_plan(request: StrategyPlanRequest) -> StrategyPlanResponse:
     primary_provider = _select_primary_provider(request.provider_preference)
     fallback_providers = _fallback_providers(primary_provider)
     realtime_revision_policy = RealtimeRevisionPolicy(
-        windowSegments=5,
+        # Keep the public strategy plan aligned with RealtimeReviser.window.
+        windowSegments=4,
         windowMs=40_000,
         triggers=[
             "partial_to_final_changed",
