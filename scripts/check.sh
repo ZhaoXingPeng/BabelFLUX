@@ -8,11 +8,19 @@ if [ -f "$repo_root/backend/.venv/bin/activate" ]; then
   source "$repo_root/backend/.venv/bin/activate"
 fi
 
-if command -v pytest >/dev/null 2>&1; then
-  (cd "$repo_root/backend" && pytest)
-else
-  echo "pytest not found; skip backend tests"
+python_cmd="${PYTHON:-python3}"
+if ! command -v "$python_cmd" >/dev/null 2>&1; then
+  echo "${python_cmd} not found; install Python 3.11+ before running checks" >&2
+  exit 1
 fi
+
+(cd "$repo_root/backend" && "$python_cmd" -m pytest -q)
+
+if ! command -v ruff >/dev/null 2>&1; then
+  echo "ruff not found; install backend development dependencies before running checks" >&2
+  exit 1
+fi
+(cd "$repo_root/backend" && ruff check .)
 
 if [ -f "$repo_root/frontend/package.json" ]; then
   if ! command -v npm >/dev/null 2>&1; then

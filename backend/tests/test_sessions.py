@@ -243,7 +243,12 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
         "summary": "基础报告",
         "qualityNotes": "纠偏中",
         "glossaryHits": [],
-        "metrics": {"segments": 1, "realtimeRevisions": 0, "finalRevisions": 0, "durationText": "00:01"},
+        "metrics": {
+            "segments": 1,
+            "realtimeRevisions": 0,
+            "finalRevisions": 0,
+            "durationText": "00:01",
+        },
         "segments": [],
         "finalRevisions": [],
         "realtimeRevisions": [],
@@ -258,8 +263,20 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
         **pending_report,
         "summary": "完整总结",
         "qualityNotes": "已完成",
-        "metrics": {"segments": 1, "realtimeRevisions": 0, "finalRevisions": 1, "durationText": "00:01"},
-        "finalRevisions": [{"segmentId": "s1", "beforeText": "a", "afterText": "b", "reason": "会后纠偏"}],
+        "metrics": {
+            "segments": 1,
+            "realtimeRevisions": 0,
+            "finalRevisions": 1,
+            "durationText": "00:01",
+        },
+        "finalRevisions": [
+            {
+                "segmentId": "s1",
+                "beforeText": "a",
+                "afterText": "b",
+                "reason": "会后纠偏",
+            }
+        ],
         "correctionModel": "qwen-plus",
         "correctionStatus": "completed",
         "correctionElapsedMs": 1200,
@@ -271,7 +288,9 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
     async with asgi_http_client() as client:
         history = await client.get("/api/sessions/history")
 
-    entry = next(item for item in history.json()["items"] if item["sessionId"] == created["sessionId"])
+    entry = next(
+        item for item in history.json()["items"] if item["sessionId"] == created["sessionId"]
+    )
     assert entry["status"] == "completed"
     assert entry["correctionStatus"] == "completed"
     assert entry["finalRevisionCount"] == 1

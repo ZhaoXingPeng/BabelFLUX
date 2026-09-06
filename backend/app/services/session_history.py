@@ -183,7 +183,11 @@ class SessionHistoryStore:
 
             report_data = report or record.report or {}
             metrics = report_data.get("metrics") or {}
-            correction_status = report_data.get("correctionStatus") or existing.get("correctionStatus") or "skipped"
+            correction_status = (
+                report_data.get("correctionStatus")
+                or existing.get("correctionStatus")
+                or "skipped"
+            )
             mode = product_mode or existing.get("productMode") or "quick"
             source_label = record.source_label or record.source_url or record.input_mode
             session_name = normalize_session_name(
@@ -208,10 +212,16 @@ class SessionHistoryStore:
                     targetLanguage=record.target_language,
                     status=status or _history_status(correction_status, record.status),
                     startedAt=existing.get("startedAt") or _fmt_ts(record.created_at),
-                    endedAt=_fmt_ts(record.ended_at) if record.ended_at else existing.get("endedAt"),
+                    endedAt=(
+                        _fmt_ts(record.ended_at)
+                        if record.ended_at
+                        else existing.get("endedAt")
+                    ),
                     durationMs=int(report_data.get("durationMs") or record.duration_ms or 0),
                     segmentCount=int(metrics.get("segments") or len(record.reportable_segments())),
-                    realtimeRevisionCount=int(metrics.get("realtimeRevisions") or len(record.revisions)),
+                    realtimeRevisionCount=int(
+                        metrics.get("realtimeRevisions") or len(record.revisions)
+                    ),
                     finalRevisionCount=int(metrics.get("finalRevisions") or 0),
                     correctionStatus=correction_status,
                     updatedAt=_fmt_ts(),
@@ -237,7 +247,11 @@ class SessionHistoryStore:
                 entries.append(existing)
 
             metrics = report.get("metrics") or {}
-            correction_status = report.get("correctionStatus") or existing.get("correctionStatus") or "skipped"
+            correction_status = (
+                report.get("correctionStatus")
+                or existing.get("correctionStatus")
+                or "skipped"
+            )
             mode = _report_product_mode(report, existing)
             input_mode = _report_input_mode(report, existing)
             source_label = report.get("sourceLabel") or existing.get("sourceLabel") or input_mode
@@ -258,17 +272,35 @@ class SessionHistoryStore:
                     "inputMode": input_mode,
                     "sourceLabel": source_label,
                     "domain": report.get("domain") or existing.get("domain") or "通用",
-                    "sourceLanguage": report.get("sourceLanguage") or existing.get("sourceLanguage") or "auto",
-                    "targetLanguage": report.get("targetLanguage") or existing.get("targetLanguage") or "zh",
+                    "sourceLanguage": (
+                        report.get("sourceLanguage")
+                        or existing.get("sourceLanguage")
+                        or "auto"
+                    ),
+                    "targetLanguage": (
+                        report.get("targetLanguage")
+                        or existing.get("targetLanguage")
+                        or "zh"
+                    ),
                     "status": _history_status(correction_status, existing.get("status") or ""),
-                    "startedAt": existing.get("startedAt") or report.get("generatedAt") or _fmt_ts(),
+                    "startedAt": (
+                        existing.get("startedAt")
+                        or report.get("generatedAt")
+                        or _fmt_ts()
+                    ),
                     "endedAt": existing.get("endedAt") or report.get("generatedAt"),
                     "durationMs": int(report.get("durationMs") or existing.get("durationMs") or 0),
-                    "segmentCount": int(metrics.get("segments") or len(report.get("segments") or [])),
+                    "segmentCount": int(
+                        metrics.get("segments") or len(report.get("segments") or [])
+                    ),
                     "realtimeRevisionCount": int(metrics.get("realtimeRevisions") or 0),
                     "finalRevisionCount": int(metrics.get("finalRevisions") or 0),
                     "correctionStatus": correction_status,
-                    "updatedAt": existing.get("updatedAt") or report.get("generatedAt") or _fmt_ts(),
+                    "updatedAt": (
+                        existing.get("updatedAt")
+                        or report.get("generatedAt")
+                        or _fmt_ts()
+                    ),
                     "availableFormats": ["txt", "srt", "md", "json"],
                 }
             )

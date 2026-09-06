@@ -32,6 +32,11 @@ from app.services.providers.dashscope import (
 )
 from app.services.revision import RealtimeReviser
 from app.services.session_store import RevisionRecord, SegmentRecord, SessionRecord
+from app.services.source_text import (
+    collapse_adjacent_source_duplicates,
+    normalize_source_word,
+    normalize_source_words,
+)
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -894,43 +899,13 @@ class InterpretationPipeline:
         return collapsed if collapsed else text
 
     def _collapse_adjacent_source_duplicates(self, words: list[str]) -> list[str]:
-        result: list[str] = []
-        for word in words:
-            if result and (
-                self._normalize_source_word(result[-1]) == self._normalize_source_word(word)
-            ):
-                continue
-            result.append(word)
-        return result
+        return collapse_adjacent_source_duplicates(words)
 
     def _normalize_source_words(self, words: list[str]) -> list[str]:
-        return [self._normalize_source_word(word) for word in words]
+        return normalize_source_words(words)
 
     def _normalize_source_word(self, word: str) -> str:
-        value = word.lower().strip(" \t\r\n.,;:!?\"'()[]{}")
-        value = value.strip("\u2018\u2019")
-        for suffix in ("n't", "n\u2019t"):
-            if value.endswith(suffix) and len(value) > len(suffix):
-                return f"{value[: -len(suffix)]}n"
-        for suffix in (
-            "'re",
-            "\u2019re",
-            "'ve",
-            "\u2019ve",
-            "'ll",
-            "\u2019ll",
-            "'d",
-            "\u2019d",
-            "'s",
-            "\u2019s",
-            "'m",
-            "\u2019m",
-            "'t",
-            "\u2019t",
-        ):
-            if value.endswith(suffix) and len(value) > len(suffix):
-                return value[: -len(suffix)]
-        return value
+        return normalize_source_word(word)
 
     async def _on_source(self, text: str, item_id: str | None, *, final: bool) -> None:
         if not text:
@@ -1274,7 +1249,11 @@ class InterpretationPipeline:
         value = self._normalize_display_text(text, "zh")
         if not value:
             return []
-        return [part.strip() for part in re.findall(r"[^。！？!?]+[。！？!?]?", value) if part.strip()]
+        return [
+            part.strip()
+            for part in re.findall(r"[^。！？!?]+[。！？!?]?", value)
+            if part.strip()
+        ]
 
     def _split_source_clauses(self, text: str) -> list[str]:
         first, second = self._find_natural_source_split(text)
@@ -1289,7 +1268,11 @@ class InterpretationPipeline:
             for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
         ]
 
-    def _target_source_part_count(self, text: str, max_words = SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT) -> int:
+    def _target_source_part_count(
+        self,
+        text: str,
+        max_words=SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT,
+    ) -> int:
         return max(
             1,
             (self._word_count(text) + max_words - 1)
