@@ -121,6 +121,26 @@ async function setDisplayMode(mode: string) {
 function toggleFloatingCaptions() {
   setDisplayMode(selectedDisplayMode.value === "悬浮字幕" ? "逐句对照" : "悬浮字幕");
 }
+
+function updateFloatingStyle(style: string) {
+  sessionStore.floatingForm.style = style;
+}
+
+function updateFloatingPinned(pinned: boolean) {
+  sessionStore.floatingForm.captionPinned = pinned;
+}
+
+function updateFloatingOpacity(opacity: string) {
+  sessionStore.floatingForm.opacity = opacity;
+}
+
+function updateFloatingSize(size: string) {
+  sessionStore.floatingForm.size = size;
+}
+
+function updateFloatingOffsetY(offsetY: number) {
+  sessionStore.floatingForm.captionOffsetY = offsetY;
+}
 </script>
 
 <template>
@@ -171,6 +191,11 @@ function toggleFloatingCaptions() {
         @reset="sessionStore.resetMode('quick')"
         @open-desktop="sessionStore.openDesktopFloating"
         @toggle-floating-captions="toggleFloatingCaptions"
+        @update-floating-style="updateFloatingStyle"
+        @update-floating-pinned="updateFloatingPinned"
+        @update-floating-opacity="updateFloatingOpacity"
+        @update-floating-size="updateFloatingSize"
+        @update-floating-offset-y="updateFloatingOffsetY"
         @media-ready="sessionStore.setMediaElement"
         @sync-playback="sessionStore.syncPlayback"
         @playback-pause="sessionStore.handleMediaPlaybackPaused"

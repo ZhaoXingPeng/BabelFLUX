@@ -79,4 +79,33 @@ describe("FloatingCaption close confirmation", () => {
     expect(wrapper.find(".floating-source").attributes("data-tauri-drag-region")).toBeUndefined();
     expect(wrapper.find(".floating-translation").attributes("data-tauri-drag-region")).toBeUndefined();
   });
+
+  it("通过更新事件交给父层管理工具栏状态，不直接修改传入表单", async () => {
+    const form = baseForm();
+    const initialStyle = form.style;
+    const initialPinned = form.captionPinned;
+    const initialOpacity = form.opacity;
+    const initialSize = form.size;
+    const wrapper = mount(FloatingCaption, {
+      props: {
+        pair,
+        form,
+        desktop: true
+      }
+    });
+
+    await wrapper.findAll(".floating-caption-toolbar > button")[0].trigger("click");
+    await wrapper.findAll(".floating-caption-toolbar > button")[1].trigger("click");
+    await wrapper.find('input[type="range"]').setValue("75");
+    await wrapper.findAll(".floating-size-switch button")[2].trigger("click");
+
+    expect(form.style).toBe(initialStyle);
+    expect(form.captionPinned).toBe(initialPinned);
+    expect(form.opacity).toBe(initialOpacity);
+    expect(form.size).toBe(initialSize);
+    expect(wrapper.emitted("updateStyle")).toHaveLength(1);
+    expect(wrapper.emitted("updatePinned")).toHaveLength(1);
+    expect(wrapper.emitted("updateOpacity")).toHaveLength(1);
+    expect(wrapper.emitted("updateSize")).toHaveLength(1);
+  });
 });

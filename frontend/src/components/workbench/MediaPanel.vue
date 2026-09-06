@@ -37,6 +37,11 @@ const emit = defineEmits<{
   reset: [];
   openDesktop: [];
   toggleFloatingCaptions: [];
+  updateFloatingStyle: [style: string];
+  updateFloatingPinned: [pinned: boolean];
+  updateFloatingOpacity: [opacity: string];
+  updateFloatingSize: [size: string];
+  updateFloatingOffsetY: [offsetY: number];
   mediaReady: [element: HTMLMediaElement | null];
   syncPlayback: [currentTimeSeconds: number];
   playbackPause: [];
@@ -255,6 +260,11 @@ watch(
         :pair="currentPair"
         :form="floatingForm"
         @close="emit('toggleFloatingCaptions')"
+        @update-style="emit('updateFloatingStyle', $event)"
+        @update-pinned="emit('updateFloatingPinned', $event)"
+        @update-opacity="emit('updateFloatingOpacity', $event)"
+        @update-size="emit('updateFloatingSize', $event)"
+        @update-offset-y="emit('updateFloatingOffsetY', $event)"
       />
     </div>
 
