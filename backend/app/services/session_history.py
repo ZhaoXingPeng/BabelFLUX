@@ -323,7 +323,18 @@ class SessionHistoryStore:
 
     def _write_unlocked(self, entries: list[dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path = self.path.with_name(f".{self.path.name}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(entries, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp_path.replace(self.path)
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _history_status(correction_status: str, record_status: str) -> str:
