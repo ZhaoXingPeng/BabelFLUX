@@ -14,7 +14,13 @@ import pytest
 from app.core.config import settings
 from app.services.pipeline import InterpretationPipeline
 from app.services.providers.dashscope import DashScopeConfig, LiveTranslateSession
-from app.services.report import generate_session_report, render_md, render_srt, render_txt
+from app.services.report import (
+    _loads_json,
+    generate_session_report,
+    render_md,
+    render_srt,
+    render_txt,
+)
 from app.services.revision import RealtimeReviser
 from app.services.session_store import SegmentRecord, SessionRecord
 
@@ -46,6 +52,19 @@ class FakeWS:
 
 def _dummy_config() -> DashScopeConfig:
     return DashScopeConfig(api_key="sk-test", workspace_id="ws-test")
+
+
+@pytest.mark.parametrize("content", ['[{"id":"s1"}]', '"{not-an-object}"', "null", "42"])
+def test_loads_json_rejects_non_object_root(content: str) -> None:
+    assert _loads_json(content) is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"summary":"ok"}', '模型回复：\n{"summary":"ok"}', '```json\n{"summary":"ok"}\n```'],
+)
+def test_loads_json_accepts_object_with_optional_wrapper(content: str) -> None:
+    assert _loads_json(content) == {"summary": "ok"}
 
 
 @pytest.mark.asyncio
