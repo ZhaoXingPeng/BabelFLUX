@@ -14,6 +14,10 @@ from threading import Lock
 from typing import Any
 
 
+class SessionAlreadyExistsError(ValueError):
+    """Raised when an explicit session creation would overwrite existing state."""
+
+
 @dataclass
 class SegmentRecord:
     segment_id: str
@@ -108,6 +112,8 @@ class SessionStore:
             self._sessions.pop(session_id, None)
 
     def _create_unlocked(self, session_id: str, **kwargs: Any) -> SessionRecord:
+        if session_id in self._sessions:
+            raise SessionAlreadyExistsError(f"session already exists: {session_id}")
         record = SessionRecord(session_id=session_id, **kwargs)
         self._sessions[session_id] = record
         return record
