@@ -24,27 +24,8 @@ from uuid import uuid4
 
 from app.core.config import Settings
 from app.models.events import AudioSegment, RevisionEvent, SourceSyncState, SubtitleSegment
-from app.services.display_layout import (
-    FINAL_DISPLAY_MAX_SEGMENT_MS,
-    align_parts,
-    display_split_count,
-    estimate_display_bounds,
-    fit_parts_to_count,
-)
-from app.services.display_text import (
-    contains_aligned_parts,
-    contains_cjk,
-    contains_latin_word,
-    is_cjk_language,
-    is_latin_dominant,
-    join_separator,
-    latin_word_count,
-    normalize_alignment_text,
-    normalize_display_text,
-    should_use_cjk_display,
-    split_by_regex,
-    word_count,
-)
+from app.services.display_planner import build_display_plan
+from app.services.display_text import contains_cjk, normalize_display_text
 from app.services.language_policy import (
     infer_source_language,
     initial_provider_source_language,
@@ -1014,106 +995,33 @@ class InterpretationPipeline:
         # punctuation counts often differ. Split both sides into readable display chunks first,
         # then align them by proportional order so the report and subtitle cards do not collapse
         # long turns into one dense paragraph.
-        source_text = self._normalize_display_text(
-            self._raw_source_by_root.get(root.segment_id, ""),
-            self.record.source_language,
-        )
-        raw_translation_text = self._raw_translation_by_root.get(root.segment_id, "").strip()
-        translation_text = self._normalize_display_text(
-            raw_translation_text,
-            self.record.target_language,
-        )
+        existing_children = self._children_by_root.get(root.segment_id, [root])
         source_final = root.segment_id in self._source_final_roots
         translation_final = root.segment_id in self._translation_final_roots
-        has_bilingual_text = bool(source_text and translation_text)
-        source_split = (
-            self._split_source_display(source_text, self.record.source_language)
-            if has_bilingual_text
-            else ([source_text] if source_text else [])
-        )
-        translation_split = (
-            self._split_target_display(translation_text, self.record.target_language)
-            if has_bilingual_text
-            else ([translation_text] if translation_text else [])
-        )
         previous_count = self._display_count_by_root.get(root.segment_id, 1)
-        keep_existing_split = previous_count > 1 and (
-            len(source_split) > 1 or len(translation_split) > 1
+        plan = build_display_plan(
+            source_text=self._raw_source_by_root.get(root.segment_id, ""),
+            translation_text=self._raw_translation_by_root.get(root.segment_id, ""),
+            source_language=self.record.source_language,
+            target_language=self.record.target_language,
+            source_final=source_final,
+            translation_final=translation_final,
+            previous_count=previous_count,
+            previous_source_parts=[child.source_text for child in existing_children],
+            previous_translation_parts=[child.translation_text for child in existing_children],
+            root_start_ms=root.start_ms,
+            root_end_ms=root.end_ms,
+            elapsed_ms=self.elapsed_ms,
         )
-        if keep_existing_split:
-            source_parts = source_split if source_split else ([source_text] if source_text else [])
-            translation_parts = (
-                translation_split
-                if translation_split
-                else ([translation_text] if translation_text else [])
-            )
-        else:
-            source_parts = source_split
-            translation_parts = translation_split
-        if not source_parts and not translation_parts:
+        if plan is None:
             return
-
-        current_count = display_split_count(source_parts, translation_parts)
-        if source_final or translation_final:
-            display_span_ms = root.end_ms - root.start_ms
-            current_count = max(
-                current_count,
-                (display_span_ms + FINAL_DISPLAY_MAX_SEGMENT_MS - 1)
-                // FINAL_DISPLAY_MAX_SEGMENT_MS,
-            )
-        source_parts = self._fit_source_parts_to_count(
-            source_parts,
-            current_count,
-            self.record.source_language,
-        )
-        translation_parts = self._fit_target_parts_to_count(
-            translation_parts,
-            current_count,
-            self.record.target_language,
-        )
-        count = max(previous_count, current_count)
+        count = plan.count
         self._display_count_by_root[root.segment_id] = count
-
-        existing_children = self._children_by_root.get(root.segment_id, [root])
-        preserve_split = previous_count > 1 and (
-            len(source_parts) < previous_count or len(translation_parts) < previous_count
-        )
-        source_separator = self._join_separator(source_parts)
-        translation_separator = self._join_separator(translation_parts)
-        source_display = align_parts(
-            source_parts,
-            count,
-            separator=source_separator,
-            previous=[child.source_text for child in existing_children],
-            preserve_existing=preserve_split,
-        )
-        translation_display = align_parts(
-            translation_parts,
-            count,
-            separator=translation_separator,
-            previous=[child.translation_text for child in existing_children],
-            preserve_existing=preserve_split,
-        )
-        source_display = [
-            self._normalize_display_text(part, self.record.source_language)
-            for part in source_display
-        ]
-        translation_display = [
-            self._normalize_display_text(part, self.record.target_language)
-            for part in translation_display
-        ]
-        display_final = (not source_parts or source_final) and (
-            not translation_parts or translation_final
-        )
+        source_display = plan.source_parts
+        translation_display = plan.translation_parts
+        display_final = plan.display_final
         children = self._display_children(root, count)
-        bounds = estimate_display_bounds(
-            root.start_ms,
-            root.end_ms,
-            self.elapsed_ms,
-            source_display,
-            translation_display,
-            final=display_final,
-        )
+        bounds = plan.bounds
 
         for index, child in enumerate(children):
             source_text = source_display[index]
@@ -1226,336 +1134,11 @@ class InterpretationPipeline:
             children.append(child)
         return children[:count]
 
-    def _split_source_display(self, text: str, language: str | None = None) -> list[str]:
-        value = self._normalize_display_text(text, language)
-        if not value:
-            return []
-        if self._should_use_cjk_display(value, language):
-            return self._split_cjk_display(value, SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT)
-
-        parts = self._split_latin_display(value, SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
-        return parts
-
-    def _split_latin_display(self, text: str, max_words: int) -> list[str]:
-        value = re.sub(r"\s+", " ", text.strip())
-        if not value:
-            return []
-
-        parts = self._split_source_sentences(value)
-        target_count = self._target_source_part_count(value, max_words)
-        while len(parts) < target_count or any(
-            self._word_count(part) > max_words for part in parts
-        ):
-            split_index, replacement = self._best_source_split(parts)
-            if split_index < 0:
-                break
-            parts = [*parts[:split_index], *replacement, *parts[split_index + 1 :]]
-        return parts
-
-    def _split_source_sentences(self, text: str) -> list[str]:
-        value = re.sub(r"\s+", " ", text.strip())
-        if not value:
-            return []
-        return self._split_by_regex(value, r"(?<=[.!?])\s+")
-
-    def _split_target_sentences(self, text: str) -> list[str]:
-        value = self._normalize_display_text(text, "zh")
-        if not value:
-            return []
-        return [
-            part.strip()
-            for part in re.findall(r"[^。！？!?]+[。！？!?]?", value)
-            if part.strip()
-        ]
-
-    def _split_source_clauses(self, text: str) -> list[str]:
-        first, second = self._find_natural_source_split(text)
-        return [first, second] if first and second else [text]
-
-    def _split_long_source_part(self, text: str) -> list[str]:
-        words = text.split()
-        if len(words) <= SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
-            return [text]
-        return [
-            " ".join(words[index : index + SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT])
-            for index in range(0, len(words), SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT)
-        ]
-
-    def _target_source_part_count(
-        self,
-        text: str,
-        max_words=SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT,
-    ) -> int:
-        return max(
-            1,
-            (self._word_count(text) + max_words - 1)
-            // max_words,
-        )
-
-    def _best_source_split(self, parts: list[str]) -> tuple[int, list[str]]:
-        best_index = -1
-        best_replacement: list[str] = []
-        best_score: tuple[int, int] | None = None
-        for index, part in enumerate(parts):
-            replacement = self._split_source_clauses(part)
-            if len(replacement) < 2:
-                replacement = self._split_long_source_part(part)
-            if len(replacement) < 2:
-                continue
-            score = (self._word_count(part), len(part))
-            if best_score is None or score > best_score:
-                best_index = index
-                best_replacement = replacement
-                best_score = score
-        return best_index, best_replacement
-
-    def _find_natural_source_split(self, text: str) -> tuple[str, str]:
-        words = text.split()
-        if len(words) <= SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT:
-            return "", ""
-
-        candidates: list[tuple[int, int, int, int]] = []
-        pattern = re.compile(
-            r"[,;:]\s+|\s+(?:and|as|because|but|for|if|or|so|then|to|which|while|who|whose|with)\s+",
-            re.IGNORECASE,
-        )
-        for match in pattern.finditer(text):
-            split_at = match.end() if match.group(0).strip() in {",", ";", ":"} else match.start()
-            first = text[:split_at].strip()
-            second = text[split_at:].strip()
-            first_words = self._word_count(first)
-            second_words = self._word_count(second)
-            if first_words < 3 or second_words < 3:
-                continue
-            boundary = match.group(0).strip().lower()
-            priority = 2 if boundary in {",", ";", ":"} else 1
-            overflow_penalty = max(0, first_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT) + max(
-                0, second_words - SOURCE_MAX_WORDS_PER_DISPLAY_SEGMENT
-            )
-            balance_penalty = abs(first_words - second_words)
-            candidates.append((priority, -overflow_penalty, -balance_penalty, split_at))
-
-        if not candidates:
-            return "", ""
-        split_at = max(candidates)[3]
-        return text[:split_at].strip(), text[split_at:].strip()
-
-    def _split_target_display(self, text: str, language: str | None = None) -> list[str]:
-        raw = self._normalize_display_text(text, language)
-        if not raw:
-            return []
-        if not self._should_use_cjk_display(raw, language):
-            return self._split_latin_display(raw, TARGET_MAX_WORDS_PER_DISPLAY_SEGMENT)
-
-        return self._split_cjk_display(raw, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
-
     def _contains_cjk(self, text: str) -> bool:
         return contains_cjk(text)
 
-    def _contains_latin_word(self, text: str) -> bool:
-        return contains_latin_word(text)
-
-    def _latin_word_count(self, text: str) -> int:
-        return latin_word_count(text)
-
-    def _is_cjk_language(self, language: str | None) -> bool:
-        return is_cjk_language(language)
-
-    def _is_latin_dominant(self, text: str) -> bool:
-        return is_latin_dominant(text)
-
-    def _should_use_cjk_display(self, text: str, language: str | None = None) -> bool:
-        return should_use_cjk_display(text, language)
-
     def _normalize_display_text(self, text: str, language: str | None = None) -> str:
         return normalize_display_text(text, language)
-
-    def _join_separator(self, parts: list[str]) -> str:
-        return join_separator(parts)
-
-    def _split_cjk_display(self, text: str, max_chars: int) -> list[str]:
-        value = self._normalize_display_text(text, "zh")
-        if not value:
-            return []
-
-        groups: list[str] = []
-        for sentence in self._split_target_sentences(value):
-            groups.extend(self._split_long_cjk_part(sentence, max_chars))
-        return [part for part in groups if part]
-
-    def _split_long_target_part(self, text: str) -> list[str]:
-        return self._split_long_cjk_part(text, TARGET_MAX_CHARS_PER_DISPLAY_SEGMENT)
-
-    def _split_long_cjk_part(self, text: str, max_chars: int) -> list[str]:
-        if len(text) <= max_chars:
-            return [text]
-
-        parts: list[str] = []
-        current = ""
-        clauses = re.findall(r"[^，,；;：:]+[，,；;：:]?", text)
-        for clause in clauses:
-            candidate = f"{current}{clause}" if current else clause
-            if current and len(candidate) > max_chars:
-                parts.append(current)
-                current = clause
-            else:
-                current = candidate
-        if current:
-            parts.append(current)
-        if len(parts) == 1 and len(parts[0]) > max_chars:
-            value = parts[0]
-            return [
-                value[index : index + max_chars]
-                for index in range(0, len(value), max_chars)
-            ]
-        return parts
-
-    def _display_split_count(self, source_parts: list[str], translation_parts: list[str]) -> int:
-        return display_split_count(source_parts, translation_parts)
-
-    def _fit_source_parts_to_count(
-        self,
-        parts: list[str],
-        count: int,
-        language: str | None = None,
-    ) -> list[str]:
-        parts = self._expand_source_parts_to_count(parts, count, language)
-        separator = self._join_separator(parts)
-        return self._fit_parts_to_count(parts, count, separator=separator)
-
-    def _fit_target_parts_to_count(
-        self,
-        parts: list[str],
-        count: int,
-        language: str | None = None,
-    ) -> list[str]:
-        parts = self._expand_target_parts_to_count(parts, count, language)
-        separator = self._join_separator(parts)
-        return self._fit_parts_to_count(parts, count, separator=separator)
-
-    def _expand_source_parts_to_count(
-        self,
-        parts: list[str],
-        count: int,
-        language: str | None = None,
-    ) -> list[str]:
-        expanded = [part for part in parts if part]
-        while len(expanded) < count:
-            index = max(
-                range(len(expanded)),
-                key=lambda item: self._word_count(expanded[item]),
-                default=-1,
-            )
-            if index < 0:
-                break
-            if self._should_use_cjk_display(expanded[index], language):
-                replacement = self._split_long_cjk_part(
-                    expanded[index],
-                    SOURCE_MAX_CJK_CHARS_PER_DISPLAY_SEGMENT,
-                )
-                if len(replacement) < 2:
-                    replacement = self._split_target_part_evenly(expanded[index])
-            else:
-                replacement = self._split_source_clauses(expanded[index])
-                if len(replacement) < 2:
-                    replacement = self._split_long_source_part(expanded[index])
-                if len(replacement) < 2:
-                    replacement = self._split_source_part_evenly(expanded[index])
-            if len(replacement) < 2:
-                break
-            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
-        return expanded
-
-    def _expand_target_parts_to_count(
-        self,
-        parts: list[str],
-        count: int,
-        language: str | None = None,
-    ) -> list[str]:
-        expanded = [part for part in parts if part]
-        while len(expanded) < count:
-            index = max(range(len(expanded)), key=lambda item: len(expanded[item]), default=-1)
-            if index < 0:
-                break
-            use_cjk = self._should_use_cjk_display(expanded[index], language)
-            replacement = (
-                self._split_long_target_part(expanded[index])
-                if use_cjk
-                else self._split_long_source_part(expanded[index])
-            )
-            if len(replacement) < 2:
-                replacement = (
-                    self._split_target_part_evenly(expanded[index])
-                    if use_cjk
-                    else self._split_source_part_evenly(expanded[index])
-                )
-            if len(replacement) < 2:
-                break
-            expanded = [*expanded[:index], *replacement, *expanded[index + 1 :]]
-        return expanded
-
-    def _split_source_part_evenly(self, text: str) -> list[str]:
-        words = text.split()
-        if len(words) < 2:
-            return [text]
-        midpoint = len(words) // 2
-        return [" ".join(words[:midpoint]), " ".join(words[midpoint:])]
-
-    def _split_target_part_evenly(self, text: str) -> list[str]:
-        value = text.strip()
-        if len(value) < 2:
-            return [text]
-        midpoint = len(value) // 2
-        return [value[:midpoint], value[midpoint:]]
-
-    def _fit_parts_to_count(self, parts: list[str], count: int, *, separator: str) -> list[str]:
-        return fit_parts_to_count(parts, count, separator=separator)
-
-    def _split_by_regex(self, text: str, pattern: str) -> list[str]:
-        return split_by_regex(text, pattern)
-
-    def _word_count(self, text: str) -> int:
-        return word_count(text)
-
-    def _align_parts(
-        self,
-        parts: list[str],
-        count: int,
-        *,
-        separator: str,
-        previous: list[str] | None = None,
-        preserve_existing: bool = False,
-    ) -> list[str]:
-        return align_parts(
-            parts,
-            count,
-            separator=separator,
-            previous=previous,
-            preserve_existing=preserve_existing,
-        )
-
-    def _contains_aligned_parts(self, candidate: str, parts: list[str]) -> bool:
-        return contains_aligned_parts(candidate, parts)
-
-    def _normalize_alignment_text(self, text: str) -> str:
-        return normalize_alignment_text(text)
-
-    def _estimate_display_bounds(
-        self,
-        root: SegmentRecord,
-        source_parts: list[str],
-        translation_parts: list[str],
-        *,
-        final: bool,
-    ) -> list[tuple[int, int]]:
-        return estimate_display_bounds(
-            root.start_ms,
-            root.end_ms,
-            self.elapsed_ms,
-            source_parts,
-            translation_parts,
-            final=final,
-        )
 
     async def _on_segment_complete(self, seg: SegmentRecord) -> None:
         if not seg.translation_text:

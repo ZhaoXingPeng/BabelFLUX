@@ -38,13 +38,14 @@ Provider adapters (services/providers/*)
 
 当前拆分队列：
 
-- `backend/app/services/pipeline.py`：source text normalization -> display alignment -> session orchestration（语言策略已移出，显示分段与管线编排仍待拆分）。
+- `backend/app/services/pipeline.py`：source text normalization -> display alignment -> session orchestration（显示规划已移出，事件编排与会话状态仍在此处）。
 - `frontend/src/stores/session.ts`：WebSocket transport -> session reducer -> report/history state（请求 payload 已移出，事件归并与报告状态仍待拆分）。
 - `backend/app/api/ws.py`：连接生命周期 -> inbound command handling -> outbound event serialization。
 
 已完成的纯逻辑边界（2026-09-07）：
 
 - `backend/app/services/language_policy.py`：自动源语言推断、provider 初始语言提示、预检条件和语言对建议；由 `pipeline.py` 保留兼容代理。
+- `backend/app/services/display_planner.py`：源/译文显示切分、数量对齐和时间边界规划；纯函数不读取会话或执行 I/O。
 - `frontend/src/stores/sessionPayload.ts`：来源到 `inputMode` 映射、语言标签转换和 `CreateSessionPayload` 组装；store 保留兼容入口。
 - `frontend/src/stores/sessionTimeline.ts` 的 `applyRevisionToSegments`：按 revision 不可变更新源/译文字幕数组；store 只负责写回响应式状态。
 
