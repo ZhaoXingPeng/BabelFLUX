@@ -50,6 +50,7 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
                 "modelProfile": "高准确",
                 "sourceKey": "browser-tab",
                 "sourcePermission": "granted",
+                "ttsEnabled": True,
             },
         )
 
@@ -58,6 +59,7 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
     record = session_store.get(response.json()["sessionId"])
     assert record is not None
     assert record.model_profile == "高准确"
+    assert record.tts_enabled is True
 
 
 @pytest.mark.asyncio

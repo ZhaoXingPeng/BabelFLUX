@@ -157,7 +157,7 @@ Health     http://localhost:8000/api/health
 路由 `/api/ws/sessions/{sessionId}`，字段统一 camelCase。
 
 - 客户端到服务端：`start_session`（可携带语种/领域/源覆盖项）、二进制 PCM 帧、`audio_end` / `audio_chunk_end`、`stop_session`、`pause_session` / `resume_session`
-- 服务端到客户端：`session_started`、`source_sync_state`、`transcript_segment`、`translation_segment`、`revision_event`、`session_report{reportId}`、`error`
+- 服务端到客户端：`session_started`、`source_sync_state`、`transcript_segment`、`translation_segment`、`audio_segment{segmentId,audioBase64,sampleRate}`、`revision_event`、`session_report{reportId}`、`error`
 
 DashScope 网关也以 REST 暴露，便于单独调试：
 

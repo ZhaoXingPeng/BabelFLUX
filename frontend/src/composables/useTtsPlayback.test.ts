@@ -10,6 +10,7 @@ interface MockSource {
 }
 
 const sources: MockSource[] = [];
+const contexts: MockAudioContext[] = [];
 let gainNode: { gain: { value: number }; connect: ReturnType<typeof vi.fn> };
 
 class MockAudioContext {
@@ -34,11 +35,16 @@ class MockAudioContext {
   });
   resume = vi.fn().mockResolvedValue(undefined);
   close = vi.fn().mockResolvedValue(undefined);
+
+  constructor() {
+    contexts.push(this);
+  }
 }
 
 describe("createTtsPlayback", () => {
   beforeEach(() => {
     sources.length = 0;
+    contexts.length = 0;
     gainNode = { gain: { value: 0 }, connect: vi.fn() };
     vi.stubGlobal("AudioContext", MockAudioContext);
   });
@@ -73,5 +79,15 @@ describe("createTtsPlayback", () => {
     playback.stop();
 
     expect(sources[0].stop).toHaveBeenCalled();
+  });
+
+  it("closes the audio context after a session ends", async () => {
+    const playback = createTtsPlayback();
+    await playback.enqueue({ segmentId: "seg-1", audioBase64: "AQIDBA==", sampleRate: 24000 });
+
+    await playback.close();
+
+    expect(contexts[0].close).toHaveBeenCalledOnce();
+    expect(sources[0].stop).toHaveBeenCalledOnce();
   });
 });

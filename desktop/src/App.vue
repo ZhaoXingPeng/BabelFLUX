@@ -13,6 +13,7 @@ import {
   type AudioCaptureSession,
   type CaptureSourceKind
 } from "@frontend/composables/useAudioCapture";
+import { createTtsPlayback } from "@frontend/composables/useTtsPlayback";
 import { claimHandoffToken, connectDesktopSession } from "./api/sessionBridge";
 import { getLaunchDeepLink, listenForDeepLinks, parseLaunchParams, type LaunchParams } from "./launcherBridge";
 import { loadOverlaySettings, saveOverlaySettings, type OverlaySettings } from "./localSettings";
@@ -45,6 +46,12 @@ const status = ref<SourceSyncState>({
 });
 const errorMessage = ref("");
 const displayMode = ref<NonNullable<LaunchParams["displayMode"]>>("bilingual");
+const ttsPlayback = createTtsPlayback({
+  onError: (message) => {
+    errorMessage.value = message;
+    status.value = { status: "missing", lagMs: 0, message };
+  }
+});
 
 // 模式：handoff = 由 Web 工作台投送（仅显示）；standalone = 悬浮窗自选音源、自采集。
 const mode = ref<"handoff" | "standalone">("standalone");
@@ -84,6 +91,7 @@ const launchSourceMap: Record<string, CaptureSourceKind> = {
 let socket: WebSocket | null = null;
 let capture: AudioCaptureSession | null = null;
 let captureStarted = false;
+let activeTtsEnabled = false;
 let dragState:
   | {
       pointerId: number;
@@ -141,6 +149,7 @@ const toCode = (label: string) => languageCodeByLabel[label] ?? label;
 
 function applyStandaloneLaunchParams(params: LaunchParams) {
   mode.value = "standalone";
+  activeTtsEnabled = false;
   displayMode.value = params.displayMode ?? displayMode.value;
   starting.value = false;
   capturing.value = false;
@@ -223,10 +232,16 @@ function applyEvent(event: ServerEvent) {
     captionStartMs = reduced.lastStartMs;
     return;
   }
+  if (event.type === "audio_segment") {
+    if (!activeTtsEnabled) return;
+    void ttsPlayback.enqueue(event);
+    return;
+  }
   if (event.type === "session_report") {
     reportId.value = event.reportId;
     reportPending.value = false;
     status.value = { status: "ready", lagMs: 0, message: "报告已保存到 Web 端「报告历史」，可查看和下载" };
+    void ttsPlayback.close();
     resolvePendingReport(true);
     return;
   }
@@ -250,6 +265,8 @@ async function startFromLaunchParams(params: LaunchParams) {
     if (capture || socket || capturing.value) await stopStandalone();
     const claim = await claimHandoffToken(params.token);
     mode.value = "handoff";
+    // Handoff 会话的音频模态由 Web 端会话配置决定；服务端只会在启用时下发 audio_segment。
+    activeTtsEnabled = true;
     displayMode.value = claim.displayMode;
     activeSessionId.value = claim.sessionId;
     activeSessionName.value = "";
@@ -359,10 +376,17 @@ async function startStandalone() {
       domain: settings.value.form.domain,
       modelProfile: settings.value.form.modelProfile,
       sourceKey: kind,
-      sourcePermission: "granted"
+      sourcePermission: "granted",
+      ttsEnabled: settings.value.form.ttsEnabled
     });
     activeSessionId.value = session.sessionId;
     reportId.value = null;
+    activeTtsEnabled = settings.value.form.ttsEnabled;
+    if (settings.value.form.ttsEnabled) {
+      void ttsPlayback.unlock().catch((error: unknown) => {
+        errorMessage.value = error instanceof Error ? error.message : "语音播报初始化失败";
+      });
+    }
     capturing.value = true;
     status.value = {
       status: "syncing",
@@ -449,6 +473,7 @@ async function stopStandalone() {
     capture = null;
     await current.stop();
   }
+  await ttsPlayback.close();
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "stop_session" }));
   }
@@ -457,6 +482,7 @@ async function stopStandalone() {
   activeSessionId.value = null;
   activeSessionName.value = "";
   reportId.value = null;
+  activeTtsEnabled = false;
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   status.value = { status: "listening", lagMs: 0, message: "已停止，可重新选择音源" };
@@ -479,6 +505,7 @@ async function finishStandaloneAndSaveReport() {
     capture = null;
     await current.stop();
   }
+  await ttsPlayback.close();
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "stop_session" }));
@@ -499,6 +526,7 @@ function resetStandaloneToLauncher(message = "已停止，可重新选择音源"
   activeSessionId.value = null;
   activeSessionName.value = "";
   reportId.value = null;
+  activeTtsEnabled = false;
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   capturing.value = false;
@@ -668,6 +696,10 @@ onUnmounted(() => {
       <select v-model="selectedSource" class="overlay-source-select" aria-label="选择音源">
         <option v-for="opt in SOURCE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
+      <label class="overlay-tts-toggle" title="开启语音播报">
+        <input v-model="settings.form.ttsEnabled" type="checkbox" />
+        <span>语音播报</span>
+      </label>
       <button class="overlay-start" type="button" :disabled="starting" @click="startStandalone">
         {{ starting ? "连接中…" : "开始" }}
       </button>
