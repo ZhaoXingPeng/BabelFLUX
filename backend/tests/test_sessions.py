@@ -61,6 +61,49 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_session_normalizes_glossary_terms() -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/sessions",
+            json={
+                "inputMode": "demo",
+                "glossary": [{"sourceTerm": "  API 网关  ", "targetTerm": "  API Gateway  "}],
+            },
+        )
+
+    assert response.status_code == 200
+    record = session_store.get(response.json()["sessionId"])
+    assert record is not None
+    assert record.glossary == [
+        {"sourceTerm": "API 网关", "targetTerm": "API Gateway", "priority": 0, "note": None}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "glossary",
+    [
+        [{"sourceTerm": " ", "targetTerm": "译法"}],
+        [{"sourceTerm": "术语", "targetTerm": " "}],
+        [{"sourceTerm": "x" * 257, "targetTerm": "译法"}],
+        [{"sourceTerm": "术语", "targetTerm": "y" * 257}],
+        [{"sourceTerm": "术语", "targetTerm": "译法", "note": "n" * 501}],
+        [{"sourceTerm": f"term-{index}", "targetTerm": "译法"} for index in range(101)],
+    ],
+)
+async def test_create_session_rejects_invalid_glossary_payload(
+    glossary: list[dict[str, str]],
+) -> None:
+    async with asgi_http_client() as client:
+        response = await client.post(
+            "/api/sessions",
+            json={"inputMode": "demo", "glossary": glossary},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [

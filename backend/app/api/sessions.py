@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
@@ -15,12 +15,29 @@ from app.services.session_store import session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
+MAX_GLOSSARY_TERMS = 100
+MAX_GLOSSARY_TERM_LENGTH = 256
+MAX_GLOSSARY_NOTE_LENGTH = 500
+
 
 class GlossaryTermPayload(BaseModel):
-    source_term: str = Field(alias="sourceTerm")
-    target_term: str = Field(alias="targetTerm")
+    source_term: str = Field(
+        alias="sourceTerm",
+        min_length=1,
+        max_length=MAX_GLOSSARY_TERM_LENGTH,
+    )
+    target_term: str = Field(
+        alias="targetTerm",
+        min_length=1,
+        max_length=MAX_GLOSSARY_TERM_LENGTH,
+    )
     priority: int = 0
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=MAX_GLOSSARY_NOTE_LENGTH)
+
+    @field_validator("source_term", "target_term", mode="before")
+    @classmethod
+    def trim_term(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class CreateSessionRequest(BaseModel):
@@ -47,7 +64,10 @@ class CreateSessionRequest(BaseModel):
         alias="sourcePermission",
     )
     tts_enabled: bool = Field(default=False, alias="ttsEnabled")
-    glossary: list[GlossaryTermPayload] = Field(default_factory=list)
+    glossary: list[GlossaryTermPayload] = Field(
+        default_factory=list,
+        max_length=MAX_GLOSSARY_TERMS,
+    )
 
     @model_validator(mode="after")
     def validate_source_url(self) -> "CreateSessionRequest":
