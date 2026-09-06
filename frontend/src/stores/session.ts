@@ -42,8 +42,7 @@ import { buildSessionPayload, toLanguageCode } from "./sessionPayload";
 import {
   activeSegmentForPlayback,
   applyRevisionToSegments,
-  shouldKeepCurrentActiveSegment,
-  upsertSegment
+  shouldKeepCurrentActiveSegment
 } from "./sessionTimeline";
 import {
   createFixtureSourceSegments,
@@ -58,6 +57,7 @@ import {
   FIXTURE_SUBTITLE_LATENCY_MS
 } from "./sessionFixture";
 import { renderReportClient } from "./reportExport";
+import { reduceLiveSubtitleEvent } from "./sessionEventReducer";
 
 let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
@@ -1393,37 +1393,52 @@ export const useSessionStore = defineStore("session", {
       const liveEventsLocked =
         this.reportLoading || Boolean(this.activeMode && this.modeStates[this.activeMode] === "report");
 
-      if (event.type === "source_sync_state") {
+      if (
+        event.type === "source_sync_state" ||
+        event.type === "transcript_segment" ||
+        event.type === "translation_segment" ||
+        event.type === "revision_event"
+      ) {
         if (liveEventsLocked) return;
-        if (pendingMediaElementCapture && event.state.status === "ready") {
+        if (event.type === "source_sync_state" && pendingMediaElementCapture && event.state.status === "ready") {
           pendingMediaReadyState = event.state;
           void this.startMediaElementStreaming(event.state);
           return;
         }
-        this.sourceSyncState = event.state;
-        if (typeof event.state.sourceMs === "number") {
-          this.playbackMs = event.state.sourceMs;
+        if (event.type === "translation_segment") {
+          recordOutputLatency(event.segment, this.playbackMs);
         }
-        // 后端管线就绪（pcm_queue 已建）后再开始推流，避免早期帧被丢弃。
-        if (pendingCaptureKind && !captureStarted && event.state.status === "ready") {
+        const reduced = reduceLiveSubtitleEvent(
+          {
+            sourceSyncState: this.sourceSyncState,
+            playbackMs: this.playbackMs,
+            activeSegmentId: this.activeSegmentId,
+            sourceSegments: this.sourceSegments,
+            translationSegments: this.translationSegments,
+            revisions: this.revisions
+          },
+          event,
+          {
+            outputLatencyMs: estimatedOutputLatencyMs,
+            pendingTranslationHoldMs: ACTIVE_PENDING_TRANSLATION_HOLD_MS,
+            updateActiveSegment: !isFixtureSession(this.sessionId)
+          }
+        );
+        this.sourceSyncState = reduced.sourceSyncState;
+        this.playbackMs = reduced.playbackMs;
+        this.activeSegmentId = reduced.activeSegmentId;
+        this.sourceSegments = reduced.sourceSegments;
+        this.translationSegments = reduced.translationSegments;
+        this.revisions = reduced.revisions;
+        if (
+          event.type === "source_sync_state" &&
+          pendingCaptureKind &&
+          !captureStarted &&
+          event.state.status === "ready"
+        ) {
           captureStarted = true;
           void this.startCaptureStreaming(pendingCaptureKind);
         }
-        return;
-      }
-
-      if (event.type === "transcript_segment") {
-        if (liveEventsLocked) return;
-        this.sourceSegments = upsertSegment(this.sourceSegments, event.segment);
-        this.updateActiveSegmentFromPlayback();
-        return;
-      }
-
-      if (event.type === "translation_segment") {
-        if (liveEventsLocked) return;
-        recordOutputLatency(event.segment, this.playbackMs);
-        this.translationSegments = upsertSegment(this.translationSegments, event.segment);
-        this.updateActiveSegmentFromPlayback();
         return;
       }
 
@@ -1437,13 +1452,6 @@ export const useSessionStore = defineStore("session", {
           audioBase64: event.audioBase64,
           sampleRate: event.sampleRate
         });
-        return;
-      }
-
-      if (event.type === "revision_event") {
-        if (liveEventsLocked) return;
-        this.revisions = [event.revision, ...this.revisions].slice(0, 20);
-        this.markRevised(event.revision);
         return;
       }
 
