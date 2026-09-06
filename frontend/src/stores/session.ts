@@ -58,6 +58,7 @@ import {
 } from "./sessionFixture";
 import { renderReportClient } from "./reportExport";
 import { reduceLiveSubtitleEvent } from "./sessionEventReducer";
+import { buildTranscriptPairs } from "./transcriptPairs";
 
 let socket: WebSocket | null = null;
 let desktopLaunchTimer: number | null = null;
@@ -539,43 +540,11 @@ export const useSessionStore = defineStore("session", {
     quickSources: (): SourceOption[] => quickSourceOptions,
     floatingSources: (): SourceOption[] => floatingSourceOptions,
     transcriptPairs: (state): TranscriptPair[] => {
-      if (state.sourceSegments.length === 0 && state.translationSegments.length === 0) {
-        // 会话已开始但字幕尚未「延迟产出」时显示空白等待，而非示例占位字幕；
-        // 仅在没有任何会话（首屏预览态）时才回退到 samplePairs。
-        return state.sessionId ? [] : samplePairs;
-      }
-
-      const ids: string[] = [];
-      [...state.sourceSegments, ...state.translationSegments].forEach((segment) => {
-        if (!ids.includes(segment.segmentId)) ids.push(segment.segmentId);
-      });
-
-      return ids.map((segmentId) => {
-        const source = state.sourceSegments.find((segment) => segment.segmentId === segmentId);
-        const translation = state.translationSegments.find((segment) => segment.segmentId === segmentId);
-        const sourceStatus = source?.status;
-        const translationStatus = translation?.status;
-        const stateLabel =
-          translationStatus === "revised"
-            ? "revised"
-            : sourceStatus === "partial" || translationStatus === "partial"
-              ? "partial"
-              : (translationStatus ?? sourceStatus ?? "partial");
-        const startMs = source?.startMs ?? translation?.startMs ?? 0;
-        return {
-          segmentId,
-          time: formatPlaybackTime(startMs),
-          source: source?.text ?? "",
-          translation: translation?.text ?? "",
-          state: stateLabel,
-          isActive: segmentId === state.activeSegmentId,
-          originalTranslation: translation?.originalText,
-          revisionReason: translation?.revisionReason
-        };
-      }).filter((pair) => {
-        if (pair.translation.trim()) return true;
-        if (!pair.source.trim()) return false;
-        return pair.segmentId === state.activeSegmentId;
+      return buildTranscriptPairs(state.sourceSegments, state.translationSegments, {
+        activeSegmentId: state.activeSegmentId,
+        hasSession: Boolean(state.sessionId),
+        formatTime: formatPlaybackTime,
+        samplePairs
       });
     },
     currentPair(): TranscriptPair {
