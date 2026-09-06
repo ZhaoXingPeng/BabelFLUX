@@ -90,22 +90,27 @@ class SessionStore:
 
     def create(self, session_id: str, **kwargs: Any) -> SessionRecord:
         with self._lock:
-            record = SessionRecord(session_id=session_id, **kwargs)
-            self._sessions[session_id] = record
-            return record
+            return self._create_unlocked(session_id, **kwargs)
 
     def get(self, session_id: str) -> SessionRecord | None:
-        return self._sessions.get(session_id)
+        with self._lock:
+            return self._sessions.get(session_id)
 
     def get_or_create(self, session_id: str, **kwargs: Any) -> SessionRecord:
-        existing = self._sessions.get(session_id)
-        if existing is not None:
-            return existing
-        return self.create(session_id, **kwargs)
+        with self._lock:
+            existing = self._sessions.get(session_id)
+            if existing is not None:
+                return existing
+            return self._create_unlocked(session_id, **kwargs)
 
     def remove(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
+
+    def _create_unlocked(self, session_id: str, **kwargs: Any) -> SessionRecord:
+        record = SessionRecord(session_id=session_id, **kwargs)
+        self._sessions[session_id] = record
+        return record
 
 
 # 进程内单例
