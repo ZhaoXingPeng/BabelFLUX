@@ -39,6 +39,7 @@ import type {
   TranscriptPair,
   WorkspaceTile
 } from "../types/workflow";
+import { buildSessionPayload, toLanguageCode } from "./sessionPayload";
 import {
   activeSegmentForPlayback,
   shouldKeepCurrentActiveSegment,
@@ -191,27 +192,6 @@ const autoDetectSourceKeys = new Set([
   "screen-window",
   "system-audio"
 ]);
-
-const inputModeBySourceKey: Record<string, CreateSessionPayload["inputMode"]> = {
-  ...Object.fromEntries(videoFixtures.map((fixture) => [fixture.key, "demo"] as const)),
-  "video-file": "media_element_audio",
-  "audio-file": "media_element_audio",
-  url: "url",
-  microphone: "microphone",
-  "browser-tab": "browser_audio",
-  "screen-window": "screen_window",
-  "system-audio": "system_audio"
-};
-
-const languageCodeByLabel: Record<string, string> = {
-  自动检测: "auto",
-  英语: "en",
-  中文: "zh",
-  日语: "ja",
-  韩语: "ko",
-  法语: "fr",
-  德语: "de"
-};
 
 const languageLabelByCode: Record<string, string> = {
   auto: "自动检测",
@@ -397,10 +377,6 @@ function formatRuntimeState(state: RuntimeState): string {
     error: "启动失败"
   };
   return labels[state];
-}
-
-function toLanguageCode(label: string): string {
-  return languageCodeByLabel[label] ?? label;
 }
 
 function toDesktopDisplayMode(style: string): DesktopDisplayMode {
@@ -1076,27 +1052,13 @@ export const useSessionStore = defineStore("session", {
     },
 
     buildSessionPayload(mode: ProductMode): CreateSessionPayload {
-      const form = mode === "quick" ? this.quickForm : this.floatingForm;
-      const input = mode === "quick" ? this.quickInput : this.floatingInput;
-      const sourceKey = form.source;
-
-      return {
-        inputMode: inputModeBySourceKey[sourceKey] ?? "demo",
-        sourceLanguage: toLanguageCode(form.sourceLanguage),
-        targetLanguage: toLanguageCode(form.targetLanguage),
-        productMode: mode,
-        sessionName: mode === "quick" ? this.quickForm.name : "悬浮字幕",
-        domain: form.domain,
-        modelProfile: form.modelProfile,
-        sourceKey,
-        sourceFileName: input.fileName || undefined,
-        sourceUrl: sourceKey === "url" ? input.url.trim() : undefined,
-        sourcePermission: input.permissionState,
-        ttsEnabled: form.ttsEnabled,
-        ...(mode === "quick" && this.quickForm.glossary.length
-          ? { glossary: this.quickForm.glossary.map((term) => ({ ...term })) }
-          : {})
-      };
+      return buildSessionPayload(
+        mode,
+        this.quickForm,
+        this.floatingForm,
+        this.quickInput,
+        this.floatingInput
+      );
     },
 
     isCurrentStart(mode: ProductMode, requestId: number, sessionId?: string): boolean {
