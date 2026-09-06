@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from app.services.session_store import SessionRecord, SessionStore
+import pytest
+
+from app.services.session_store import SessionAlreadyExistsError, SessionRecord, SessionStore
 
 
 def test_get_or_create_returns_one_record_for_concurrent_calls() -> None:
@@ -19,3 +21,14 @@ def test_get_or_create_returns_one_record_for_concurrent_calls() -> None:
     assert len({id(record) for record in records}) == 1
     assert store.get("shared-session") is records[0]
     assert records[0].session_id == "shared-session"
+
+
+def test_create_rejects_duplicate_without_overwriting_existing_record() -> None:
+    store = SessionStore()
+    original = store.create("shared-session", source_language="en")
+
+    with pytest.raises(SessionAlreadyExistsError, match="session already exists"):
+        store.create("shared-session", source_language="zh")
+
+    assert store.get("shared-session") is original
+    assert original.source_language == "en"
