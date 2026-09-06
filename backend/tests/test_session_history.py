@@ -1,0 +1,37 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from app.services.session_history import SessionHistoryStore
+
+
+def test_write_unlocked_preserves_json_shape_and_unicode(tmp_path: Path) -> None:
+    path = tmp_path / "sessions.json"
+    store = SessionHistoryStore(path)
+    entries = [{"sessionId": "s1", "sessionName": "技术分享"}]
+
+    store._write_unlocked(entries)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == entries
+    assert list(tmp_path.glob(".sessions.json.tmp")) == []
+
+
+def test_write_unlocked_keeps_previous_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "sessions.json"
+    store = SessionHistoryStore(path)
+    original = [{"sessionId": "old", "status": "completed"}]
+    store._write_unlocked(original)
+
+    def fail_replace(self: Path, target: Path) -> Path:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        store._write_unlocked([{"sessionId": "new"}])
+
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+    assert list(tmp_path.glob(".sessions.json.tmp")) == []
