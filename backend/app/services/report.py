@@ -278,13 +278,17 @@ def _loads_json(content: str) -> dict[str, Any] | None:
         content = content.strip("`")
         if content.lower().startswith("json"):
             content = content[4:]
-    start, end = content.find("{"), content.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
     try:
-        return json.loads(content[start : end + 1])
+        parsed = json.loads(content)
     except (ValueError, TypeError):
-        return None
+        start, end = content.find("{"), content.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            return None
+        try:
+            parsed = json.loads(content[start : end + 1])
+        except (ValueError, TypeError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # ---------- 渲染 ----------
