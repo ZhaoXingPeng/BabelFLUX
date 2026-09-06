@@ -1578,6 +1578,10 @@ class InterpretationPipeline:
         seg = self.record._by_id.get(rev["segmentId"])
         if seg is None:
             return
+        # Review tasks overlap by design; only apply a result that still targets
+        # the current translation and has not already been revised.
+        if seg.revised or seg.status == "revised" or rev["beforeText"] != seg.translation_text:
+            return
         seg.translation_text = rev["afterText"]
         seg.status = "revised"
         seg.revised = True
