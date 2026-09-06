@@ -1,6 +1,7 @@
 export type {
   DesktopLaunchState,
   FloatingFormState,
+  GlossaryTerm,
   ProductMode,
   ProductModeOption,
   QuickFormState,

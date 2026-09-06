@@ -362,7 +362,8 @@ function createDefaultQuickForm(): QuickFormState {
     targetLanguage: "英语",
     modelProfile: "智能默认",
     source: defaultFixture.key,
-    ttsEnabled: false
+    ttsEnabled: false,
+    glossary: []
   };
 }
 
@@ -1091,7 +1092,10 @@ export const useSessionStore = defineStore("session", {
         sourceFileName: input.fileName || undefined,
         sourceUrl: sourceKey === "url" ? input.url.trim() : undefined,
         sourcePermission: input.permissionState,
-        ttsEnabled: form.ttsEnabled
+        ttsEnabled: form.ttsEnabled,
+        ...(mode === "quick" && this.quickForm.glossary.length
+          ? { glossary: this.quickForm.glossary.map((term) => ({ ...term })) }
+          : {})
       };
     },
 

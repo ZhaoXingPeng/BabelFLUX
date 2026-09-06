@@ -2,6 +2,7 @@
 import SelectField from "../common/SelectField.vue";
 import Icon from "../icons/Icon.vue";
 import LanguagePairField from "./LanguagePairField.vue";
+import GlossaryEditor from "./GlossaryEditor.vue";
 import SourceSelect from "./SourceSelect.vue";
 import SourcePreparation from "../workflow/SourcePreparation.vue";
 import type { QuickFormState, RuntimeState, SourceInputState, SourceOption } from "../workflow/types";
@@ -108,6 +109,10 @@ const emit = defineEmits<{
             </span>
             <input v-model="form.ttsEnabled" type="checkbox" />
           </label>
+          <GlossaryEditor
+            :model-value="form.glossary"
+            @update:model-value="form.glossary = $event"
+          />
           <p class="settings-note">使用后端模型策略统一路由，前端不接触供应商密钥。</p>
         </section>
       </div>

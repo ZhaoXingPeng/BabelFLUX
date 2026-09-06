@@ -1,5 +1,10 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
+export interface GlossaryTermPayload {
+  sourceTerm: string;
+  targetTerm: string;
+}
+
 export type DesktopDisplayMode = "bilingual" | "translation-only" | "floating" | "compact";
 
 export interface CreateSessionPayload {
@@ -22,6 +27,7 @@ export interface CreateSessionPayload {
   sourceUrl?: string;
   sourcePermission?: "idle" | "requesting" | "granted" | "denied";
   ttsEnabled?: boolean;
+  glossary?: GlossaryTermPayload[];
 }
 
 export interface CreateSessionResponse {
