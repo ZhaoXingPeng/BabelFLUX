@@ -603,3 +603,28 @@ def test_mock_events_conform_to_event_models() -> None:
     SubtitleSegment.model_validate(events["transcript_segment"]["segment"])
     SubtitleSegment.model_validate(events["translation_segment"]["segment"])
     RevisionEvent.model_validate(events["revision_event"]["revision"])
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_invalid_start_overrides_without_starting_session() -> None:
+    async with asgi_http_client() as client:
+        created = (await client.post("/api/sessions", json={"inputMode": "demo"})).json()
+
+    async with ASGIWebSocketSession(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
+        await websocket.receive_json()
+        await websocket.send_json({"type": "start_session", "inputMode": "unsupported"})
+
+        assert await websocket.receive_json() == {
+            "type": "error",
+            "message": "start_session 的 inputMode 不受支持",
+        }
+        record = session_store.get(created["sessionId"])
+        assert record is not None
+        assert record.status == "created"
+        assert record.input_mode == "demo"
+
+        await websocket.send_json({"type": "pause_session"})
+        pause_event = await websocket.receive_json()
+        assert pause_event["type"] == "source_sync_state"

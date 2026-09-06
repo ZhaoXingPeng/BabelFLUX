@@ -24,6 +24,11 @@ from app.services.mock_session import run_mock_session
 from app.services.pipeline import InterpretationPipeline
 from app.services.providers.dashscope import DashScopeClient, DashScopeConfig
 from app.services.report import generate_session_report
+from app.services.session_commands import (
+    parse_client_payload,
+    parse_clock_ms,
+    parse_session_overrides,
+)
 from app.services.session_events import session_event_hub
 from app.services.session_history import session_history_store
 from app.services.session_store import session_store
@@ -141,7 +146,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             if not text:
                 continue
             try:
-                payload, error_message = _parse_client_payload(text)
+                payload, error_message = parse_client_payload(text)
             except json.JSONDecodeError:
                 await emit({"type": "error", "message": "Invalid JSON message"})
                 continue
@@ -153,11 +158,14 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             mtype = payload.get("type")
             if mtype == "start_session":
                 if state["run_task"] is None:
-                    _apply_overrides(record, payload)
+                    override_error = _apply_overrides(record, payload)
+                    if override_error:
+                        await emit({"type": "error", "message": override_error})
+                        continue
                     state["run_task"] = asyncio.create_task(run_and_finalize())
             elif mtype == "media_clock":
-                playback_ms = _parse_clock_ms(payload.get("playbackMs"))
-                sent_audio_ms = _parse_clock_ms(payload.get("sentAudioMs"))
+                playback_ms = parse_clock_ms(payload.get("playbackMs"))
+                sent_audio_ms = parse_clock_ms(payload.get("sentAudioMs"))
                 if playback_ms is None or sent_audio_ms is None:
                     await emit(
                         {
@@ -238,7 +246,7 @@ async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
             if not text:
                 continue
             try:
-                payload, error_message = _parse_client_payload(text)
+                payload, error_message = parse_client_payload(text)
             except json.JSONDecodeError:
                 await websocket.send_json({"type": "error", "message": "Invalid JSON message"})
                 continue
@@ -313,34 +321,22 @@ def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
 
 
 def _parse_client_payload(text: str) -> tuple[dict[str, Any] | None, str | None]:
-    payload = json.loads(text)
-    if not isinstance(payload, dict):
-        return None, "客户端消息必须是 JSON 对象"
-    return payload, None
+    return parse_client_payload(text)
 
 
 def _parse_clock_ms(value: Any) -> int | None:
-    if value is None:
-        return 0
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return None
-    return value
+    return parse_clock_ms(value)
 
 
-def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:
-    """允许 start_session 携带少量覆盖项（语种/领域/源），增强健壮性。"""
-    if payload.get("sourceLanguage"):
-        record.source_language = payload["sourceLanguage"]
-    if payload.get("targetLanguage"):
-        record.target_language = payload["targetLanguage"]
-    if payload.get("domain"):
-        record.domain = payload["domain"]
-    if payload.get("inputMode"):
-        record.input_mode = payload["inputMode"]
-    if payload.get("sourceUrl"):
-        record.source_url = payload["sourceUrl"]
-    if payload.get("modelProfile"):
-        record.model_profile = payload["modelProfile"]
+def _apply_overrides(record: Any, payload: dict[str, Any]) -> str | None:
+    """Validate and apply the small set of start_session overrides."""
+    overrides, error_message = parse_session_overrides(payload)
+    if error_message:
+        return error_message
+    assert overrides is not None
+    for attribute, value in overrides.as_record_updates().items():
+        setattr(record, attribute, value)
+    return None
 
 
 def _build_llm_client() -> DashScopeClient | None:
