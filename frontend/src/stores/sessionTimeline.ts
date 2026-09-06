@@ -42,19 +42,23 @@ export function combinedTimeline(
   sourceSegments: SubtitleSegment[],
   translationSegments: SubtitleSegment[]
 ): TimelineSegment[] {
-  const ids: string[] = [];
-  [...sourceSegments, ...translationSegments].forEach((segment) => {
-    if (!ids.includes(segment.segmentId)) ids.push(segment.segmentId);
-  });
+  const byId = new Map<string, { source?: SubtitleSegment; translation?: SubtitleSegment }>();
+  for (const source of sourceSegments) {
+    const entry = byId.get(source.segmentId) ?? {};
+    if (!entry.source) entry.source = source;
+    byId.set(source.segmentId, entry);
+  }
+  for (const translation of translationSegments) {
+    const entry = byId.get(translation.segmentId) ?? {};
+    if (!entry.translation) entry.translation = translation;
+    byId.set(translation.segmentId, entry);
+  }
 
-  return ids
-    .map((segmentId) => {
-      const source = sourceSegments.find((segment) => segment.segmentId === segmentId);
-      const translation = translationSegments.find((segment) => segment.segmentId === segmentId);
-      const startMs = source?.startMs ?? translation?.startMs ?? 0;
-      const endMs = Math.max(source?.endMs ?? 0, translation?.endMs ?? 0);
-      return { segmentId, startMs, endMs };
-    })
+  return Array.from(byId, ([segmentId, { source, translation }]) => ({
+    segmentId,
+    startMs: source?.startMs ?? translation?.startMs ?? 0,
+    endMs: Math.max(source?.endMs ?? 0, translation?.endMs ?? 0)
+  }))
     .sort((a, b) => a.startMs - b.startMs);
 }
 
@@ -147,4 +151,3 @@ export function shouldKeepCurrentActiveSegment(
   }
   return candidate.startMs + 500 < current.startMs && playbackMs >= current.startMs - 500;
 }
-
