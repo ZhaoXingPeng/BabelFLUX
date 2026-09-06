@@ -112,6 +112,25 @@ body {
   color: #f4ede0;
 }
 
+.overlay-tts-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--stage-src, #c8c0b3);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.overlay-tts-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #e0a458;
+  cursor: pointer;
+}
+
 .overlay-start {
   flex: 0 0 auto;
   min-height: 30px;
