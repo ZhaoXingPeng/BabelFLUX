@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { SourceSyncState } from "../../types/events";
 import Icon from "../icons/Icon.vue";
 import type {
@@ -27,6 +27,9 @@ const props = defineProps<{
   desktopLaunchState: DesktopLaunchState;
   desktopLaunchMessage: string;
   selectedDisplayMode: string;
+  ttsMuted: boolean;
+  ttsVolume: number;
+  ttsErrorMessage: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,11 +42,28 @@ const emit = defineEmits<{
   playbackPause: [];
   playbackPlay: [];
   ended: [];
+  updateTtsMuted: [muted: boolean];
+  updateTtsVolume: [volume: number];
 }>();
 
 const videoEl = ref<HTMLVideoElement | null>(null);
 const audioEl = ref<HTMLAudioElement | null>(null);
-let suppressPauseEvent = false;
+const suppressPauseEvent = ref(false);
+const userPaused = ref(false);
+let pausingFromWatch = false;
+let lastPauseIntentAt = Number.NEGATIVE_INFINITY;
+let lastPlayIntentAt = Number.NEGATIVE_INFINITY;
+let initializedMediaElement: HTMLMediaElement | null = null;
+
+const PLAYBACK_INTENT_DEBOUNCE_MS = 160;
+const DEFAULT_MEDIA_VOLUME = 0.5;
+const hasNativeMediaControls = computed(
+  () =>
+    (props.mediaKind === "video" && Boolean(props.mediaUrl)) ||
+    (props.mediaKind === "audio" && Boolean(props.audioUrl))
+);
+const showTtsControls = computed(() => props.form.ttsEnabled && !hasNativeMediaControls.value);
+const shouldMuteNativeMedia = computed(() => props.form.ttsEnabled && !isMediaElementCaptureSource());
 
 function currentMediaElement() {
   return props.mediaKind === "video" ? videoEl.value : audioEl.value;
@@ -63,13 +83,15 @@ function canAutoPlay() {
 
 async function emitMediaElement() {
   await nextTick();
-  emit("mediaReady", currentMediaElement());
+  const element = currentMediaElement();
+  applyMediaDefaults(element);
+  emit("mediaReady", element);
 }
 
 async function tryAutoPlay() {
   await nextTick();
   const element = currentMediaElement();
-  if (!element || !canAutoPlay() || !element.paused) return;
+  if (!element || !canAutoPlay() || !element.paused || userPaused.value) return;
   try {
     await element.play();
   } catch {
@@ -80,7 +102,8 @@ async function tryAutoPlay() {
 function pauseMedia(silent = false) {
   const element = currentMediaElement();
   if (element && !element.paused) {
-    suppressPauseEvent = silent;
+    suppressPauseEvent.value = silent;
+    pausingFromWatch = silent;
     element.pause();
   }
 }
@@ -90,19 +113,45 @@ function emitPlaybackTime(event: Event) {
 }
 
 function handlePause(event: Event) {
-  if (suppressPauseEvent) {
-    suppressPauseEvent = false;
+  if (suppressPauseEvent.value) {
+    suppressPauseEvent.value = false;
+    pausingFromWatch = false;
+    return;
+  }
+  if (pausingFromWatch) {
+    pausingFromWatch = false;
     return;
   }
   const element = event.target as HTMLMediaElement;
-  if (!element.ended) emit("playbackPause");
+  const now = window.performance.now();
+  if (!element.ended && now - lastPauseIntentAt > PLAYBACK_INTENT_DEBOUNCE_MS) {
+    lastPauseIntentAt = now;
+    userPaused.value = true;
+    emit("playbackPause");
+  }
+}
+
+function applyMediaDefaults(element: HTMLMediaElement | null) {
+  if (!element || initializedMediaElement === element) return;
+  element.volume = DEFAULT_MEDIA_VOLUME;
+  initializedMediaElement = element;
 }
 
 function handlePlay() {
+  const now = window.performance.now();
+  if (!userPaused.value && now - lastPlayIntentAt <= PLAYBACK_INTENT_DEBOUNCE_MS) return;
+  lastPlayIntentAt = now;
+  userPaused.value = false;
   emit("playbackPlay");
 }
 
+function handleTtsVolumeInput(event: Event) {
+  emit("updateTtsVolume", Number((event.target as HTMLInputElement).value));
+}
+
 function handleLoadedMetadata() {
+  const element = currentMediaElement();
+  applyMediaDefaults(element);
   void emitMediaElement();
   void tryAutoPlay();
 }
@@ -113,15 +162,25 @@ watch(
     props.mediaUrl,
     props.audioUrl,
     props.mediaKind,
-    props.sourceSyncState.status,
-    props.sourceSyncState.message
+    props.source.key
   ],
-  () => {
+  (values, oldValues) => {
+    const [state, mediaUrl, audioUrl, mediaKind, sourceKey] = values;
+    const [oldState, oldMediaUrl, oldAudioUrl, oldMediaKind, oldSourceKey] = oldValues ?? [];
+    const mediaChanged =
+      mediaUrl !== oldMediaUrl ||
+      audioUrl !== oldAudioUrl ||
+      mediaKind !== oldMediaKind ||
+      sourceKey !== oldSourceKey;
+    if (mediaChanged || state === "setup" || state === "report" || oldState === "setup") {
+      userPaused.value = false;
+      initializedMediaElement = null;
+    }
     void emitMediaElement();
-    if (canAutoPlay()) {
-      void tryAutoPlay();
+    if (state === "running") {
+      if (canAutoPlay()) void tryAutoPlay();
     } else {
-      pauseMedia();
+      pauseMedia(true);
     }
   },
   { flush: "post", immediate: true }
@@ -151,6 +210,7 @@ watch(
           controls
           playsinline
           autoplay
+          :muted="shouldMuteNativeMedia"
           preload="metadata"
           data-testid="fixture-video"
           @loadedmetadata="handleLoadedMetadata"
@@ -173,6 +233,7 @@ watch(
           :src="audioUrl"
           controls
           autoplay
+          :muted="shouldMuteNativeMedia"
           preload="metadata"
           data-testid="fixture-audio"
           @loadedmetadata="handleLoadedMetadata"
@@ -202,9 +263,31 @@ watch(
         <span>{{ runtimeStatus }}</span>
         <span>{{ source.channel }}</span>
         <span>{{ sourceSyncState.message }}</span>
+        <span v-if="ttsErrorMessage">{{ ttsErrorMessage }}</span>
         <span v-if="desktopLaunchState !== 'idle'">{{ desktopLaunchMessage }}</span>
       </div>
       <div class="media-actions">
+        <div v-if="showTtsControls" class="tts-controls">
+          <button
+            class="stage-button icon-stage-button"
+            type="button"
+            :aria-label="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            :title="ttsMuted ? '取消静音语音播报' : '静音语音播报'"
+            @click="emit('updateTtsMuted', !ttsMuted)"
+          >
+            <Icon :name="ttsMuted ? 'volume-x' : 'volume-2'" :size="17" />
+          </button>
+          <input
+            class="tts-volume"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            :value="ttsVolume"
+            aria-label="语音播报音量"
+            @input="handleTtsVolumeInput"
+          />
+        </div>
         <button
           class="stage-button icon-stage-button"
           type="button"

@@ -70,10 +70,16 @@ def _fmt_srt_ts(ms: int) -> str:
 
 
 async def generate_session_report(
-    record: SessionRecord, *, settings: Settings, client: DashScopeClient | None
+    record: SessionRecord,
+    *,
+    settings: Settings,
+    client: DashScopeClient | None,
+    report_id: str | None = None,
+    run_final_correction: bool = True,
+    pending_final_correction: bool = False,
 ) -> dict[str, Any]:
     segments = record.reportable_segments()
-    report_id = f"{record.session_id}-report-{uuid4().hex[:8]}"
+    report_id = report_id or f"{record.session_id}-report-{uuid4().hex[:8]}"
 
     llm_out: dict[str, Any] = {}
     correction_status = "skipped"
@@ -81,9 +87,12 @@ async def generate_session_report(
     correction_elapsed_ms = 0
     if not segments:
         correction_error = "本场无有效转写与译文，未执行会后完整纠偏。"
+    elif pending_final_correction:
+        correction_status = "pending"
+        correction_error = "基础报告已可下载，会后完整纠偏正在后台生成。"
     elif client is None or not settings.use_real_pipeline:
         correction_error = "未启用真实模型，报告使用实时译文生成。"
-    else:
+    elif run_final_correction:
         timeout_seconds = max(0.1, settings.final_correction_timeout_seconds)
         started = time.perf_counter()
         try:
@@ -179,6 +188,9 @@ async def generate_session_report(
         "reportId": report_id,
         "sessionId": record.session_id,
         "sessionName": record.session_name,
+        "productMode": record.product_mode,
+        "inputMode": record.input_mode,
+        "sourceLabel": record.source_label or record.source_url or record.input_mode,
         "domain": record.domain,
         "sourceLanguage": record.source_language,
         "targetLanguage": record.target_language,
@@ -284,6 +296,8 @@ def _correction_status_text(report: dict[str, Any]) -> str:
         return f"部分完成{model_text}{elapsed}"
     if status == "timeout":
         return f"超时降级{elapsed}"
+    if status == "pending":
+        return "基础报告已可下载，全文纠偏生成中"
     if status == "skipped":
         return "未执行"
     return f"降级为实时译文{elapsed}"

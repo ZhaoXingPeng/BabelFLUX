@@ -17,6 +17,7 @@ export const defaultOverlaySettings: OverlaySettings = {
     targetLanguage: "中文",
     modelProfile: "快速低延迟",
     source: "system-audio",
+    ttsEnabled: false,
     style: "双语字幕",
     size: "标准",
     opacity: "90%",

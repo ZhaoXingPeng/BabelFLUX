@@ -16,6 +16,7 @@ const { desktopDownloadPromptOpen, desktopHandoffUrl, desktopLaunchMessage, desk
 useGsapReveal(root, { stagger: 0.09, y: 18 });
 
 function enterWeb() {
+  sessionStore.resetMode("quick");
   router.push({ path: "/web", query: { setup: "1" } });
 }
 
@@ -37,6 +38,7 @@ function continueWithWebFloating() {
         <strong>巴别流 同传</strong>
       </div>
       <nav aria-label="主导航">
+        <button class="home-nav-button" type="button" @click="router.push('/history')">报告历史</button>
         <a href="/docs/design/前端布局重构设计方案_v1.md">设计方案</a>
         <a href="https://gitee.com/RedamancyZXP/ai-product-lab" target="_blank" rel="noreferrer">仓库</a>
       </nav>
@@ -61,7 +63,6 @@ function continueWithWebFloating() {
           subtitle="浏览器内音视频工作台"
           :features="['音视频播放 + 双栏字幕', '分区 / 逐句对照', '自动纠偏可视化']"
           cta="进入工作台"
-          variant="primary"
           @activate="enterWeb"
         >
           <template #icon>

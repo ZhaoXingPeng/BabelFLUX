@@ -22,7 +22,7 @@ function isFileSource() {
 const fileActionLabel = computed(() => (props.source.key === "video-file" ? "选择视频" : "选择音频"));
 
 function isFixtureSource() {
-  return props.source.key === "fixture-video";
+  return Boolean(props.source.fixture);
 }
 
 function isUrlSource() {
@@ -43,7 +43,7 @@ function handleFileChange(event: Event) {
   <div class="source-prep">
     <div v-if="isFixtureSource()" class="grid gap-1">
       <span class="form-label">本地测试素材</span>
-      <span class="source-prep-status ready">video.mp4 / voice.m4a / en.txt / ch.txt 已就绪</span>
+      <span class="source-prep-status ready">{{ source.channel }} 已就绪</span>
     </div>
 
     <label v-else-if="isFileSource()" class="block file-picker">

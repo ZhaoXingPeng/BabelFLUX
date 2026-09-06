@@ -13,6 +13,10 @@ QWEN_TTS_PROVIDER = "qwen_tts"
 # dashscope.aliyuncs.com 端点报 "url error"，故选用标准端点实测可用的强模型。
 # 可选 qwen3-max / deepseek-v4-pro（均已验证），默认与 .env 的 qwen-plus 一致。
 FINAL_CORRECTION_MODEL = "qwen-plus"
+STRATEGY_PLAN_DISCLAIMER = (
+    "注意：本策略计划为设计蓝图，gummy/fun_asr provider 当前未接入真实管线，"
+    "window 参数与实际实现有差异"
+)
 
 
 DOMAIN_GUIDANCE = {
@@ -48,6 +52,7 @@ def build_strategy_plan(request: StrategyPlanRequest) -> StrategyPlanResponse:
     )
 
     return StrategyPlanResponse(
+        disclaimer=STRATEGY_PLAN_DISCLAIMER,
         primaryProvider=primary_provider,
         fallbackProviders=fallback_providers,
         asrOnlyProvider=FUN_ASR_PROVIDER,
@@ -77,7 +82,7 @@ def build_live_translate_session(request: StrategyPlanRequest) -> dict[str, obje
         "translation": translation,
     }
     if request.tts_enabled:
-        session["voice"] = "Cherry"
+        session["voice"] = "Tina"
     return {
         "model": "qwen3.5-livetranslate-flash-realtime",
         "event": {"type": "session.update", "session": session},

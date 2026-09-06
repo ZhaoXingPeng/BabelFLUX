@@ -1,16 +1,16 @@
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.services.handoff import DisplayMode, HandoffTokenError, handoff_tokens
 from app.services.report import render_md, render_srt, render_txt
+from app.services.session_history import normalize_session_name, session_history_store
 from app.services.session_store import session_store
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -26,8 +26,6 @@ class GlossaryTermPayload(BaseModel):
 class CreateSessionRequest(BaseModel):
     input_mode: Literal[
         "demo",
-        "upload_video",
-        "upload_audio",
         "url",
         "microphone",
         "browser_audio",
@@ -54,6 +52,7 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
+    ws_token: str = Field(alias="wsToken")
     status: str
 
 
@@ -85,72 +84,73 @@ class ClaimHandoffResponse(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
-class UploadMediaResponse(BaseModel):
-    media_id: str = Field(alias="mediaId")
-    file_name: str = Field(alias="fileName")
-    size_bytes: int = Field(alias="sizeBytes")
+class SessionHistoryListResponse(BaseModel):
+    items: list[dict[str, Any]]
 
 
-def _normalize_source_language(code: str) -> str:
-    # LiveTranslate 的 ASR 需要明确语种；auto 暂以英语兜底（演示素材以英文为主）。
-    return "en" if code in ("auto", "", None) else code
+def _normalize_source_language(code: str | None) -> str:
+    return code or "auto"
 
 
 def _register_session(req: CreateSessionRequest) -> str:
     session_id = str(uuid4())
+    session_name = normalize_session_name(
+        req.session_name,
+        product_mode=req.product_mode,
+        input_mode=req.input_mode,
+        source_label=req.source_file_name or req.source_url or req.source_key,
+    )
     session_store.create(
         session_id,
         source_language=_normalize_source_language(req.source_language),
         target_language=req.target_language or "zh",
         domain=req.domain,
-        session_name=req.session_name,
+        session_name=session_name,
         glossary=[t.model_dump(by_alias=True) for t in req.glossary],
         tts_enabled=req.tts_enabled,
+        product_mode=req.product_mode,
         input_mode=req.input_mode,
         source_label=req.source_file_name or req.source_url or req.source_key,
     )
     record = session_store.get(session_id)
     if record is not None and req.source_url:
         record.source_url = req.source_url
+    if record is not None:
+        session_history_store.upsert_from_record(
+            record,
+            product_mode=req.product_mode,
+            status="created",
+        )
     return session_id
 
 
 @router.post("", response_model=CreateSessionResponse, response_model_by_alias=True)
 def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = _register_session(req)
-    return CreateSessionResponse(sessionId=session_id, status="created")
+    ws_token = handoff_tokens.issue_ws_token(session_id, purpose="session")
+    return CreateSessionResponse(sessionId=session_id, wsToken=ws_token, status="created")
 
 
-@router.post(
-    "/{session_id}/media",
-    response_model=UploadMediaResponse,
-    response_model_by_alias=True,
-)
-async def upload_session_media(
-    session_id: str,
-    file: UploadFile = File(...),
-    kind: str = Form("upload"),
-) -> UploadMediaResponse:
-    record = session_store.get(session_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="session not found")
+@router.get("/history", response_model=SessionHistoryListResponse)
+def list_session_history() -> SessionHistoryListResponse:
+    _refresh_history_from_reports()
+    return SessionHistoryListResponse(items=session_history_store.list())
 
-    suffix = Path(file.filename or "media").suffix or ".bin"
-    media_path = settings.media_dir / f"{session_id}{suffix}"
-    size = 0
-    with media_path.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            out.write(chunk)
-            size += len(chunk)
-    if size == 0:
-        media_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="uploaded file is empty")
 
-    record.media_path = str(media_path)
-    record.source_label = file.filename or media_path.name
-    return UploadMediaResponse(
-        mediaId=media_path.name, fileName=file.filename or media_path.name, sizeBytes=size
-    )
+@router.get("/history/{session_id}")
+def get_session_history(session_id: str) -> JSONResponse:
+    entry = session_history_store.get(session_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="history not found")
+    return JSONResponse(entry)
+
+
+@router.delete("/history/{session_id}")
+def delete_session_history(session_id: str) -> JSONResponse:
+    deleted = session_history_store.delete(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="history not found")
+    return JSONResponse({"deleted": True})
 
 
 @router.get("/{session_id}/report")
@@ -161,7 +161,12 @@ def get_session_report(session_id: str) -> JSONResponse:
         report = _load_report_from_disk(session_id)
         if report is None:
             raise HTTPException(status_code=404, detail="report not ready")
+        if record is not None:
+            session_history_store.upsert_from_record(record, report=report)
+        else:
+            session_history_store.upsert_from_report(report)
         return JSONResponse(report)
+    session_history_store.upsert_from_record(record, report=record.report)
     return JSONResponse(record.report)
 
 
@@ -173,10 +178,14 @@ def download_session_report(session_id: str, format: str = "txt"):
         report = _load_report_from_disk(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not ready")
+    if record is not None:
+        history_entry = session_history_store.upsert_from_record(record, report=report)
+    else:
+        history_entry = session_history_store.upsert_from_report(report)
 
     fmt = format.lower()
     renderers = {"txt": render_txt, "srt": render_srt, "md": render_md}
-    base = report.get("sessionName") or session_id
+    base = (history_entry or {}).get("sessionName") or report.get("sessionName") or session_id
     if fmt == "json":
         import json
 
@@ -227,6 +236,21 @@ def _load_report_from_disk(session_id: str) -> dict[str, Any] | None:
         except (OSError, ValueError):
             continue
     return None
+
+
+def _refresh_history_from_reports() -> None:
+    import json
+
+    for entry in session_history_store.list():
+        report_id = entry.get("reportId")
+        if not report_id:
+            continue
+        path = settings.report_dir / f"{report_id}.json"
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        session_history_store.upsert_from_report(report)
 
 
 @router.post(

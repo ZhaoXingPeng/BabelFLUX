@@ -5,8 +5,6 @@ export type DesktopDisplayMode = "bilingual" | "translation-only" | "floating" |
 export interface CreateSessionPayload {
   inputMode:
     | "demo"
-    | "upload_video"
-    | "upload_audio"
     | "url"
     | "microphone"
     | "browser_audio"
@@ -23,10 +21,12 @@ export interface CreateSessionPayload {
   sourceFileName?: string;
   sourceUrl?: string;
   sourcePermission?: "idle" | "requesting" | "granted" | "denied";
+  ttsEnabled?: boolean;
 }
 
 export interface CreateSessionResponse {
   sessionId: string;
+  wsToken: string;
   status: string;
 }
 
@@ -101,29 +101,6 @@ export async function claimSessionHandoff(token: string): Promise<ClaimHandoffRe
   return response.json();
 }
 
-export interface UploadMediaResponse {
-  mediaId: string;
-  fileName: string;
-  sizeBytes: number;
-}
-
-/** 上传本地媒体字节到会话（upload_video / upload_audio 模式必需，须在 start_session 之前完成）。 */
-export async function uploadSessionMedia(
-  sessionId: string,
-  file: File
-): Promise<UploadMediaResponse> {
-  const body = new FormData();
-  body.append("file", file);
-  const response = await fetch(`${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/media`, {
-    method: "POST",
-    body
-  });
-  if (!response.ok) {
-    throw new Error(`Upload media failed: ${response.status}`);
-  }
-  return response.json();
-}
-
 export type ReportFormat = "txt" | "srt" | "md" | "json";
 
 export interface SessionReportMetrics {
@@ -170,9 +147,35 @@ export interface SessionReport {
   finalRevisions: SessionReportRevision[];
   realtimeRevisions: SessionReportRevision[];
   correctionModel: string | null;
-  correctionStatus?: "completed" | "partial" | "fallback" | "timeout" | "skipped";
+  correctionStatus?: "completed" | "partial" | "fallback" | "timeout" | "skipped" | "pending";
   correctionError?: string;
   correctionElapsedMs?: number;
+}
+
+export interface SessionHistoryEntry {
+  sessionId: string;
+  reportId: string | null;
+  sessionName: string;
+  productMode: string;
+  inputMode: string;
+  sourceLabel: string;
+  domain: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  status: "created" | "running" | "correcting" | "completed" | "fallback" | "failed" | string;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number;
+  segmentCount: number;
+  realtimeRevisionCount: number;
+  finalRevisionCount: number;
+  correctionStatus?: "completed" | "partial" | "fallback" | "timeout" | "skipped" | "pending";
+  updatedAt: string;
+  availableFormats: ReportFormat[];
+}
+
+export interface SessionHistoryListResponse {
+  items: SessionHistoryEntry[];
 }
 
 export async function getSessionReport(sessionId: string): Promise<SessionReport> {
@@ -181,6 +184,24 @@ export async function getSessionReport(sessionId: string): Promise<SessionReport
     throw new Error(`Get report failed: ${response.status}`);
   }
   return response.json();
+}
+
+export async function getSessionHistory(): Promise<SessionHistoryEntry[]> {
+  const response = await fetch(`${API_BASE_URL}/sessions/history`);
+  if (!response.ok) {
+    throw new Error(`Get session history failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as SessionHistoryListResponse;
+  return payload.items;
+}
+
+export async function deleteSessionHistory(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/sessions/history/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    throw new Error(`Delete session history failed: ${response.status}`);
+  }
 }
 
 /** 报告下载直链（浏览器据 Content-Disposition 触发下载，含中文文件名已 RFC 5987 兜底）。 */

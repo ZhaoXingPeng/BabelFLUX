@@ -15,7 +15,11 @@ const emit = defineEmits<{
 const groups = computed(() => [
   {
     label: "本地文件",
-    keys: ["fixture-video", "video-file", "audio-file"]
+    keys: [
+      ...props.sources.filter((source) => source.fixture).map((source) => source.key),
+      "video-file",
+      "audio-file"
+    ]
   },
   {
     label: "网页音频",
