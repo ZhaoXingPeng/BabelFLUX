@@ -55,9 +55,12 @@ class ASGIWebSocketSession:
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
-    async def send_json(self, payload: dict[str, Any]) -> None:
+    async def send_json(self, payload: Any) -> None:
+        await self.send_text(json.dumps(payload, ensure_ascii=False))
+
+    async def send_text(self, text: str) -> None:
         await self._client_to_app.put(
-            {"type": "websocket.receive", "text": json.dumps(payload, ensure_ascii=False)}
+            {"type": "websocket.receive", "text": text}
         )
 
     async def receive_json(self) -> dict[str, Any]:
