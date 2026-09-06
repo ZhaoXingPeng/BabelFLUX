@@ -255,3 +255,10 @@ cd desktop && npm run client:build     # 桌面 release exe，验证 deep link �
 ## 当前状态
 
 BabelFlux / 巴别流 同传已落地为可演示的端到端系统：真实模型链路打通，实时 + 会后双层纠偏可用，多源输入、桌面悬浮窗、会话报告历史与四格式导出齐备。桌面端 deep-link 当前兼容保留 `lingosync://` 协议，便于已注册客户端平滑升级。后续可按需扩展：更细的 VAD 分段、多目标语种、TTS 回放队列优化和更多模型供应商路由。
+
+## 工程规范入口
+
+- 贡献、Issue、gitemoji commit 与 PR 实验记录：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 分层、依赖方向、事件契约与长文件拆分规则：[`docs/standards/architecture.md`](docs/standards/architecture.md)
+- 安全与密钥处理：[`SECURITY.md`](SECURITY.md)
+- 自动质量门禁：[`Quality Gates`](.github/workflows/ci.yml)
