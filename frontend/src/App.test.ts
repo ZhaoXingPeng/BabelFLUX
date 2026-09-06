@@ -387,6 +387,72 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.text()).not.toContain("en → zh");
   });
 
+  it("报告历史支持关键词与状态组合筛选", async () => {
+    mockRuntime.getSessionHistory.mockResolvedValueOnce([
+      {
+        sessionId: "history-tech",
+        reportId: "report-tech",
+        sessionName: "技术分享",
+        productMode: "quick",
+        inputMode: "browser_audio",
+        sourceLabel: "browser_audio",
+        domain: "技术",
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        status: "completed",
+        startedAt: "2026-06-17 10:00:00",
+        endedAt: "2026-06-17 10:02:00",
+        durationMs: 120_000,
+        segmentCount: 4,
+        realtimeRevisionCount: 1,
+        finalRevisionCount: 1,
+        correctionStatus: "completed",
+        updatedAt: "2026-06-17 10:02:00",
+        availableFormats: ["txt", "srt", "md", "json"]
+      },
+      {
+        sessionId: "history-failed",
+        reportId: null,
+        sessionName: "产品例会",
+        productMode: "quick",
+        inputMode: "microphone",
+        sourceLabel: "microphone",
+        domain: "商务",
+        sourceLanguage: "zh",
+        targetLanguage: "en",
+        status: "failed",
+        startedAt: "2026-06-17 09:00:00",
+        endedAt: null,
+        durationMs: 0,
+        segmentCount: 0,
+        realtimeRevisionCount: 0,
+        finalRevisionCount: 0,
+        correctionStatus: "fallback",
+        updatedAt: "2026-06-17 09:00:00",
+        availableFormats: []
+      }
+    ]);
+
+    const wrapper = mountHistory();
+    await flushPromises();
+    expect(wrapper.findAll(".history-row")).toHaveLength(3);
+
+    const search = wrapper.get('[data-testid="history-search"]');
+    await search.setValue("技术");
+    expect(wrapper.findAll(".history-row")).toHaveLength(2);
+    expect(wrapper.text()).toContain("技术分享");
+    expect(wrapper.text()).not.toContain("产品例会");
+
+    await search.setValue("");
+    await wrapper.get('[data-testid="history-status-filter"]').setValue("failed");
+    expect(wrapper.findAll(".history-row")).toHaveLength(2);
+    expect(wrapper.text()).toContain("产品例会");
+    expect(wrapper.text()).not.toContain("技术分享");
+
+    await wrapper.get('[aria-label="清除筛选"]').trigger("click");
+    expect(wrapper.findAll(".history-row")).toHaveLength(3);
+  });
+
   it("首页两个入口默认保持平级状态", () => {
     const wrapper = mountHome();
     const cards = wrapper.findAll(".entry-card");
