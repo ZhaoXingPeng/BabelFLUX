@@ -59,6 +59,7 @@ import {
 import { renderReportClient } from "./reportExport";
 import { reduceLiveSubtitleEvent } from "./sessionEventReducer";
 import { buildTranscriptPairs } from "./transcriptPairs";
+import { buildLocalReport } from "./localReport";
 import { canReconnect, reconnectDelayMs } from "./reconnectPolicy";
 
 let socket: WebSocket | null = null;
@@ -1691,52 +1692,17 @@ export const useSessionStore = defineStore("session", {
 
     /** 本地演示（fixture，无后端）合成一份报告，保证“结束→可看可下载”闭环。 */
     buildLocalReport() {
-      const segs = this.transcriptPairs
-        .filter((pair) => pair.segmentId)
-        .map((pair, index) => ({
-          segmentId: pair.segmentId ?? `local-${index}`,
-          startMs: 0,
-          endMs: 0,
-          timecode: pair.time,
-          sourceText: pair.source,
-          liveTranslation: pair.originalTranslation ?? pair.translation,
-          finalTranslation: pair.translation,
-          revisedRealtime: pair.state === "revised"
-        }));
-      const finalRevisions = this.revisions.map((rev) => ({
-        segmentId: rev.targetSegmentIds[0] ?? "",
-        beforeText: rev.beforeText,
-        afterText: rev.afterText,
-        reason: rev.reason,
-        stage: "实时"
-      }));
-      this.report = {
-        reportId: "",
-        sessionId: this.sessionId ?? "",
-        sessionName: this.quickForm.name || "本地演示报告",
+      this.report = buildLocalReport({
+        sessionId: this.sessionId,
+        sessionName: this.quickForm.name,
         domain: this.quickForm.domain,
         sourceLanguage: this.quickForm.sourceLanguage,
         targetLanguage: this.quickForm.targetLanguage,
         durationMs: this.playbackMs,
-        durationText: formatPlaybackTime(this.playbackMs),
         generatedAt: new Date().toLocaleString(),
-        summary: `本地测试素材演示：共 ${segs.length} 句，含 ${finalRevisions.length} 处自动纠偏。`,
-        qualityNotes: "本地演示报告由前端依据测试素材合成，未经后端大模型完整纠偏。",
-        glossaryHits: [],
-        metrics: {
-          segments: segs.length,
-          realtimeRevisions: finalRevisions.length,
-          finalRevisions: 0,
-          durationText: formatPlaybackTime(this.playbackMs)
-        },
-        segments: segs,
-        finalRevisions,
-        realtimeRevisions: finalRevisions,
-        correctionModel: null,
-        correctionStatus: "skipped",
-        correctionError: "本地演示报告未调用后端会后完整纠偏。",
-        correctionElapsedMs: 0
-      };
+        pairs: this.transcriptPairs,
+        revisions: this.revisions
+      });
       this.reportId = null;
       this.reportLoading = false;
     }
