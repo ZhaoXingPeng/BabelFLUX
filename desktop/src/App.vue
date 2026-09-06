@@ -18,6 +18,7 @@ import { getLaunchDeepLink, listenForDeepLinks, parseLaunchParams, type LaunchPa
 import { loadOverlaySettings, saveOverlaySettings, type OverlaySettings } from "./localSettings";
 import { startNativeSystemAudioCapture } from "./nativeAudioCapture";
 import { registerUnlockShortcut, setOverlayLocked } from "./overlayWindow";
+import { reduceDesktopCaptionEvent } from "@frontend/stores/desktopCaptionTimeline";
 
 const settings = ref<OverlaySettings>(loadOverlaySettings());
 // Older builds used the pin action as a click-through lock, which left users
@@ -55,6 +56,7 @@ const activeSessionName = ref("");
 const reportId = ref<string | null>(null);
 const closeConfirmOpen = ref(false);
 const closeConfirmBusy = ref(false);
+let captionStartMs = -1;
 
 const SOURCE_OPTIONS: { value: CaptureSourceKind; label: string }[] = [
   { value: "system_audio", label: "Windows 系统音频" },
@@ -126,15 +128,18 @@ function applyStandaloneLaunchParams(params: LaunchParams) {
   closeConfirmOpen.value = false;
   closeConfirmBusy.value = false;
   activeSessionName.value = "";
+  pair.value = {
+    time: "00:00",
+    source: "Waiting for audio…",
+    translation: "选择音源后开始悬浮同传。",
+    state: "partial",
+    isActive: true
+  };
+  captionStartMs = -1;
   status.value = { status: "listening", lagMs: 0, message: "等待音源" };
   if (params.source && launchSourceMap[params.source]) {
     selectedSource.value = launchSourceMap[params.source];
   }
-}
-
-function formatTime(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function wait(ms: number) {
@@ -185,37 +190,17 @@ function applyEvent(event: ServerEvent) {
     }
     return;
   }
-  if (event.type === "transcript_segment") {
-    pair.value = {
-      ...pair.value,
-      segmentId: event.segment.segmentId,
-      source: event.segment.text,
-      time: formatTime(event.segment.startMs),
-      state: event.segment.status,
-      isActive: true
-    };
-    return;
-  }
-  if (event.type === "translation_segment") {
-    pair.value = {
-      ...pair.value,
-      segmentId: event.segment.segmentId,
-      translation: event.segment.text,
-      time: formatTime(event.segment.startMs),
-      state: event.segment.status,
-      isActive: true
-    };
-    return;
-  }
-  if (event.type === "revision_event") {
-    pair.value = {
-      ...pair.value,
-      translation: event.revision.afterText,
-      state: "revised",
-      originalTranslation: event.revision.beforeText,
-      revisionReason: event.revision.reason,
-      isActive: true
-    };
+  if (
+    event.type === "transcript_segment" ||
+    event.type === "translation_segment" ||
+    event.type === "revision_event"
+  ) {
+    const reduced = reduceDesktopCaptionEvent(
+      { pair: pair.value, lastStartMs: captionStartMs },
+      event
+    );
+    pair.value = reduced.pair;
+    captionStartMs = reduced.lastStartMs;
     return;
   }
   if (event.type === "session_report") {
@@ -251,6 +236,14 @@ async function startFromLaunchParams(params: LaunchParams) {
     closeConfirmOpen.value = false;
     closeConfirmBusy.value = false;
     reportId.value = null;
+    pair.value = {
+      time: "00:00",
+      source: "Waiting for audio…",
+      translation: "选择音源后开始悬浮同传。",
+      state: "partial",
+      isActive: true
+    };
+    captionStartMs = -1;
     socket?.close();
     socket = connectDesktopSession(claim.wsUrl, applyEvent, claim.wsToken);
   } catch (error) {
@@ -323,6 +316,14 @@ async function startStandalone() {
   starting.value = true;
   errorMessage.value = "";
   captureStarted = false;
+  captionStartMs = -1;
+  pair.value = {
+    time: "00:00",
+    source: "Waiting for audio…",
+    translation: "选择音源后开始悬浮同传。",
+    state: "partial",
+    isActive: true
+  };
   const kind = selectedSource.value;
   const sessionName = floatingSessionName(kind);
   try {
