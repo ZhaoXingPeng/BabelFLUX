@@ -1008,6 +1008,42 @@ def test_revision_parser_filters_low_confidence_and_unchanged() -> None:
     assert out[0]["beforeText"] == "旧译文"
 
 
+@pytest.mark.asyncio
+async def test_realtime_revision_is_idempotent_under_overlapping_tasks() -> None:
+    record = SessionRecord(
+        session_id="revision-idempotent", source_language="en", target_language="zh"
+    )
+    segment = record.get_or_create_segment("s1", 1)
+    segment.source_text = "The token is invalid."
+    segment.translation_text = "令牌无效。"
+    segment.status = "final"
+    events: list[dict] = []
+
+    async def emit(event: dict) -> None:
+        events.append(event)
+
+    pipeline = InterpretationPipeline(settings=settings, record=record, emit=emit)
+    revision = {
+        "segmentId": "s1",
+        "beforeText": "令牌无效。",
+        "afterText": "令牌已失效。",
+        "reason": "术语统一",
+        "confidence": 0.95,
+    }
+
+    await asyncio.gather(pipeline._apply_revision(revision), pipeline._apply_revision(revision))
+
+    assert segment.translation_text == "令牌已失效。"
+    assert segment.status == "revised"
+    assert len(record.revisions) == 1
+    assert [event["type"] for event in events] == ["translation_segment", "revision_event"]
+
+    stale_revision = {**revision, "afterText": "过期结果", "beforeText": "令牌无效。"}
+    await pipeline._apply_revision(stale_revision)
+    assert segment.translation_text == "令牌已失效。"
+    assert len(record.revisions) == 1
+
+
 def _sample_report() -> dict:
     return {
         "reportId": "r1",
