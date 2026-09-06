@@ -1,0 +1,33 @@
+name: Architecture change
+description: 提议跨模块重构、协议或数据流变化
+title: "♻️ refactor: "
+labels: [architecture]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景与约束
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: 当前边界与问题
+      description: 指出模块、依赖方向、性能或可测试性问题。
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: 分阶段方案
+      description: 拆成可独立合并和回滚的小步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: 验证与回滚
+      description: 行为测试、性能基线、迁移和回滚方式。
+    validations:
+      required: true
+
