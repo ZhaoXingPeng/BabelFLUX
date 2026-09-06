@@ -136,6 +136,7 @@ export interface SessionReport {
   domain: string;
   sourceLanguage: string;
   targetLanguage: string;
+  modelProfile?: string;
   durationMs: number;
   durationText: string;
   generatedAt: string;
@@ -160,6 +161,7 @@ export interface SessionHistoryEntry {
   inputMode: string;
   sourceLabel: string;
   domain: string;
+  modelProfile?: string;
   sourceLanguage: string;
   targetLanguage: string;
   status: "created" | "running" | "correcting" | "completed" | "fallback" | "failed" | string;

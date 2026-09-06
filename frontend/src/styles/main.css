@@ -2066,7 +2066,7 @@ a:focus-visible {
 
 .history-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.35fr) minmax(120px, 0.75fr) 86px 120px 70px 88px minmax(260px, auto);
+  grid-template-columns: minmax(240px, 1.35fr) minmax(120px, 0.75fr) 86px 110px 120px 70px 88px minmax(260px, auto);
   gap: 12px;
   align-items: center;
   min-width: 1080px;

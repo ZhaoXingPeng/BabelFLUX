@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     live_translate_asr_model: str = "qwen3-asr-flash-realtime"
     realtime_revision_model: str = "qwen-flash"
     final_correction_model: str = "qwen-plus"
+    # User-facing model profiles resolve to these adapter-supported model names.
+    fast_realtime_revision_model: str = "qwen-flash"
+    fast_final_correction_model: str = "qwen-flash"
+    accurate_realtime_revision_model: str = "qwen-plus"
+    accurate_final_correction_model: str = "qwen-plus"
+    cost_realtime_revision_model: str = "qwen-flash"
+    cost_final_correction_model: str = "qwen-flash"
     final_correction_timeout_seconds: float = 120.0
     tts_model: str = "qwen3-tts-flash-realtime"
     tts_voice: str = "Tina"

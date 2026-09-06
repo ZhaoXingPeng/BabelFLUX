@@ -170,6 +170,7 @@ onMounted(loadHistory);
           <span>会话</span>
           <span>来源</span>
           <span>领域</span>
+          <span>模型策略</span>
           <span>语种</span>
           <span>时长</span>
           <span>状态</span>
@@ -182,6 +183,7 @@ onMounted(loadHistory);
           </div>
           <span>{{ sourceLabel(entry) }}</span>
           <span>{{ entry.domain }}</span>
+          <span>{{ entry.modelProfile || "智能默认" }}</span>
           <span>{{ languagePairLabel(entry) }}</span>
           <span>{{ formatDuration(entry.durationMs) }}</span>
           <span :class="['history-status', statusTone(entry)]">{{ statusLabel(entry) }}</span>

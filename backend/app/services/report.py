@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
+from app.services.model_selection import select_model_profile
 from app.services.providers.dashscope import DashScopeClient
 from app.services.revision import domain_focus
 from app.services.session_store import SessionRecord
@@ -192,6 +193,7 @@ async def generate_session_report(
         "inputMode": record.input_mode,
         "sourceLabel": record.source_label or record.source_url or record.input_mode,
         "domain": record.domain,
+        "modelProfile": record.model_profile,
         "sourceLanguage": record.source_language,
         "targetLanguage": record.target_language,
         "durationMs": duration_ms,
@@ -209,7 +211,11 @@ async def generate_session_report(
         "segments": report_segments,
         "finalRevisions": final_revisions,
         "realtimeRevisions": realtime_revisions,
-        "correctionModel": settings.final_correction_model if llm_out else None,
+        "correctionModel": (
+            select_model_profile(record.model_profile, settings).final_correction_model
+            if llm_out
+            else None
+        ),
         "correctionStatus": correction_status,
         "correctionError": correction_error,
         "correctionElapsedMs": correction_elapsed_ms,
@@ -234,7 +240,7 @@ async def _call_correction_llm(
     ]
     user = "整场句子如下：\n" + "\n".join(lines)
     result = await client.generate(
-        model=settings.final_correction_model,
+        model=select_model_profile(record.model_profile, settings).final_correction_model,
         endpoint="text",
         messages=[
             {"role": "system", "content": system},

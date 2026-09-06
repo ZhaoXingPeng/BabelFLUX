@@ -21,6 +21,7 @@ class HistoryEntry:
     inputMode: str = "demo"
     sourceLabel: str = ""
     domain: str = "通用"
+    modelProfile: str = "智能默认"
     sourceLanguage: str = "auto"
     targetLanguage: str = "zh"
     status: str = "created"
@@ -208,6 +209,7 @@ class SessionHistoryStore:
                     inputMode=record.input_mode,
                     sourceLabel=source_label,
                     domain=record.domain,
+                    modelProfile=record.model_profile,
                     sourceLanguage=record.source_language,
                     targetLanguage=record.target_language,
                     status=status or _history_status(correction_status, record.status),
@@ -272,6 +274,11 @@ class SessionHistoryStore:
                     "inputMode": input_mode,
                     "sourceLabel": source_label,
                     "domain": report.get("domain") or existing.get("domain") or "通用",
+                    "modelProfile": (
+                        report.get("modelProfile")
+                        or existing.get("modelProfile")
+                        or "智能默认"
+                    ),
                     "sourceLanguage": (
                         report.get("sourceLanguage")
                         or existing.get("sourceLanguage")

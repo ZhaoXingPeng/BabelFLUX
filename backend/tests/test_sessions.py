@@ -55,6 +55,9 @@ async def test_create_session_accepts_configured_frontend_payload() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "created"
+    record = session_store.get(response.json()["sessionId"])
+    assert record is not None
+    assert record.model_profile == "高准确"
 
 
 @pytest.mark.asyncio

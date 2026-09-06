@@ -78,7 +78,7 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 
 ### 界面 03 模型策略
 
-同传设置里的 `03 模型策略` 当前是产品层选项，会随会话 payload 记录为 `modelProfile`，但尚未接入真实 provider 路由或自动换模。真实管线目前按后端环境变量固定选择：实时链路使用 `qwen3.5-livetranslate-flash-realtime` + `qwen3-asr-flash-realtime`；在线纠偏使用 `qwen-flash` 的近 4 句窗口；会后完整纠偏使用 `qwen-plus`。`智能默认`、`快速低延迟`、`高准确`、`成本优先`、`指定供应商` 仍是 UI 占位，`gummy` / `fun_asr` 等 provider 回退未实现。
+同传设置里的 `03 模型策略` 会随会话 payload 写入 `modelProfile`，并由后端的 `model_selection.py` 解析为真实纠偏模型：`智能默认` 和 `指定供应商` 使用基础环境配置，`快速低延迟` 使用 `FAST_*` 配置，`高准确` 使用 `ACCURATE_*` 配置，`成本优先` 使用 `COST_*` 配置。实时识别/翻译仍统一使用已验证的 LiveTranslate provider；策略只切换当前已支持的纠偏模型，不会假装启用尚未接入的 gummy/fun_asr 回退。会话报告和报告历史会保留实际选择的策略，便于复盘成本与质量。
 
 ### 专业领域
 
