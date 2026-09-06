@@ -25,6 +25,8 @@ https://www.bilibili.com/video/BV1cjEh6BEyu/
 
 ![BabelFlux / 巴别流 同传仓库主图](docs/design/babelflux-logo.png)
 
+![实时双语同传工作台视觉封面](docs/design/babelflux-cover-v2.webp)
+
 > BabelFlux / 巴别流 同传把英语等外语的**单向音频流**实时翻译成中文，以**双语字幕 / 语音**呈现，并能在传译过程中**自动纠正**已经输出的识别/翻译错误。面向演讲、技术分享、国际会议与网课等「跟不上、听不懂、来不及记」的场景。
 >
 > 黑客松选题二的完整实现：BabelFlux Web 工作台 + 巴别流 同传桌面悬浮窗 + FastAPI 后端 + 阿里云百炼真实模型链路。
