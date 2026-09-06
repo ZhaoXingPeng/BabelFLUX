@@ -61,6 +61,7 @@ import { reduceLiveSubtitleEvent } from "./sessionEventReducer";
 import { buildTranscriptPairs } from "./transcriptPairs";
 import { buildLocalReport } from "./localReport";
 import { canReconnect, reconnectDelayMs } from "./reconnectPolicy";
+import { createOutputLatencyTracker } from "./outputLatency";
 
 let socket: WebSocket | null = null;
 let socketReconnectTimer: number | null = null;
@@ -85,9 +86,12 @@ let ttsPlayback = createTtsPlayback({
 });
 let lastFixtureSpeechKey: string | null = null;
 const queuedFixtureSpeechKeys = new Set<string>();
-let estimatedOutputLatencyMs = 1000;
-const recentOutputLatencies: number[] = [];
-const sampledOutputLatencySegmentIds = new Set<string>();
+const outputLatencyTracker = createOutputLatencyTracker({
+  fallbackMs: FIXTURE_SUBTITLE_LATENCY_MS,
+  minMs: 250,
+  maxMs: 6000,
+  sampleSize: 8
+});
 
 function revokeLocalPreview(mode: ProductMode) {
   const url = localPreviewUrls[mode];
@@ -133,9 +137,6 @@ const DESKTOP_LAUNCH_SUCCESS_VISIBLE_MS = 3500;
 const DEFAULT_SESSION_NAME_PATTERN = /^同传_\d{8}_\d{4}$/;
 // 本地测试视频字幕的「同传产出延迟」：音频说到某句后约 1s，右侧才产出该句字幕，贴近低延迟同传节奏。
 const SUBTITLE_LATENCY_MS = FIXTURE_SUBTITLE_LATENCY_MS;
-const MIN_OUTPUT_LATENCY_MS = 250;
-const MAX_OUTPUT_LATENCY_MS = 6000;
-const OUTPUT_LATENCY_SAMPLE_SIZE = 8;
 const ACTIVE_PENDING_TRANSLATION_HOLD_MS = 2600;
 const REPORT_READY_TIMEOUT_MS = 150_000;
 const REPORT_POLL_INTERVAL_MS = 1_000;
@@ -468,25 +469,12 @@ function sendAudioChunk(chunk: ArrayBuffer) {
   socket.send(chunk);
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) return SUBTITLE_LATENCY_MS;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
-
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function recordOutputLatency(segment: SubtitleSegment, playbackMs: number) {
-  if (sampledOutputLatencySegmentIds.has(segment.segmentId)) return;
-  if (playbackMs <= 0 || segment.startMs < 0) return;
-  const latency = playbackMs - segment.startMs;
-  if (latency < MIN_OUTPUT_LATENCY_MS || latency > MAX_OUTPUT_LATENCY_MS) return;
-  sampledOutputLatencySegmentIds.add(segment.segmentId);
-  recentOutputLatencies.push(latency);
-  while (recentOutputLatencies.length > OUTPUT_LATENCY_SAMPLE_SIZE) recentOutputLatencies.shift();
-  estimatedOutputLatencyMs = median(recentOutputLatencies);
+  outputLatencyTracker.record(segment.segmentId, segment.startMs, playbackMs);
 }
 
 export const useSessionStore = defineStore("session", {
@@ -1130,9 +1118,7 @@ export const useSessionStore = defineStore("session", {
       pendingMediaElementCapture = false;
       pendingMediaReadyState = null;
       stopBoundMediaElement();
-      estimatedOutputLatencyMs = SUBTITLE_LATENCY_MS;
-      recentOutputLatencies.length = 0;
-      sampledOutputLatencySegmentIds.clear();
+      outputLatencyTracker.reset();
       this.sessionId = null;
       this.status = "idle";
       this.wsConnected = false;
@@ -1270,7 +1256,7 @@ export const useSessionStore = defineStore("session", {
         this.sourceSegments,
         this.translationSegments,
         currentPlaybackMs,
-        estimatedOutputLatencyMs
+        outputLatencyTracker.estimateMs
       );
       const nextActiveId = candidateId;
       if (
@@ -1281,7 +1267,7 @@ export const useSessionStore = defineStore("session", {
           nextActiveId,
           currentPlaybackMs,
           allowBackward,
-          estimatedOutputLatencyMs,
+          outputLatencyTracker.estimateMs,
           ACTIVE_PENDING_TRANSLATION_HOLD_MS
         )
       ) {
@@ -1467,7 +1453,7 @@ export const useSessionStore = defineStore("session", {
           },
           event,
           {
-            outputLatencyMs: estimatedOutputLatencyMs,
+            outputLatencyMs: outputLatencyTracker.estimateMs,
             pendingTranslationHoldMs: ACTIVE_PENDING_TRANSLATION_HOLD_MS,
             updateActiveSegment: !isFixtureSession(this.sessionId)
           }
