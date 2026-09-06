@@ -20,7 +20,6 @@ import {
 import { createTtsPlayback } from "../composables/useTtsPlayback";
 import type {
   RevisionEvent,
-  SegmentStatus,
   ServerEvent,
   SessionStatus,
   SourceSyncState,
@@ -42,6 +41,7 @@ import type {
 import { buildSessionPayload, toLanguageCode } from "./sessionPayload";
 import {
   activeSegmentForPlayback,
+  applyRevisionToSegments,
   shouldKeepCurrentActiveSegment,
   upsertSegment
 } from "./sessionTimeline";
@@ -1467,23 +1467,9 @@ export const useSessionStore = defineStore("session", {
     },
 
     markRevised(revision: RevisionEvent) {
-      const updateStatus = (segment: SubtitleSegment): SubtitleSegment =>
-        revision.targetSegmentIds.includes(segment.segmentId)
-          ? { ...segment, status: "revised" as SegmentStatus }
-          : segment;
-
-      this.sourceSegments = this.sourceSegments.map(updateStatus);
-      this.translationSegments = this.translationSegments.map((segment) =>
-        revision.targetSegmentIds.includes(segment.segmentId)
-          ? {
-              ...segment,
-              text: revision.afterText,
-              status: "revised" as SegmentStatus,
-              originalText: revision.beforeText,
-              revisionReason: revision.reason
-            }
-          : segment
-      );
+      const updated = applyRevisionToSegments(this.sourceSegments, this.translationSegments, revision);
+      this.sourceSegments = updated.sourceSegments;
+      this.translationSegments = updated.translationSegments;
     },
 
     async waitForReportReady(mode: ProductMode, requestId: number) {

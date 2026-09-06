@@ -1,4 +1,4 @@
-import type { SubtitleSegment } from "../types/events";
+import type { RevisionEvent, SubtitleSegment } from "../types/events";
 
 export interface TimelineSegment {
   segmentId: string;
@@ -36,6 +36,32 @@ export function upsertSegment(items: SubtitleSegment[], segment: SubtitleSegment
   const index = items.findIndex((item) => item.segmentId === segment.segmentId);
   if (index === -1) return [...items, segment];
   return items.map((item, itemIndex) => (itemIndex === index ? mergeSegmentUpdate(item, segment) : item));
+}
+
+export function applyRevisionToSegments(
+  sourceSegments: SubtitleSegment[],
+  translationSegments: SubtitleSegment[],
+  revision: RevisionEvent
+): { sourceSegments: SubtitleSegment[]; translationSegments: SubtitleSegment[] } {
+  const targets = new Set(revision.targetSegmentIds);
+  return {
+    sourceSegments: sourceSegments.map(
+      (segment): SubtitleSegment =>
+        targets.has(segment.segmentId) ? { ...segment, status: "revised" } : segment
+    ),
+    translationSegments: translationSegments.map(
+      (segment): SubtitleSegment =>
+        targets.has(segment.segmentId)
+          ? {
+              ...segment,
+              text: revision.afterText,
+              status: "revised",
+              originalText: revision.beforeText,
+              revisionReason: revision.reason
+            }
+          : segment
+    )
+  };
 }
 
 export function combinedTimeline(

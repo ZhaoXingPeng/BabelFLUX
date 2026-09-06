@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SubtitleSegment } from "../types/events";
 import {
   activeSegmentForPlayback,
+  applyRevisionToSegments,
   mergeSegmentUpdate,
   shouldKeepCurrentActiveSegment,
   upsertSegment
@@ -30,6 +31,49 @@ describe("session timeline", () => {
       { ...first, text: "updated" },
       second
     ]);
+  });
+
+  it("applies a revision to every target while preserving unrelated segments", () => {
+    const source = [segment("a", 0, 1000), segment("b", 1000, 2000)];
+    const translation = [segment("a", 0, 1000, "old a"), segment("b", 1000, 2000, "old b")];
+    const revision = {
+      revisionId: "r1",
+      targetSegmentIds: ["a", "b"],
+      beforeText: "old",
+      afterText: "new",
+      reason: "术语统一",
+      confidence: 0.9
+    };
+
+    const updated = applyRevisionToSegments(source, translation, revision);
+
+    expect(updated.sourceSegments.map((item) => item.status)).toEqual(["revised", "revised"]);
+    expect(updated.translationSegments[0]).toMatchObject({
+      text: "new",
+      status: "revised",
+      originalText: "old",
+      revisionReason: "术语统一"
+    });
+    expect(updated.sourceSegments).not.toBe(source);
+    expect(updated.translationSegments).not.toBe(translation);
+  });
+
+  it("leaves all segments untouched when the revision has no matching target", () => {
+    const source = [segment("a", 0, 1000)];
+    const translation = [segment("a", 0, 1000, "stable")];
+    const revision = {
+      revisionId: "r2",
+      targetSegmentIds: ["missing"],
+      beforeText: "old",
+      afterText: "new",
+      reason: "不适用",
+      confidence: 0.1
+    };
+
+    expect(applyRevisionToSegments(source, translation, revision)).toEqual({
+      sourceSegments: source,
+      translationSegments: translation
+    });
   });
 
   it("keeps a pending current segment during output latency hold", () => {
