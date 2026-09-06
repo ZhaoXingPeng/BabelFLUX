@@ -141,11 +141,15 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
             if not text:
                 continue
             try:
-                payload = json.loads(text)
+                payload, error_message = _parse_client_payload(text)
             except json.JSONDecodeError:
                 await emit({"type": "error", "message": "Invalid JSON message"})
                 continue
+            if error_message:
+                await emit({"type": "error", "message": error_message})
+                continue
 
+            assert payload is not None
             mtype = payload.get("type")
             if mtype == "start_session":
                 if state["run_task"] is None:
@@ -226,10 +230,17 @@ async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
             text = message.get("text")
             if not text:
                 continue
-            with suppress(json.JSONDecodeError):
-                payload = json.loads(text)
-                if payload.get("type") == "stop_session":
-                    break
+            try:
+                payload, error_message = _parse_client_payload(text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON message"})
+                continue
+            if error_message:
+                await websocket.send_json({"type": "error", "message": error_message})
+                continue
+            assert payload is not None
+            if payload.get("type") == "stop_session":
+                break
     except WebSocketDisconnect:
         pass
     finally:
@@ -358,6 +369,13 @@ def _put_pcm_end(queue: asyncio.Queue[bytes | None]) -> None:
         except asyncio.QueueEmpty:
             break
     queue.put_nowait(None)
+
+
+def _parse_client_payload(text: str) -> tuple[dict[str, Any] | None, str | None]:
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        return None, "客户端消息必须是 JSON 对象"
+    return payload, None
 
 
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:

@@ -320,6 +320,29 @@ async def test_mock_websocket_pause_and_resume() -> None:
         assert resume_event["state"]["status"] == "syncing"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [["pause_session"], "pause_session", 42, None])
+async def test_websocket_rejects_non_object_json_without_closing(payload: object) -> None:
+    async with asgi_http_client() as client:
+        created = (await client.post("/api/sessions", json={"inputMode": "demo"})).json()
+
+    async with ASGIWebSocketSession(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
+        await websocket.receive_json()
+        await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+
+        assert await websocket.receive_json() == {
+            "type": "error",
+            "message": "客户端消息必须是 JSON 对象",
+        }
+
+        await websocket.send_json({"type": "pause_session"})
+        pause_event = await websocket.receive_json()
+        assert pause_event["type"] == "source_sync_state"
+        assert pause_event["state"]["status"] == "missing"
+
+
 def test_pcm_queue_drops_oldest_frame_when_full() -> None:
     queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=2)
 
