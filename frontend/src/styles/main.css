@@ -1476,6 +1476,77 @@ a:focus-visible {
   accent-color: var(--accent);
 }
 
+.glossary-editor {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid rgba(47, 93, 80, 0.16);
+  padding-top: 10px;
+}
+
+.glossary-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.glossary-editor-header .field-hint {
+  display: inline-block;
+  margin: 0 0 0 8px;
+}
+
+.glossary-editor-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.glossary-editor-form .icon-button,
+.glossary-editor-list .icon-button {
+  width: 32px;
+  min-height: 32px;
+}
+
+.glossary-editor-error {
+  margin: 0;
+  color: #a13d3d;
+  font-size: 11px;
+}
+
+.glossary-editor-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glossary-editor-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid rgba(47, 93, 80, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.64);
+  padding: 5px 6px 5px 9px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.glossary-editor-list li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glossary-editor-list b {
+  color: var(--accent);
+  font-weight: 800;
+}
+
 .field-hint,
 .source-select > small {
   display: block;

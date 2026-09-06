@@ -20,6 +20,11 @@ export interface SourceOption {
   fixture?: boolean;
 }
 
+export interface GlossaryTerm {
+  sourceTerm: string;
+  targetTerm: string;
+}
+
 export interface SourceInputState {
   fileName: string;
   url: string;
@@ -56,6 +61,7 @@ export interface QuickFormState {
   modelProfile: string;
   source: string;
   ttsEnabled: boolean;
+  glossary: GlossaryTerm[];
 }
 
 export interface FloatingFormState {

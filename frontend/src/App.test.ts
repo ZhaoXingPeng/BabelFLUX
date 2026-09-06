@@ -908,6 +908,29 @@ describe("同传工作台 mock 流程", () => {
     expect(mockRuntime.audioGain.gain.value).toBe(0);
   });
 
+  it("sends configured glossary terms with a Web session", async () => {
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "glossary-session",
+      wsToken: "w_glossary",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.quickForm.source = "url";
+    store.quickInput.url = "https://example.com/demo.mp4";
+    store.quickForm.glossary = [{ sourceTerm: "latency", targetTerm: "延迟" }];
+
+    await store.startMode("quick");
+    await flushPromises();
+
+    expect(mockRuntime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputMode: "url",
+        glossary: [{ sourceTerm: "latency", targetTerm: "延迟" }]
+      })
+    );
+  });
+
   it("uses browser speech synthesis queue for local demo TTS and mutes original media", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();
