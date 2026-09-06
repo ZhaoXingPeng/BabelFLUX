@@ -156,12 +156,19 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                     _apply_overrides(record, payload)
                     state["run_task"] = asyncio.create_task(run_and_finalize())
             elif mtype == "media_clock":
+                playback_ms = _parse_clock_ms(payload.get("playbackMs"))
+                sent_audio_ms = _parse_clock_ms(payload.get("sentAudioMs"))
+                if playback_ms is None or sent_audio_ms is None:
+                    await emit(
+                        {
+                            "type": "error",
+                            "message": "media_clock 的 playbackMs 和 sentAudioMs 必须是非负整数",
+                        }
+                    )
+                    continue
                 pipeline = state["pipeline"]
                 if pipeline is not None:
-                    pipeline.update_client_clock(
-                        int(payload.get("playbackMs") or 0),
-                        int(payload.get("sentAudioMs") or 0),
-                    )
+                    pipeline.update_client_clock(playback_ms, sent_audio_ms)
             elif mtype == "audio_chunk_end" or mtype == "audio_end":
                 if state["pcm_queue"] is not None:
                     _put_pcm_end(state["pcm_queue"])
@@ -376,6 +383,14 @@ def _parse_client_payload(text: str) -> tuple[dict[str, Any] | None, str | None]
     if not isinstance(payload, dict):
         return None, "客户端消息必须是 JSON 对象"
     return payload, None
+
+
+def _parse_clock_ms(value: Any) -> int | None:
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _apply_overrides(record: Any, payload: dict[str, Any]) -> None:

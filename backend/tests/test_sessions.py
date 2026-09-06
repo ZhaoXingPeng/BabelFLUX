@@ -4,7 +4,7 @@ import json
 import pytest
 from asgi_test_client import ASGIWebSocketSession, asgi_http_client
 
-from app.api.ws import _put_pcm_end, _put_pcm_frame
+from app.api.ws import _parse_clock_ms, _put_pcm_end, _put_pcm_frame
 from app.core.config import settings
 from app.models.events import RevisionEvent, SourceSyncState, SubtitleSegment
 from app.services.handoff import handoff_tokens
@@ -341,6 +341,50 @@ async def test_websocket_rejects_non_object_json_without_closing(payload: object
         pause_event = await websocket.receive_json()
         assert pause_event["type"] == "source_sync_state"
         assert pause_event["state"]["status"] == "missing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "clock",
+    [
+        {"playbackMs": "100", "sentAudioMs": 0},
+        {"playbackMs": {"value": 100}, "sentAudioMs": 0},
+        {"playbackMs": -1, "sentAudioMs": 0},
+        {"playbackMs": 100, "sentAudioMs": True},
+    ],
+)
+async def test_websocket_rejects_invalid_media_clock_without_closing(
+    clock: dict[str, object],
+) -> None:
+    async with asgi_http_client() as client:
+        created = (await client.post("/api/sessions", json={"inputMode": "demo"})).json()
+
+    async with ASGIWebSocketSession(
+        f"/api/ws/sessions/{created['sessionId']}?token={created['wsToken']}"
+    ) as websocket:
+        await websocket.receive_json()
+        await websocket.send_json({"type": "media_clock", **clock})
+
+        assert await websocket.receive_json() == {
+            "type": "error",
+            "message": "media_clock 的 playbackMs 和 sentAudioMs 必须是非负整数",
+        }
+
+        await websocket.send_json({"type": "pause_session"})
+        pause_event = await websocket.receive_json()
+        assert pause_event["type"] == "source_sync_state"
+        assert pause_event["state"]["status"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, 0), (0, 0), (1234, 1234), (True, None), (-1, None), (1.5, None)],
+)
+def test_parse_clock_ms_accepts_only_non_negative_integers(
+    value: object,
+    expected: int | None,
+) -> None:
+    assert _parse_clock_ms(value) == expected
 
 
 def test_pcm_queue_drops_oldest_frame_when_full() -> None:
