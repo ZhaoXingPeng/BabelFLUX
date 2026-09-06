@@ -25,6 +25,11 @@ const emit = defineEmits<{
   close: [];
   cancelClose: [];
   confirmClose: [];
+  updateStyle: [style: string];
+  updatePinned: [pinned: boolean];
+  updateOpacity: [opacity: string];
+  updateSize: [size: string];
+  updateOffsetY: [offsetY: number];
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -50,19 +55,19 @@ const isCompact = computed(() => props.displayMode === "floating" || props.displ
 const showSource = computed(() => !isCompact.value && props.displayMode !== "translation-only" && props.form.style !== "仅译文");
 
 function toggleStyle() {
-  props.form.style = props.form.style === "仅译文" ? "双语字幕" : "仅译文";
+  emit("updateStyle", props.form.style === "仅译文" ? "双语字幕" : "仅译文");
 }
 
 function togglePinned() {
-  props.form.captionPinned = !props.form.captionPinned;
+  emit("updatePinned", !props.form.captionPinned);
 }
 
 function setOpacity(event: Event) {
-  props.form.opacity = `${(event.target as HTMLInputElement).value}%`;
+  emit("updateOpacity", `${(event.target as HTMLInputElement).value}%`);
 }
 
 function setSize(size: string) {
-  props.form.size = size;
+  emit("updateSize", size);
 }
 
 function syncCaptionPosition() {
@@ -86,10 +91,10 @@ function setupDrag() {
       dragging = true;
     },
     onDrag() {
-      props.form.captionOffsetY = this.y;
+      emit("updateOffsetY", this.y);
     },
     onDragEnd() {
-      props.form.captionOffsetY = this.y;
+      emit("updateOffsetY", this.y);
       dragging = false;
       syncCaptionPosition();
     }

@@ -108,6 +108,26 @@ const MAX_AUDIO_SOCKET_BUFFER_BYTES = 32_000;
 
 const shellStyle = computed(() => ({ opacity: settings.value.opacity }));
 
+function updateCaptionStyle(style: string) {
+  settings.value.form.style = style;
+}
+
+function updateCaptionPinned(pinned: boolean) {
+  settings.value.form.captionPinned = pinned;
+}
+
+function updateCaptionOpacity(opacity: string) {
+  settings.value.form.opacity = opacity;
+}
+
+function updateCaptionSize(size: string) {
+  settings.value.form.size = size;
+}
+
+function updateCaptionOffsetY(offsetY: number) {
+  settings.value.form.captionOffsetY = offsetY;
+}
+
 const languageCodeByLabel: Record<string, string> = {
   自动检测: "auto",
   英语: "en",
@@ -672,6 +692,11 @@ onUnmounted(() => {
         @close="requestCaptionClose"
         @cancel-close="cancelCaptionClose"
         @confirm-close="confirmCaptionClose"
+        @update-style="updateCaptionStyle"
+        @update-pinned="updateCaptionPinned"
+        @update-opacity="updateCaptionOpacity"
+        @update-size="updateCaptionSize"
+        @update-offset-y="updateCaptionOffsetY"
       />
       <p v-if="mode === 'handoff'" class="handoff-report-hint">
         本次会话由 Web 端发起，报告请在 Web 端下载
