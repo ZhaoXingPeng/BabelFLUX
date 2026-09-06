@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings
+from app.services import report_rendering
 from app.services.model_selection import select_model_profile
 from app.services.providers.dashscope import DashScopeClient
 from app.services.revision import domain_focus
@@ -58,16 +59,11 @@ def _glossary_block(glossary: list[dict[str, Any]]) -> str:
 
 
 def _fmt_ts(ms: int) -> str:
-    total = max(0, ms) // 1000
-    return f"{total // 60:02d}:{total % 60:02d}"
+    return report_rendering.format_timecode(ms)
 
 
 def _fmt_srt_ts(ms: int) -> str:
-    ms = max(0, ms)
-    h, rem = divmod(ms, 3_600_000)
-    m, rem = divmod(rem, 60_000)
-    s, msec = divmod(rem, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{msec:03d}"
+    return report_rendering.format_srt_timestamp(ms)
 
 
 async def generate_session_report(
@@ -291,99 +287,18 @@ def _loads_json(content: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-# ---------- 渲染 ----------
+# ---------- 渲染兼容入口 ----------
 def _correction_status_text(report: dict[str, Any]) -> str:
-    status = report.get("correctionStatus") or (
-        "completed" if report.get("correctionModel") else "fallback"
-    )
-    elapsed_ms = int(report.get("correctionElapsedMs") or 0)
-    elapsed = f"，耗时 {elapsed_ms / 1000:.1f} 秒" if elapsed_ms > 0 else ""
-    model = report.get("correctionModel")
-    model_text = f"，模型 {model}" if model else ""
-    if status == "completed":
-        return f"已完成{model_text}{elapsed}"
-    if status == "partial":
-        return f"部分完成{model_text}{elapsed}"
-    if status == "timeout":
-        return f"超时降级{elapsed}"
-    if status == "pending":
-        return "基础报告已可下载，全文纠偏生成中"
-    if status == "skipped":
-        return "未执行"
-    return f"降级为实时译文{elapsed}"
+    return report_rendering.correction_status_text(report)
 
 
 def render_txt(report: dict[str, Any]) -> str:
-    lines = [
-        f"# {report['sessionName']}",
-        f"领域：{report['domain']}  |  语言：{report['sourceLanguage']} -> {report['targetLanguage']}"  # noqa: E501
-        f"  |  时长：{report['durationText']}",
-        f"生成时间：{report['generatedAt']}",
-        f"全文纠偏：{_correction_status_text(report)}",
-        "",
-        "【摘要】",
-        report.get("summary", ""),
-        "",
-        "【双语终稿】",
-    ]
-    for seg in report["segments"]:
-        lines.append(f"[{seg['timecode']}] {seg['sourceText']}")
-        lines.append(f"          {seg['finalTranslation']}")
-    revisions = report.get("finalRevisions", [])
-    if revisions:
-        lines += ["", "【会后校正记录】"]
-        for r in revisions:
-            lines.append(f"- {r['beforeText']}  =>  {r['afterText']}  （{r['reason']}）")
-    elif report.get("correctionStatus") == "completed":
-        lines += ["", "【会后校正记录】", "全文纠偏已完成，本场未发现需要改写的译文。"]
-    if report.get("qualityNotes"):
-        lines += ["", "【质量说明】", report["qualityNotes"]]
-    return "\n".join(lines)
+    return report_rendering.render_txt(report)
 
 
 def render_srt(report: dict[str, Any]) -> str:
-    blocks = []
-    for i, seg in enumerate(report["segments"], start=1):
-        start = _fmt_srt_ts(seg["startMs"])
-        end = _fmt_srt_ts(seg["endMs"] if seg["endMs"] > seg["startMs"] else seg["startMs"] + 2000)
-        blocks.append(f"{i}\n{start} --> {end}\n{seg['sourceText']}\n{seg['finalTranslation']}\n")
-    return "\n".join(blocks)
+    return report_rendering.render_srt(report)
 
 
 def render_md(report: dict[str, Any]) -> str:
-    md = [
-        f"# {report['sessionName']}",
-        "",
-        f"- **领域**：{report['domain']}",
-        f"- **语言**：{report['sourceLanguage']} → {report['targetLanguage']}",
-        f"- **时长**：{report['durationText']}",
-        f"- **句数**：{report['metrics']['segments']}  ｜ **实时修正**："
-        f"{report['metrics']['realtimeRevisions']}  ｜ **会后修正**：{report['metrics']['finalRevisions']}",  # noqa: E501
-        f"- **生成时间**：{report['generatedAt']}",
-        f"- **全文纠偏**：{_correction_status_text(report)}",
-        "",
-        "## 摘要",
-        report.get("summary", ""),
-        "",
-        "## 双语终稿",
-        "",
-        "| 时间 | 原文 | 终稿译文 |",
-        "| --- | --- | --- |",
-    ]
-    for seg in report["segments"]:
-        src = seg["sourceText"].replace("|", "\\|")
-        tgt = seg["finalTranslation"].replace("|", "\\|")
-        md.append(f"| {seg['timecode']} | {src} | {tgt} |")
-    revisions = report.get("finalRevisions", [])
-    if revisions:
-        md += ["", "## 会后校正记录", "", "| 原译文 | 校正后 | 原因 |", "| --- | --- | --- |"]
-        for r in revisions:
-            md.append(
-                f"| {r['beforeText'].replace('|', chr(92) + '|')} | "
-                f"{r['afterText'].replace('|', chr(92) + '|')} | {r['reason']} |"
-            )
-    elif report.get("correctionStatus") == "completed":
-        md += ["", "## 会后校正记录", "", "全文纠偏已完成，本场未发现需要改写的译文。"]
-    if report.get("qualityNotes"):
-        md += ["", "## 质量说明", report["qualityNotes"]]
-    return "\n".join(md)
+    return report_rendering.render_md(report)
