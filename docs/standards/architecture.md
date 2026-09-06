@@ -55,6 +55,7 @@ Provider adapters (services/providers/*)
 
 - 事件名称使用 `snake_case`，字段使用 `camelCase`。
 - 服务端可选的 `audio_segment` 事件携带 `segmentId`、`audioBase64` 和 `sampleRate`；Web 与桌面适配器都必须在 `ttsEnabled` 会话中消费该 PCM 音频，并在会话结束时释放播放资源。
+- handoff 事件订阅保持有界队列；发生溢出时优先淘汰最早的 `audio_segment`，字幕、修订和报告等控制面事件优先保留。
 - 新字段默认可选并提供兼容值；删除或改语义必须增加契约版本或迁移策略。
 - 服务端事件必须有前端解析测试；前端发送的命令必须有后端校验测试。
 - 错误事件不得包含密钥、完整请求头、原始音频或用户隐私文本。
