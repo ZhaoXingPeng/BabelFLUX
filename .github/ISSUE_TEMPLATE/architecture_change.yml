@@ -1,5 +1,5 @@
 name: Architecture change
-description: 提议跨模块重构、协议或数据流变化
+description: 提议跨模块重构、协议或数据流变化；Issue 标题和描述请尽量使用中文
 title: "♻️ refactor: "
 labels: [architecture]
 body:
@@ -30,4 +30,3 @@ body:
       description: 行为测试、性能基线、迁移和回滚方式。
     validations:
       required: true
-

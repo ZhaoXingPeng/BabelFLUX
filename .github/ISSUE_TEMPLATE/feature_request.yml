@@ -1,5 +1,5 @@
 name: Feature request
-description: 提议一个可验证的新能力
+description: 提议一个可验证的新能力；Issue 标题和描述请尽量使用中文
 title: "✨ feat: "
 labels: [enhancement]
 body:
@@ -29,4 +29,3 @@ body:
     attributes:
       label: 替代方案与实验
       description: 已尝试的方案、结果和取舍。
-

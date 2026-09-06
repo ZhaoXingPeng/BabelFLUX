@@ -1,5 +1,5 @@
 name: Bug report
-description: 报告可复现的缺陷或回归
+description: 报告可复现的缺陷或回归；Issue 标题和描述请尽量使用中文
 title: "🐛 bug: "
 labels: [bug]
 body:
@@ -39,4 +39,3 @@ body:
     attributes:
       label: 日志或截图
       description: 请先删去 token、Cookie、Authorization 和个人信息。
-
