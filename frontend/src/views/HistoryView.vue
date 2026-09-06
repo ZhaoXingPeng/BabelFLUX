@@ -14,8 +14,43 @@ const router = useRouter();
 const entries = ref<SessionHistoryEntry[]>([]);
 const loading = ref(false);
 const errorMessage = ref("");
+const query = ref("");
+type HistoryStatusFilter = "all" | "created" | "running" | "correcting" | "completed" | "fallback" | "failed";
+const statusFilter = ref<HistoryStatusFilter>("all");
+
+const statusFilters: Array<{ value: HistoryStatusFilter; label: string }> = [
+  { value: "all", label: "全部状态" },
+  { value: "completed", label: "已完成" },
+  { value: "correcting", label: "纠偏中" },
+  { value: "fallback", label: "实时译文" },
+  { value: "failed", label: "失败" },
+  { value: "created", label: "已创建" },
+  { value: "running", label: "进行中" }
+];
 
 const hasEntries = computed(() => entries.value.length > 0);
+
+const filteredEntries = computed(() => {
+  const normalizedQuery = query.value.trim().toLocaleLowerCase();
+  return entries.value.filter((entry) => {
+    if (statusFilter.value !== "all" && entry.status !== statusFilter.value) return false;
+    if (!normalizedQuery) return true;
+    const searchable = [
+      sessionName(entry),
+      sourceLabel(entry),
+      entry.domain,
+      entry.modelProfile ?? "",
+      languagePairLabel(entry),
+      statusLabel(entry)
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    return searchable.includes(normalizedQuery);
+  });
+});
+
+const hasFilteredEntries = computed(() => filteredEntries.value.length > 0);
+const hasActiveFilters = computed(() => Boolean(query.value.trim()) || statusFilter.value !== "all");
 
 const languageLabelByCode: Record<string, string> = {
   auto: "自动检测",
@@ -95,6 +130,11 @@ function statusTone(entry: SessionHistoryEntry): string {
   return "muted";
 }
 
+function clearFilters() {
+  query.value = "";
+  statusFilter.value = "all";
+}
+
 function canDownload(entry: SessionHistoryEntry): boolean {
   return Boolean(entry.reportId) && entry.availableFormats.length > 0;
 }
@@ -165,44 +205,77 @@ onMounted(loadHistory);
       <p v-else-if="errorMessage" class="history-message error">{{ errorMessage }}</p>
       <p v-else-if="!hasEntries" class="history-message">暂无报告历史。结束一次同传后，基础报告会自动出现在这里。</p>
 
-      <div v-else class="history-table">
-        <div class="history-row history-row-head">
-          <span>会话</span>
-          <span>来源</span>
-          <span>领域</span>
-          <span>模型策略</span>
-          <span>语种</span>
-          <span>时长</span>
-          <span>状态</span>
-          <span>下载</span>
+      <div v-else class="history-content">
+        <div class="history-toolbar" aria-label="历史筛选">
+          <label class="history-filter-field">
+            <span>关键词</span>
+            <input
+              v-model="query"
+              data-testid="history-search"
+              type="search"
+              placeholder="搜索会话、来源或领域"
+            />
+          </label>
+          <label class="history-filter-field">
+            <span>状态</span>
+            <select v-model="statusFilter" data-testid="history-status-filter">
+              <option v-for="option in statusFilters" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <button
+            v-if="hasActiveFilters"
+            class="icon-button light history-filter-reset"
+            type="button"
+            aria-label="清除筛选"
+            title="清除筛选"
+            @click="clearFilters"
+          >
+            <Icon name="x" :size="15" />
+          </button>
         </div>
-        <article v-for="entry in entries" :key="entry.sessionId" class="history-row">
-          <div class="history-title-cell">
-            <strong>{{ sessionName(entry) }}</strong>
-            <small>{{ entry.startedAt }} · {{ entry.segmentCount }} 句</small>
+
+        <p v-if="!hasFilteredEntries" class="history-message">没有符合当前筛选条件的会话。</p>
+        <div v-else class="history-table">
+          <div class="history-row history-row-head">
+            <span>会话</span>
+            <span>来源</span>
+            <span>领域</span>
+            <span>模型策略</span>
+            <span>语种</span>
+            <span>时长</span>
+            <span>状态</span>
+            <span>下载</span>
           </div>
-          <span>{{ sourceLabel(entry) }}</span>
-          <span>{{ entry.domain }}</span>
-          <span>{{ entry.modelProfile || "智能默认" }}</span>
-          <span>{{ languagePairLabel(entry) }}</span>
-          <span>{{ formatDuration(entry.durationMs) }}</span>
-          <span :class="['history-status', statusTone(entry)]">{{ statusLabel(entry) }}</span>
-          <div class="history-actions">
-            <button
-              v-for="format in (['txt', 'srt', 'md', 'json'] as ReportFormat[])"
-              :key="format"
-              type="button"
-              :disabled="!canDownload(entry)"
-              :title="`${format.toUpperCase()} 下载`"
-              @click="download(entry, format)"
-            >
-              {{ format.toUpperCase() }}
-            </button>
-            <button type="button" title="删除历史记录" @click="removeEntry(entry)">
-              <Icon name="trash-2" :size="14" />
-            </button>
-          </div>
-        </article>
+          <article v-for="entry in filteredEntries" :key="entry.sessionId" class="history-row">
+            <div class="history-title-cell">
+              <strong>{{ sessionName(entry) }}</strong>
+              <small>{{ entry.startedAt }} · {{ entry.segmentCount }} 句</small>
+            </div>
+            <span>{{ sourceLabel(entry) }}</span>
+            <span>{{ entry.domain }}</span>
+            <span>{{ entry.modelProfile || "智能默认" }}</span>
+            <span>{{ languagePairLabel(entry) }}</span>
+            <span>{{ formatDuration(entry.durationMs) }}</span>
+            <span :class="['history-status', statusTone(entry)]">{{ statusLabel(entry) }}</span>
+            <div class="history-actions">
+              <button
+                v-for="format in (['txt', 'srt', 'md', 'json'] as ReportFormat[])"
+                :key="format"
+                type="button"
+                :disabled="!canDownload(entry)"
+                :title="`${format.toUpperCase()} 下载`"
+                @click="download(entry, format)"
+              >
+                {{ format.toUpperCase() }}
+              </button>
+              <button type="button" title="删除历史记录" @click="removeEntry(entry)">
+                <Icon name="trash-2" :size="14" />
+              </button>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
   </main>

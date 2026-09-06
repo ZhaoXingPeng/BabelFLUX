@@ -2130,6 +2130,46 @@ a:focus-visible {
   color: #e6a68c;
 }
 
+.history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 180px auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.history-filter-field {
+  display: grid;
+  gap: 5px;
+  color: var(--stage-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.history-filter-field input,
+.history-filter-field select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--stage-line);
+  border-radius: 6px;
+  outline: none;
+  background: var(--stage-soft);
+  padding: 7px 9px;
+  color: var(--stage-dst);
+  font: inherit;
+  font-size: 12px;
+}
+
+.history-filter-field input:focus,
+.history-filter-field select:focus {
+  border-color: var(--stage-accent);
+}
+
+.history-filter-reset {
+  width: 34px;
+  min-height: 34px;
+}
+
 .history-table {
   display: grid;
   gap: 8px;
@@ -2317,6 +2357,14 @@ a:focus-visible {
   .settings-two,
   .report-grid {
     grid-template-columns: 1fr;
+  }
+
+  .history-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .history-filter-reset {
+    justify-self: start;
   }
 
   .language-swap {
