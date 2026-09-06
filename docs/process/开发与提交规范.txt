@@ -1,6 +1,8 @@
 开发与提交规范
 版本：v0.1
 
+当前 GitHub 仓库以 [`docs/standards/contribution-workflow.md`](../standards/contribution-workflow.md) 为唯一生效的提交与合并规范。本文件中的 Gitee/浏览器流程属于历史归档，不再作为操作指引。
+
 一、开发节奏
 1. 保持持续提交，不在最后一天一次性导入全部代码。
 2. 每个功能使用独立分支开发，通过 PR 合并。
