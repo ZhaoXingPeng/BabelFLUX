@@ -38,6 +38,13 @@ from app.services.display_text import (
     split_by_regex,
     word_count,
 )
+from app.services.language_policy import (
+    infer_source_language,
+    initial_provider_source_language,
+    opposite_language,
+    should_preflight_language,
+    suggest_language_pair,
+)
 from app.services.media import iter_pcm_frames
 from app.services.model_selection import ModelSelection, select_model_profile
 from app.services.providers.dashscope import (
@@ -310,11 +317,10 @@ class InterpretationPipeline:
 
     # ---------- 内部 ----------
     def _initial_provider_source_language(self) -> str:
-        if self.record.source_language != "auto":
-            return self.record.source_language
-        if self.record.target_language in {"zh", "en"}:
-            return self._opposite_language(self.record.target_language)
-        return "en"
+        return initial_provider_source_language(
+            self.record.source_language,
+            self.record.target_language,
+        )
 
     async def _preflight_media_language(self, source: str) -> None:
         if not self._should_preflight_language():
@@ -359,7 +365,7 @@ class InterpretationPipeline:
         return frames, ended
 
     def _should_preflight_language(self) -> bool:
-        return self.record.source_language == "auto" and self.record.target_language in {"zh", "en"}
+        return should_preflight_language(self.record.source_language, self.record.target_language)
 
     async def _detect_language_from_pcm(self, audio: bytes) -> None:
         if not audio:
@@ -1186,25 +1192,10 @@ class InterpretationPipeline:
         self._language_alignment_checked = True
 
     def _infer_source_language(self, sample: str) -> str | None:
-        latin_words = self._latin_word_count(sample)
-        cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", sample))
-        if self._contains_cjk(sample) and self._contains_latin_word(sample):
-            if self._is_latin_dominant(sample):
-                return "en"
-            if cjk_chars >= 3:
-                return "zh"
-            return None
-        if cjk_chars >= 3:
-            return "zh"
-        if latin_words >= 3:
-            return "en"
-        return None
+        return infer_source_language(sample)
 
     def _suggest_language_pair(self, inferred_source: str) -> tuple[str, str]:
-        target_language = self.record.target_language
-        if target_language == inferred_source and inferred_source in {"zh", "en"}:
-            target_language = self._opposite_language(inferred_source)
-        return inferred_source, target_language
+        return suggest_language_pair(inferred_source, self.record.target_language)
 
     def _lock_language_pair(self, inferred_source: str) -> None:
         source_language, target_language = self._suggest_language_pair(inferred_source)
@@ -1213,7 +1204,7 @@ class InterpretationPipeline:
         self._reviser.update_languages(source_language, target_language)
 
     def _opposite_language(self, language: str) -> str:
-        return "zh" if language == "en" else "en"
+        return opposite_language(language)
 
     def _display_children(self, root: SegmentRecord, count: int) -> list[SegmentRecord]:
         children = self._children_by_root.setdefault(root.segment_id, [root])
