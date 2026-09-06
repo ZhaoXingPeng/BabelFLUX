@@ -2,6 +2,8 @@
 
 感谢参与 BabelFlux。项目采用“先 Issue、后分支、再 PR”的节奏：每个变更都应有可追踪的目标、可复现的验证和清晰的回滚边界。
 
+> 当前生效的完整操作细则见 [`docs/standards/contribution-workflow.md`](docs/standards/contribution-workflow.md)。本文件保留项目级摘要。
+
 ## 工作流
 
 1. 为功能、缺陷或架构调整创建 Issue；紧急安全修复可以先开 PR，再补 Issue。
@@ -78,7 +80,7 @@ Result（结果）：<基线与优化后数据、测试、残余风险>
 
 ## 合并策略
 
-- 默认使用 **rebase and merge**，保留有意义的小 commit 和验证记录。
+- 默认在本地使用 `git merge --no-ff` 合并已审查分支，再通过 SSH 推送 `main`，保留 Issue、PR 和小 commit 的可追踪关系。
 - 只有修复分支噪声 commit 时才使用 squash；squash 前须把 PR 描述中的实验记录整理完整。
 - 禁止直接向 `main` 推送；禁止未经确认的 force push。
 
