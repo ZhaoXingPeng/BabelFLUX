@@ -768,6 +768,134 @@ describe("同传工作台 mock 流程", () => {
     expect(mockRuntime.createSessionSocket).not.toHaveBeenCalled();
   });
 
+  it("WebSocket 意外断开后按退避策略恢复连接并忽略旧连接事件", async () => {
+    vi.useFakeTimers();
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "reconnect-session",
+      wsToken: "w_reconnect",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
+
+    await store.startMode("quick");
+    const first = mockRuntime.sockets[0].socket;
+    const firstHandlers = mockRuntime.handlersBySession.get("reconnect-session")!;
+    firstHandlers.onOpen?.();
+    await nextTick();
+    expect(store.status).toBe("running");
+
+    first.close();
+    expect(store.wsConnected).toBe(false);
+    expect(store.status).toBe("connecting");
+    expect(store.sourceSyncState.status).toBe("missing");
+    expect(mockRuntime.sockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(mockRuntime.sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockRuntime.sockets).toHaveLength(2);
+
+    // A delayed close from the old socket must not overwrite the new connection.
+    firstHandlers.onClose?.();
+    expect(store.status).toBe("connecting");
+
+    mockRuntime.handlersBySession.get("reconnect-session")?.onOpen?.();
+    await nextTick();
+    expect(store.wsConnected).toBe(true);
+    expect(store.status).toBe("running");
+    expect(store.sourceSyncState.status).toBe("recovered");
+  });
+
+  it("暂停中的会话重连后保持暂停并按顺序发送启动与暂停命令", async () => {
+    vi.useFakeTimers();
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "paused-reconnect-session",
+      wsToken: "w_paused-reconnect",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
+
+    await store.startMode("quick");
+    const first = mockRuntime.sockets[0].socket;
+    mockRuntime.handlersBySession.get("paused-reconnect-session")?.onOpen?.();
+    await nextTick();
+    store.pauseMode("quick");
+    expect(store.modeStates.quick).toBe("paused");
+
+    first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = mockRuntime.sockets[1].socket;
+    mockRuntime.handlersBySession.get("paused-reconnect-session")?.onOpen?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.status).toBe("paused");
+    expect(store.modeStates.quick).toBe("paused");
+    expect(second.sent.map((message) => JSON.parse(message).type)).toEqual([
+      "start_session",
+      "pause_session"
+    ]);
+  });
+
+  it("重连耗尽后进入错误状态，并且显式停止会取消待执行的重连", async () => {
+    vi.useFakeTimers();
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "retry-budget-session",
+      wsToken: "w_retry-budget",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
+
+    await store.startMode("quick");
+    mockRuntime.handlersBySession.get("retry-budget-session")?.onOpen?.();
+    await nextTick();
+
+    mockRuntime.sockets[0].socket.close();
+    await vi.advanceTimersByTimeAsync(500);
+    mockRuntime.sockets[1].socket.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    mockRuntime.sockets[2].socket.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    mockRuntime.sockets[3].socket.close();
+
+    expect(mockRuntime.sockets).toHaveLength(4);
+    expect(store.modeStates.quick).toBe("error");
+    expect(store.status).toBe("error");
+    expect(store.errorMessage).toContain("自动重连失败");
+  });
+
+  it("显式停止会取消待执行的重连", async () => {
+    vi.useFakeTimers();
+    mockRuntime.createSession.mockResolvedValueOnce({
+      sessionId: "cancel-reconnect-session",
+      wsToken: "w_cancel-reconnect",
+      status: "created"
+    });
+    mountApp();
+    const store = useSessionStore();
+    store.selectQuickSource(store.quickSources.find((source) => source.key === "browser-tab")!);
+    store.quickInput.permissionState = "granted";
+
+    await store.startMode("quick");
+    mockRuntime.handlersBySession.get("cancel-reconnect-session")?.onOpen?.();
+    await nextTick();
+    mockRuntime.sockets[0].socket.close();
+    expect(store.status).toBe("connecting");
+
+    store.resetMode("quick");
+    expect(store.status).toBe("idle");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockRuntime.sockets).toHaveLength(1);
+  });
+
   it("切换权限类声源会重置已有授权状态", async () => {
     const wrapper = mountApp();
     const store = useSessionStore();

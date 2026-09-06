@@ -59,8 +59,12 @@ import {
 import { renderReportClient } from "./reportExport";
 import { reduceLiveSubtitleEvent } from "./sessionEventReducer";
 import { buildTranscriptPairs } from "./transcriptPairs";
+import { canReconnect, reconnectDelayMs } from "./reconnectPolicy";
 
 let socket: WebSocket | null = null;
+let socketReconnectTimer: number | null = null;
+let socketGeneration = 0;
+let socketReconnectAttempt = 0;
 let desktopLaunchTimer: number | null = null;
 let desktopLaunchDismissTimer: number | null = null;
 let removeDesktopLaunchListeners: (() => void) | null = null;
@@ -106,6 +110,14 @@ function stopBoundMediaElement() {
     // Some test doubles and detached elements do not allow clock mutation.
   }
   mediaElement = null;
+}
+
+function clearSocketReconnect() {
+  if (socketReconnectTimer !== null) {
+    window.clearTimeout(socketReconnectTimer);
+    socketReconnectTimer = null;
+  }
+  socketReconnectAttempt = 0;
 }
 
 const captureKindBySource: Record<string, CaptureSourceKind> = {
@@ -1078,6 +1090,8 @@ export const useSessionStore = defineStore("session", {
     },
 
     stopSession(nextStatus: SessionStatus = "stopped") {
+      socketGeneration += 1;
+      clearSocketReconnect();
       void this.stopCapture();
       ttsPlayback.stop();
       stopFixtureSpeech();
@@ -1315,6 +1329,8 @@ export const useSessionStore = defineStore("session", {
     },
 
     connectSocket(sessionId: string, wsToken: string, mode: ProductMode, requestId: number) {
+      const generation = ++socketGeneration;
+      clearSocketReconnect();
       socket?.close();
       // 判定本次会话是否需要前端实时采集音频（麦克风/标签页/屏幕/系统音频）。
       const sourceKey = mode === "quick" ? this.quickForm.source : this.floatingForm.source;
@@ -1322,35 +1338,96 @@ export const useSessionStore = defineStore("session", {
       pendingMediaElementCapture = mode === "quick" && fileSourceKeys.has(sourceKey);
       pendingMediaReadyState = null;
       captureStarted = false;
-      let connection: WebSocket;
-      connection = createSessionSocket(
-        sessionId,
-        {
-          onOpen: () => {
-            if (!this.isCurrentStart(mode, requestId, sessionId)) {
-              connection.close();
-              return;
+      const openConnection = (isReconnect = false) => {
+        if (generation !== socketGeneration || !this.isCurrentStart(mode, requestId, sessionId)) return;
+
+        let connection: WebSocket;
+        connection = createSessionSocket(
+          sessionId,
+          {
+            onOpen: () => {
+              if (
+                generation !== socketGeneration ||
+                socket !== connection ||
+                !this.isCurrentStart(mode, requestId, sessionId)
+              ) {
+                connection.close();
+                return;
+              }
+              clearSocketReconnect();
+              this.wsConnected = true;
+              this.errorMessage = null;
+              const paused = this.modeStates[mode] === "paused";
+              this.status = paused ? "paused" : "running";
+              this.sourceSyncState = {
+                ...this.sourceSyncState,
+                status: isReconnect ? "recovered" : this.sourceSyncState.status,
+                message: isReconnect ? "连接已恢复，正在同步" : this.sourceSyncState.message
+              };
+              if (paused) {
+                // createSessionSocket sends start_session after onOpen; queue pause
+                // so the server receives commands in the correct order.
+                window.setTimeout(() => {
+                  if (socket === connection && connection.readyState === WebSocket.OPEN) {
+                    connection.send(JSON.stringify({ type: "pause_session" }));
+                  }
+                }, 0);
+              }
+            },
+            onClose: () => {
+              if (
+                generation !== socketGeneration ||
+                socket !== connection ||
+                !this.isCurrentStart(mode, requestId, sessionId)
+              ) return;
+              socket = null;
+              this.wsConnected = false;
+              const canRetry = ["connecting", "running", "paused"].includes(this.status)
+                && this.modeStates[mode] !== "report";
+              if (!canRetry) {
+                if (this.status === "running" || this.status === "connecting") this.status = "stopped";
+                return;
+              }
+              this.sourceSyncState = {
+                ...this.sourceSyncState,
+                status: "missing",
+                message: "连接已断开，正在重连"
+              };
+              if (!canReconnect(socketReconnectAttempt)) {
+                this.status = "error";
+                this.modeStates[mode] = "error";
+                this.errorMessage = "连接已断开，自动重连失败，请重新开始";
+                return;
+              }
+              const attempt = ++socketReconnectAttempt;
+              socketReconnectTimer = window.setTimeout(() => {
+                socketReconnectTimer = null;
+                openConnection(true);
+              }, reconnectDelayMs(attempt));
+              this.status = "connecting";
+            },
+            onError: (message) => {
+              if (
+                generation !== socketGeneration ||
+                socket !== connection ||
+                !this.isCurrentStart(mode, requestId, sessionId)
+              ) return;
+              this.errorMessage = message;
+            },
+            onEvent: (event) => {
+              if (
+                generation === socketGeneration &&
+                socket === connection &&
+                this.isCurrentStart(mode, requestId, sessionId)
+              ) this.applyServerEvent(event);
             }
-            this.wsConnected = true;
-            this.status = "running";
           },
-          onClose: () => {
-            if (!this.isCurrentStart(mode, requestId, sessionId)) return;
-            this.wsConnected = false;
-            if (this.status === "running") this.status = "stopped";
-          },
-          onError: (message) => {
-            if (!this.isCurrentStart(mode, requestId, sessionId)) return;
-            this.status = "error";
-            this.errorMessage = message;
-          },
-          onEvent: (event) => {
-            if (this.isCurrentStart(mode, requestId, sessionId)) this.applyServerEvent(event);
-          }
-        },
-        { autoStart: true, token: wsToken }
-      );
-      socket = connection;
+          { autoStart: true, token: wsToken }
+        );
+        socket = connection;
+      };
+
+      openConnection();
     },
 
     applyServerEvent(event: ServerEvent) {
@@ -1371,7 +1448,8 @@ export const useSessionStore = defineStore("session", {
         if (liveEventsLocked) return;
         if (event.type === "source_sync_state" && pendingMediaElementCapture && event.state.status === "ready") {
           pendingMediaReadyState = event.state;
-          void this.startMediaElementStreaming(event.state);
+          if (!captureStarted) void this.startMediaElementStreaming(event.state);
+          else this.sourceSyncState = event.state;
           return;
         }
         if (event.type === "translation_segment") {
