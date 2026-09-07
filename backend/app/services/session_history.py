@@ -304,8 +304,8 @@ class SessionHistoryStore:
                     "finalRevisionCount": int(metrics.get("finalRevisions") or 0),
                     "correctionStatus": correction_status,
                     "updatedAt": (
-                        existing.get("updatedAt")
-                        or report.get("generatedAt")
+                        report.get("generatedAt")
+                        or existing.get("updatedAt")
                         or _fmt_ts()
                     ),
                     "availableFormats": ["txt", "srt", "md", "json"],

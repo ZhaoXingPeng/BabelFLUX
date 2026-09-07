@@ -341,6 +341,7 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
 
     completed_report = {
         **pending_report,
+        "generatedAt": "2026-06-17 10:02:00",
         "summary": "完整总结",
         "qualityNotes": "已完成",
         "metrics": {
@@ -374,6 +375,7 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
     assert entry["status"] == "completed"
     assert entry["correctionStatus"] == "completed"
     assert entry["finalRevisionCount"] == 1
+    assert entry["updatedAt"] == completed_report["generatedAt"]
 
 
 @pytest.mark.asyncio
