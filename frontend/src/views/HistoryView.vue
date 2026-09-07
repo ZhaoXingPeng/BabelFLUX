@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import Icon from "../components/icons/Icon.vue";
 import {
@@ -17,6 +17,10 @@ const errorMessage = ref("");
 const query = ref("");
 type HistoryStatusFilter = "all" | "created" | "running" | "correcting" | "completed" | "fallback" | "failed";
 const statusFilter = ref<HistoryStatusFilter>("all");
+const HISTORY_REFRESH_INTERVAL_MS = 3000;
+let historyRefreshTimer: number | null = null;
+let historyRequestInFlight = false;
+let historyViewMounted = false;
 
 const statusFilters: Array<{ value: HistoryStatusFilter; label: string }> = [
   { value: "all", label: "全部状态" },
@@ -150,15 +154,35 @@ function download(entry: SessionHistoryEntry, format: ReportFormat) {
 }
 
 async function loadHistory() {
+  if (historyRequestInFlight) return;
+  historyRequestInFlight = true;
   loading.value = true;
   errorMessage.value = "";
   try {
-    entries.value = await getSessionHistory();
+    const nextEntries = await getSessionHistory();
+    if (historyViewMounted) entries.value = nextEntries;
   } catch (error) {
+    if (!historyViewMounted) return;
     errorMessage.value = error instanceof Error ? error.message : "历史记录加载失败";
   } finally {
-    loading.value = false;
+    historyRequestInFlight = false;
+    if (historyViewMounted) loading.value = false;
+    scheduleHistoryRefresh();
   }
+}
+
+function hasPendingCorrection(): boolean {
+  return entries.value.some(
+    (entry) => entry.status === "correcting" || entry.correctionStatus === "pending"
+  );
+}
+
+function scheduleHistoryRefresh() {
+  if (!historyViewMounted || historyRefreshTimer !== null || !hasPendingCorrection()) return;
+  historyRefreshTimer = window.setTimeout(() => {
+    historyRefreshTimer = null;
+    void loadHistory();
+  }, HISTORY_REFRESH_INTERVAL_MS);
 }
 
 async function removeEntry(entry: SessionHistoryEntry) {
@@ -170,7 +194,18 @@ async function removeEntry(entry: SessionHistoryEntry) {
   }
 }
 
-onMounted(loadHistory);
+onMounted(() => {
+  historyViewMounted = true;
+  void loadHistory();
+});
+
+onUnmounted(() => {
+  historyViewMounted = false;
+  if (historyRefreshTimer !== null) {
+    window.clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = null;
+  }
+});
 </script>
 
 <template>
