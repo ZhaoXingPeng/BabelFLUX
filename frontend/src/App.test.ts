@@ -453,6 +453,88 @@ describe("同传工作台 mock 流程", () => {
     expect(wrapper.findAll(".history-row")).toHaveLength(3);
   });
 
+  it("automatically refreshes pending correction history", async () => {
+    vi.useFakeTimers();
+    const pending = {
+      sessionId: "history-pending",
+      reportId: "report-pending",
+      sessionName: "Pending session",
+      productMode: "quick",
+      inputMode: "demo",
+      sourceLabel: "demo",
+      domain: "general",
+      modelProfile: "default",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      status: "correcting",
+      startedAt: "2026-06-17 10:00:00",
+      endedAt: "2026-06-17 10:01:00",
+      durationMs: 60_000,
+      segmentCount: 2,
+      realtimeRevisionCount: 0,
+      finalRevisionCount: 0,
+      correctionStatus: "pending",
+      updatedAt: "2026-06-17 10:01:00",
+      availableFormats: ["txt", "srt", "md", "json"]
+    };
+    const completed = {
+      ...pending,
+      status: "completed",
+      correctionStatus: "completed",
+      finalRevisionCount: 1
+    };
+    mockRuntime.getSessionHistory
+      .mockResolvedValueOnce([pending])
+      .mockResolvedValueOnce([completed]);
+
+    const wrapper = mountHistory();
+    await flushPromises();
+    expect(mockRuntime.getSessionHistory).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".history-status").classes()).toContain("pending");
+
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    expect(mockRuntime.getSessionHistory).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(".history-status").classes()).toContain("ok");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mockRuntime.getSessionHistory).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it("clears pending history refresh after unmount", async () => {
+    vi.useFakeTimers();
+    const pending = {
+      sessionId: "history-pending-unmount",
+      reportId: "report-pending-unmount",
+      sessionName: "Pending session",
+      productMode: "quick",
+      inputMode: "demo",
+      sourceLabel: "demo",
+      domain: "general",
+      modelProfile: "default",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      status: "correcting",
+      startedAt: "2026-06-17 10:00:00",
+      endedAt: "2026-06-17 10:01:00",
+      durationMs: 60_000,
+      segmentCount: 2,
+      realtimeRevisionCount: 0,
+      finalRevisionCount: 0,
+      correctionStatus: "pending",
+      updatedAt: "2026-06-17 10:01:00",
+      availableFormats: ["txt", "srt", "md", "json"]
+    };
+
+    mockRuntime.getSessionHistory.mockResolvedValueOnce([pending]);
+
+    const wrapper = mountHistory();
+    await flushPromises();
+    wrapper.unmount();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mockRuntime.getSessionHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("首页两个入口默认保持平级状态", () => {
     const wrapper = mountHome();
     const cards = wrapper.findAll(".entry-card");
