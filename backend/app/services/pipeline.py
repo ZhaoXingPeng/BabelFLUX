@@ -590,10 +590,7 @@ class InterpretationPipeline:
         self._display_final_roots.discard(seg.segment_id)
         if seg.response_id:
             self._pending_audio_by_response.pop(seg.response_id, None)
-        self.record._by_id.pop(seg.segment_id, None)
-        self.record.segments = [
-            existing for existing in self.record.segments if existing.segment_id != seg.segment_id
-        ]
+        self.record.remove_segment(seg.segment_id)
 
     def _looks_like_source_continuation(self, text: str) -> bool:
         value = text.strip()
@@ -1158,7 +1155,7 @@ class InterpretationPipeline:
             await self._apply_revision(rev)
 
     async def _apply_revision(self, rev: dict[str, Any]) -> None:
-        seg = self.record._by_id.get(rev["segmentId"])
+        seg = self.record.get_segment(rev["segmentId"])
         if seg is None:
             return
         # Review tasks overlap by design; only apply a result that still targets
