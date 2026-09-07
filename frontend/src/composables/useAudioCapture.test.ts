@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeMediaError, startAudioCapture } from "./useAudioCapture";
+import { describeMediaError, startAudioCapture, startMediaElementAudioCapture } from "./useAudioCapture";
 
 const originalAudioContext = window.AudioContext;
 const originalAudioWorkletNode = globalThis.AudioWorkletNode;
@@ -16,15 +16,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function installAudioCaptureDoubles() {
+function installAudioCaptureDoubles(options: {
+  addModule?: () => Promise<void>;
+  resume?: () => Promise<void>;
+  streamSourceConnect?: () => void;
+  mediaElementSourceConnect?: () => void;
+  state?: "running" | "suspended";
+} = {}) {
   const close = vi.fn(async () => undefined);
+  const addModule = vi.fn(options.addModule ?? (async () => undefined));
+  const resume = vi.fn(options.resume ?? (async () => undefined));
   class FakeAudioContext {
-    state = "running";
+    state = options.state ?? "running";
     destination = {};
-    audioWorklet = { addModule: vi.fn(async () => undefined) };
+    audioWorklet = { addModule };
 
     createMediaStreamSource() {
-      return { connect: vi.fn(), disconnect: vi.fn() };
+      return { connect: vi.fn(options.streamSourceConnect), disconnect: vi.fn() };
+    }
+
+    createMediaElementSource() {
+      return { connect: vi.fn(options.mediaElementSourceConnect), disconnect: vi.fn() };
     }
 
     createGain() {
@@ -32,6 +44,7 @@ function installAudioCaptureDoubles() {
     }
 
     close = close;
+    resume = resume;
   }
   class FakeAudioWorkletNode {
     port = { onmessage: null as ((event: MessageEvent<ArrayBuffer>) => void) | null };
@@ -46,7 +59,7 @@ function installAudioCaptureDoubles() {
     configurable: true,
     value: FakeAudioWorkletNode
   });
-  return { close };
+  return { close, addModule, resume };
 }
 
 describe("describeMediaError", () => {
@@ -78,6 +91,29 @@ describe("describeMediaError", () => {
 });
 
 describe("startAudioCapture", () => {
+  it("Worklet 加载失败时停止轨道并关闭上下文", async () => {
+    const { close } = installAudioCaptureDoubles({
+      addModule: async () => {
+        throw new Error("worklet failed");
+      }
+    });
+    const track = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      stop: vi.fn()
+    };
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track]
+    } as unknown as MediaStream;
+
+    await expect(startAudioCapture(stream, { onChunk: vi.fn() })).rejects.toThrow("worklet failed");
+
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(track.removeEventListener).not.toHaveBeenCalled();
+  });
+
   it("停止采集时移除轨道结束监听器并且只清理一次", async () => {
     const { close } = installAudioCaptureDoubles();
     const track = {
@@ -103,6 +139,72 @@ describe("startAudioCapture", () => {
     expect(track.removeEventListener).toHaveBeenCalledWith("ended", endedHandler);
     expect(track.removeEventListener).toHaveBeenCalledTimes(1);
     expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("节点连接失败时移除已注册的轨道监听器", async () => {
+    const { close } = installAudioCaptureDoubles({
+      streamSourceConnect: () => {
+        throw new Error("connect failed");
+      }
+    });
+    const track = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      stop: vi.fn()
+    };
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track]
+    } as unknown as MediaStream;
+
+    await expect(startAudioCapture(stream, { onChunk: vi.fn(), onEnded: vi.fn() })).rejects.toThrow("connect failed");
+
+    const endedHandler = track.addEventListener.mock.calls[0]?.[1];
+    expect(endedHandler).toBeTypeOf("function");
+    expect(track.removeEventListener).toHaveBeenCalledWith("ended", endedHandler);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("恢复 AudioContext 失败时也会释放轨道和上下文", async () => {
+    const { close, resume } = installAudioCaptureDoubles({
+      state: "suspended",
+      resume: async () => {
+        throw new Error("resume failed");
+      }
+    });
+    const track = { stop: vi.fn() };
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track]
+    } as unknown as MediaStream;
+
+    await expect(startAudioCapture(stream, { onChunk: vi.fn() })).rejects.toThrow("resume failed");
+
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("startMediaElementAudioCapture", () => {
+  it("节点连接失败时移除媒体监听器并关闭上下文", async () => {
+    const { close } = installAudioCaptureDoubles({
+      mediaElementSourceConnect: () => {
+        throw new Error("connect failed");
+      }
+    });
+    const element = document.createElement("audio");
+    const addEventListener = vi.spyOn(element, "addEventListener");
+    const removeEventListener = vi.spyOn(element, "removeEventListener");
+
+    await expect(startMediaElementAudioCapture(element, { onChunk: vi.fn() })).rejects.toThrow("connect failed");
+
+    expect(addEventListener).toHaveBeenCalledWith("play", expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith("ended", expect.any(Function));
+    expect(removeEventListener).toHaveBeenCalledWith("play", expect.any(Function));
+    expect(removeEventListener).toHaveBeenCalledWith("ended", expect.any(Function));
     expect(close).toHaveBeenCalledTimes(1);
   });
 });
