@@ -62,6 +62,7 @@ import { buildTranscriptPairs } from "./transcriptPairs";
 import { buildLocalReport } from "./localReport";
 import { canReconnect, reconnectDelayMs } from "./reconnectPolicy";
 import { createOutputLatencyTracker } from "./outputLatency";
+import { reduceSessionReportEvent } from "./sessionReportState";
 
 let socket: WebSocket | null = null;
 let socketReconnectTimer: number | null = null;
@@ -1490,13 +1491,22 @@ export const useSessionStore = defineStore("session", {
       }
 
       if (event.type === "session_report") {
+        const reportState = reduceSessionReportEvent(
+          {
+            reportId: this.reportId,
+            status: this.status,
+            activeMode: this.activeMode,
+            modeStates: this.modeStates
+          },
+          event
+        );
+        if (!reportState) return;
         // 会话自然结束或 stop_session 后，后端完成会后完整纠偏并下发报告 id。
         // 适用于「音频播放完自动结束」与「用户手动结束」两条路径。
-        this.reportId = event.reportId;
-        const mode = this.activeMode ?? "quick";
-        this.modeStates[mode] = "report";
-        this.status = "stopped";
-        this.activeMode = null;
+        this.reportId = reportState.reportId;
+        this.modeStates = reportState.modeStates;
+        this.status = reportState.status;
+        this.activeMode = reportState.activeMode;
         ttsPlayback.stop();
         void this.loadReport();
         return;
