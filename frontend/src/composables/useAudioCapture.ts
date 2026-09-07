@@ -218,12 +218,44 @@ export async function startAudioCapture(
   const frameSamples = Math.round((sampleRate * (options.frameMs ?? LOW_LATENCY_FRAME_MS)) / 1000);
 
   const AudioCtx = audioContextCtor();
-  const context = new AudioCtx({ sampleRate });
-  if (context.state === "suspended") await context.resume();
-
-  const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+  let context: AudioContext | undefined;
+  let source: MediaStreamAudioSourceNode | undefined;
+  let node: AudioWorkletNode | undefined;
+  let sink: GainNode | undefined;
   let stopped = false;
+  let listenersAttached = false;
   let pending: number[] = [];
+
+  const audioTracks = stream.getAudioTracks();
+
+  const handleTrackEnded = () => {
+    if (!stopped) options.onEnded?.();
+  };
+
+  const release = async () => {
+    if (listenersAttached) {
+      audioTracks.forEach((track) => track.removeEventListener("ended", handleTrackEnded));
+      listenersAttached = false;
+    }
+    try {
+      if (node) {
+        node.port.onmessage = null;
+        node.disconnect();
+      }
+      source?.disconnect();
+      sink?.disconnect();
+    } catch {
+      // 忽略断开时的竞态
+    }
+    stream.getTracks().forEach((track) => track.stop());
+    if (context) {
+      try {
+        await context.close();
+      } catch {
+        // 已关闭
+      }
+    }
+  };
 
   const flush = (force: boolean) => {
     while (pending.length >= frameSamples || (force && pending.length > 0)) {
@@ -236,52 +268,43 @@ export async function startAudioCapture(
   };
 
   try {
-    await context.audioWorklet.addModule(blobUrl);
-  } finally {
-    URL.revokeObjectURL(blobUrl);
+    context = new AudioCtx({ sampleRate });
+    if (context.state === "suspended") await context.resume();
+
+    const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+    try {
+      await context.audioWorklet.addModule(blobUrl);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+
+    source = context.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(context, "pcm-capture-processor");
+    sink = context.createGain();
+    sink.gain.value = 0;
+
+    node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      if (stopped) return;
+      const incoming = new Int16Array(event.data);
+      for (let i = 0; i < incoming.length; i += 1) pending.push(incoming[i]);
+      flush(false);
+    };
+    audioTracks.forEach((track) => track.addEventListener("ended", handleTrackEnded));
+    listenersAttached = true;
+    source.connect(node);
+    node.connect(sink);
+    sink.connect(context.destination);
+  } catch (error) {
+    stopped = true;
+    await release();
+    throw error;
   }
-
-  const source = context.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(context, "pcm-capture-processor");
-  // 累积到 ~frameMs 再发，避免每 128 采样一帧造成 WS 风暴。
-  node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-    if (stopped) return;
-    const incoming = new Int16Array(event.data);
-    for (let i = 0; i < incoming.length; i += 1) pending.push(incoming[i]);
-    flush(false);
-  };
-  source.connect(node);
-  // 接一个静音 gain 到 destination，保证 worklet 在所有浏览器里都被调度，且不外放。
-  const sink = context.createGain();
-  sink.gain.value = 0;
-  node.connect(sink);
-  sink.connect(context.destination);
-
-  const handleTrackEnded = () => {
-    if (!stopped) options.onEnded?.();
-  };
-  const audioTracks = stream.getAudioTracks();
-  audioTracks.forEach((track) => track.addEventListener("ended", handleTrackEnded));
 
   const stop = async () => {
     if (stopped) return;
     stopped = true;
     flush(true);
-    try {
-      node.port.onmessage = null;
-      node.disconnect();
-      source.disconnect();
-      sink.disconnect();
-    } catch {
-      // 忽略断开时的竞态
-    }
-    audioTracks.forEach((track) => track.removeEventListener("ended", handleTrackEnded));
-    stream.getTracks().forEach((track) => track.stop());
-    try {
-      await context.close();
-    } catch {
-      // 已关闭
-    }
+    await release();
   };
 
   return { stop };
@@ -300,14 +323,49 @@ export async function startMediaElementAudioCapture(
   const sampleRate = options.sampleRate ?? TARGET_SAMPLE_RATE;
   const frameSamples = Math.round((sampleRate * (options.frameMs ?? LOW_LATENCY_FRAME_MS)) / 1000);
   const AudioCtx = audioContextCtor();
-  const context = new AudioCtx({ sampleRate });
-  if (context.state === "suspended") await context.resume();
-
-  const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+  let context: AudioContext | undefined;
+  let source: MediaElementAudioSourceNode | undefined;
+  let node: AudioWorkletNode | undefined;
+  let monitor: GainNode | undefined;
+  let sink: GainNode | undefined;
   let stopped = false;
+  let listenersAttached = false;
   let pending: number[] = [];
   let sentSamples = 0;
   let lastClockAt = 0;
+
+  const resumeContext = () => {
+    if (context?.state === "suspended") void context.resume();
+  };
+  const handleEnded = () => {
+    if (!stopped) options.onEnded?.();
+  };
+
+  const release = async () => {
+    if (listenersAttached) {
+      element.removeEventListener("play", resumeContext);
+      element.removeEventListener("ended", handleEnded);
+      listenersAttached = false;
+    }
+    try {
+      if (node) {
+        node.port.onmessage = null;
+        node.disconnect();
+      }
+      monitor?.disconnect();
+      sink?.disconnect();
+      source?.disconnect();
+    } catch {
+      // 忽略断开时的竞态
+    }
+    if (context) {
+      try {
+        await context.close();
+      } catch {
+        // 已关闭
+      }
+    }
+  };
 
   const emitClock = (force = false) => {
     if (!options.onClock) return;
@@ -333,17 +391,36 @@ export async function startMediaElementAudioCapture(
   };
 
   try {
-    await context.audioWorklet.addModule(blobUrl);
-  } finally {
-    URL.revokeObjectURL(blobUrl);
-  }
+    context = new AudioCtx({ sampleRate });
+    if (context.state === "suspended") await context.resume();
 
-  const source = context.createMediaElementSource(element);
-  const node = new AudioWorkletNode(context, "pcm-capture-processor");
-  const monitor = context.createGain();
-  monitor.gain.value = options.monitorMuted ? 0 : 1;
-  const sink = context.createGain();
-  sink.gain.value = 0;
+    const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+    try {
+      await context.audioWorklet.addModule(blobUrl);
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+
+    source = context.createMediaElementSource(element);
+    node = new AudioWorkletNode(context, "pcm-capture-processor");
+    monitor = context.createGain();
+    monitor.gain.value = options.monitorMuted ? 0 : 1;
+    sink = context.createGain();
+    sink.gain.value = 0;
+
+    element.addEventListener("play", resumeContext);
+    element.addEventListener("ended", handleEnded);
+    listenersAttached = true;
+    source.connect(monitor);
+    monitor.connect(context.destination);
+    source.connect(node);
+    node.connect(sink);
+    sink.connect(context.destination);
+  } catch (error) {
+    stopped = true;
+    await release();
+    throw error;
+  }
 
   node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
     if (stopped || element.paused || element.ended) return;
@@ -352,42 +429,12 @@ export async function startMediaElementAudioCapture(
     flush(false);
   };
 
-  const resumeContext = () => {
-    if (context.state === "suspended") void context.resume();
-  };
-  const handleEnded = () => {
-    if (!stopped) options.onEnded?.();
-  };
-  element.addEventListener("play", resumeContext);
-  element.addEventListener("ended", handleEnded);
-
-  source.connect(monitor);
-  monitor.connect(context.destination);
-  source.connect(node);
-  node.connect(sink);
-  sink.connect(context.destination);
-
   const stop = async () => {
     if (stopped) return;
     stopped = true;
     flush(true);
     emitClock(true);
-    element.removeEventListener("play", resumeContext);
-    element.removeEventListener("ended", handleEnded);
-    try {
-      node.port.onmessage = null;
-      node.disconnect();
-      monitor.disconnect();
-      sink.disconnect();
-      source.disconnect();
-    } catch {
-      // 忽略断开时的竞态
-    }
-    try {
-      await context.close();
-    } catch {
-      // 已关闭
-    }
+    await release();
   };
 
   return { stop };
