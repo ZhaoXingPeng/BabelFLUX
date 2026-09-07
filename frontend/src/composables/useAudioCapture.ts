@@ -260,7 +260,8 @@ export async function startAudioCapture(
   const handleTrackEnded = () => {
     if (!stopped) options.onEnded?.();
   };
-  stream.getAudioTracks().forEach((track) => track.addEventListener("ended", handleTrackEnded));
+  const audioTracks = stream.getAudioTracks();
+  audioTracks.forEach((track) => track.addEventListener("ended", handleTrackEnded));
 
   const stop = async () => {
     if (stopped) return;
@@ -274,6 +275,7 @@ export async function startAudioCapture(
     } catch {
       // 忽略断开时的竞态
     }
+    audioTracks.forEach((track) => track.removeEventListener("ended", handleTrackEnded));
     stream.getTracks().forEach((track) => track.stop());
     try {
       await context.close();
