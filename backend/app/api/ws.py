@@ -12,12 +12,12 @@
 import asyncio
 import json
 import time
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.api.handoff_ws import serve_handoff_socket
 from app.core.config import settings
 from app.services.handoff import handoff_tokens
 from app.services.mock_session import run_mock_session
@@ -58,7 +58,7 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
         return
 
     if handoff_tokens.validate_ws_token(session_id, ws_token, purpose="handoff"):
-        await _serve_handoff_socket(websocket, session_id)
+        await serve_handoff_socket(websocket, session_id)
         return
 
     if not handoff_tokens.validate_ws_token(session_id, ws_token, purpose="session"):
@@ -223,46 +223,6 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
                 await asyncio.wait_for(run_task, timeout=10)
             except (TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
                 run_task.cancel()
-
-
-async def _serve_handoff_socket(websocket: WebSocket, session_id: str) -> None:
-    subscription = session_event_hub.subscribe(session_id)
-    await websocket.send_json({"type": "session_started", "sessionId": session_id})
-
-    for event in subscription.replay:
-        await websocket.send_json(event)
-
-    async def forward_events() -> None:
-        while True:
-            await websocket.send_json(await subscription.queue.get())
-
-    forward_task = asyncio.create_task(forward_events())
-    try:
-        while True:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-            text = message.get("text")
-            if not text:
-                continue
-            try:
-                payload, error_message = parse_client_payload(text)
-            except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON message"})
-                continue
-            if error_message:
-                await websocket.send_json({"type": "error", "message": error_message})
-                continue
-            assert payload is not None
-            if payload.get("type") == "stop_session":
-                break
-    except WebSocketDisconnect:
-        pass
-    finally:
-        session_event_hub.unsubscribe(subscription)
-        forward_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await forward_task
 
 
 async def _run_ingest(record: Any, state: dict[str, Any], emit: Any) -> None:

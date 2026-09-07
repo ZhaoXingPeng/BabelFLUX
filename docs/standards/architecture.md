@@ -49,6 +49,7 @@ Provider adapters (services/providers/*)
 - `frontend/src/stores/sessionPayload.ts`：来源到 `inputMode` 映射、语言标签转换和 `CreateSessionPayload` 组装；store 保留兼容入口。
 - `frontend/src/stores/sessionTimeline.ts` 的 `applyRevisionToSegments`：按 revision 不可变更新源/译文字幕数组；store 只负责写回响应式状态。
 - `frontend/src/stores/outputLatency.ts`：以有界样本、segment 去重和中位数估计封装输出延迟跟踪；session store 只负责转发翻译事件和读取估计值。
+- `backend/app/api/handoff_ws.py`：只读 handoff 事件回放、转发和订阅清理；主 `ws.py` 仅负责会话生命周期与输入命令编排。
 
 上述拆分均不依赖 API、provider 或 WebSocket I/O，并配有直接单元测试。后续拆分必须先确认目标职责尚未被这些模块覆盖，再按本节顺序补测试、保留代理并记录验证结果。
 
