@@ -367,8 +367,15 @@ async def test_session_history_refreshes_pending_status_from_persisted_report() 
     report_path.write_text(json.dumps(completed_report, ensure_ascii=False), encoding="utf-8")
 
     async with asgi_http_client() as client:
+        single_history = await client.get(f"/api/sessions/history/{created['sessionId']}")
         history = await client.get("/api/sessions/history")
 
+    assert single_history.status_code == 200
+    single_entry = single_history.json()
+    assert single_entry["status"] == "completed"
+    assert single_entry["correctionStatus"] == "completed"
+    assert single_entry["finalRevisionCount"] == 1
+    assert single_entry["updatedAt"] == completed_report["generatedAt"]
     entry = next(
         item for item in history.json()["items"] if item["sessionId"] == created["sessionId"]
     )

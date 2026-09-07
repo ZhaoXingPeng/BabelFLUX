@@ -172,6 +172,7 @@ def list_session_history() -> SessionHistoryListResponse:
 
 @router.get("/history/{session_id}")
 def get_session_history(session_id: str) -> JSONResponse:
+    _refresh_history_from_reports()
     entry = session_history_store.get(session_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="history not found")
