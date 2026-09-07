@@ -11,6 +11,12 @@
 
 ## 2. 分支与提交
 
+### 标题命名
+
+Issue 和 Pull Request 统一使用一行标题：`<gitemoji> <type>(<scope>): <中文动词短语>`。`type` 使用 `feat`、`fix`、`refactor`、`docs`、`perf`、`test`、`ci`、`chore` 或 `security`；`scope` 使用小写英文模块名，如 `web`、`backend`、`pipeline`、`ws`、`history`，没有明确模块时可以省略。标题主体以中文动词开头，禁止乱码、无意义英文和句末标点。
+
+同一变更的 Issue 与 PR 共享相同的 gitemoji、type、scope 和中文标题主体。创建或编辑元数据后，必须检查 GitHub 页面实际 UTF-8 显示；标题模板示例：`🐛 fix(ws): 防止非法 media_clock 中断连接`。
+
 分支使用 `feat/<topic>`、`fix/<topic>`、`refactor/<topic>`、`test/<topic>`、`docs/<topic>` 或 `chore/<topic>`。从 `main` 开始，提交前确认：
 
 ```bash
@@ -33,7 +39,7 @@ git diff --check
 
 ## 3. PR 评论与 STAR 记录
 
-每个 PR 至少保留三条有实质内容的中文评论，分别在架构决策、实验过程和验证收尾时更新。评论应来自真实改动，不预设结果，不为了简历制造 PR。
+每个 PR 至少覆盖架构决策、实验过程和验证收尾三个有实质内容的中文事实节点；出现新的 CI 结果、审查意见、失败实验或回滚决策时应继续追加评论。评论数量不设人为上限，但每条都必须来自真实改动或可复现证据，不预设结果，不为了简历制造 PR。
 
 涉及性能、稳定性或缺陷时使用以下结构：
 
