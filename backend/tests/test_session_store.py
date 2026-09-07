@@ -32,3 +32,15 @@ def test_create_rejects_duplicate_without_overwriting_existing_record() -> None:
 
     assert store.get("shared-session") is original
     assert original.source_language == "en"
+
+
+def test_session_record_segment_access_keeps_index_and_ordered_list_in_sync() -> None:
+    record = SessionRecord(session_id="session")
+    first = record.get_or_create_segment("first", 1)
+    second = record.get_or_create_segment("second", 2)
+
+    assert record.get_segment("first") is first
+    assert record.remove_segment("first") is first
+    assert record.get_segment("first") is None
+    assert record.segments == [second]
+    assert record.remove_segment("missing") is None

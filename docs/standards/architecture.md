@@ -22,6 +22,7 @@ Provider adapters (services/providers/*)
 - `services/model_selection.py` 负责把产品层模型档位解析为已验证 provider 支持的具体模型；禁止在 UI 或 API 层直接拼接 provider 参数。
 - provider 只能通过稳定的领域接口向上提供能力，不能把第三方 SDK 类型泄漏到 API 或前端。
 - `frontend` 和 `desktop` 共享协议类型语义，但不能直接依赖后端实现细节。
+- `SessionRecord` 的段索引必须通过 `get_segment`/`remove_segment` 等领域接口访问；业务编排不得依赖 `_by_id` 等私有存储细节。
 
 ## 依赖方向
 

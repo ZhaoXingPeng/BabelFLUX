@@ -80,6 +80,20 @@ class SessionRecord:
             self.segments.append(record)
         return record
 
+    def get_segment(self, segment_id: str) -> SegmentRecord | None:
+        """Return a segment by id without exposing the backing index."""
+        return self._by_id.get(segment_id)
+
+    def remove_segment(self, segment_id: str) -> SegmentRecord | None:
+        """Remove a segment from both the id index and ordered report list."""
+        record = self._by_id.pop(segment_id, None)
+        if record is None:
+            return None
+        self.segments[:] = [
+            segment for segment in self.segments if segment.segment_id != segment_id
+        ]
+        return record
+
     def finalized_segments(self) -> list[SegmentRecord]:
         return [s for s in self.segments if s.status in ("final", "revised") and s.source_text]
 
